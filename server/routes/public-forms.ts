@@ -3,7 +3,7 @@ import { UNLOCK_HEADER, unlockInput, type UnlockResponse } from '../../shared/ap
 import { resolveLabels } from '../../shared/form/labels'
 import { ApiError, notFound } from '../lib/errors'
 import { ipKey } from '../lib/ip'
-import { verifyPassword } from '../lib/password'
+import { verifyFormPassword } from '../lib/password'
 import { rateLimit } from '../lib/rate-limit'
 import { readBody } from '../lib/validate'
 import { handleEvent } from '../respondent/events'
@@ -39,7 +39,7 @@ publicFormRoutes.post('/:slug/unlock', async (c) => {
   const { password } = await readBody(c, unlockInput)
   const hash = form.settings.passwordHash
   const labels = resolveLabels({ ...form.definition.labels, ...form.settings.labels })
-  if (hash && !(await verifyPassword(hash, password))) {
+  if (hash && !(await verifyFormPassword(hash, password))) {
     throw new ApiError(422, 'validation_failed', labels.wrongPassword, { password: [labels.wrongPassword] })
   }
   const token = hash ? unlockToken(form.id, hash) : ''
