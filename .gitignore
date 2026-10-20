@@ -8,3 +8,4 @@ playwright-report
 test-results
 uploads
 .impeccable/hook.cache.json
+.claude/worktrees/
