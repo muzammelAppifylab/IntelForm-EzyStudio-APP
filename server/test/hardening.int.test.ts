@@ -389,3 +389,30 @@ describe('roles', () => {
     }
   })
 })
+
+describe('public form page rate limit', () => {
+  it('shares one per-IP budget with the JSON definition and answers a plain 429 page', async () => {
+    const { Hono } = await import('hono')
+    const { PUBLIC_GET_RATE_LIMIT, publicPageRateLimit } = await import('../routes/public-forms')
+    const { ipKeyFor } = await import('../lib/ip')
+    const { hit } = await import('../lib/rate-limit')
+    const ip = '198.51.100.77'
+    const key = `public-form:${ipKeyFor(ip)}`
+    // Spend all but one of this minute's budget.
+    await hit(key, 60)
+    await ctx.sql`UPDATE rate_limits SET count = ${PUBLIC_GET_RATE_LIMIT - 1} WHERE key = ${key}`
+
+    const pages = new Hono().get('/f/:slug', publicPageRateLimit, (c) => c.html('<p>form</p>'))
+    const page = (from = ip) => pages.request('/f/some-form', {}, { incoming: { socket: { remoteAddress: from } } })
+    expect((await page()).status).toBe(200)
+    // The HTML load used the last request, so the JSON API is now limited too.
+    expect((await ctx.client(ip).get('/api/public/forms/some-form')).status).toBe(429)
+    const limited = await page()
+    expect(limited.status).toBe(429)
+    expect(limited.headers.get('content-type')).toContain('text/html')
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect(await limited.text()).toContain('Too many requests')
+    // Another address is unaffected.
+    expect((await page('198.51.100.78')).status).toBe(200)
+  })
+})

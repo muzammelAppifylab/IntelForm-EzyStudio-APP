@@ -15,6 +15,7 @@ import { startScheduler, stopScheduler } from './lib/scheduler'
 import { decodeUploadPath, readLocalFile } from './lib/uploads'
 import { renderFormPage } from './respondent/inline'
 import { renderHomePage } from './routes/front-page'
+import { publicPageRateLimit } from './routes/public-forms'
 import { inlineScriptHashes, surfaceFor, surfaceHeaders } from './middleware/security-headers'
 
 /**
@@ -108,7 +109,8 @@ if (isProduction && appShell) {
     if (c.res.ok) c.header('Cache-Control', 'public, max-age=300')
   })
   // Public forms: the respondent shell with the form JSON inlined, so the first paint needs no extra request.
-  server.get('/f/:slug', async (c) => {
+  // Rate limited per IP, sharing one budget with the JSON definition (/api/public/forms/:slug).
+  server.get('/f/:slug', publicPageRateLimit, async (c) => {
     if (!formShell) return sendShell(c)
     const page = await renderFormPage(formShell.html, c.req.param('slug'))
     c.header('Cache-Control', 'no-cache')

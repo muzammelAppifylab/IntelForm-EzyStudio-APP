@@ -58,17 +58,19 @@
     frame.focus()
   }
 
+  // Only our own frames may resize, close or redirect.
   addEventListener('message', function (e) {
-    if (e.origin !== ORIGIN || !e.data || typeof e.data.type !== 'string') return
+    if (e.origin !== ORIGIN || !e.source || !e.data || typeof e.data.type !== 'string') return
     var d = e.data
-    if (d.type === 'intelform:resize' && typeof d.height === 'number') {
-      var list = frames()
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].contentWindow === e.source) list[i].style.height = Math.max(120, Math.ceil(d.height)) + 'px'
-      }
-    } else if (d.type === 'intelform:close') {
-      if (frame && e.source === frame.contentWindow) close()
-    } else if (d.type === 'intelform:redirect' && /^https?:\/\//i.test(d.url)) {
+    var popup = frame && e.source === frame.contentWindow
+    var inline, list = frames()
+    for (var i = 0; i < list.length; i++) if (list[i].contentWindow === e.source) inline = list[i]
+    if (!popup && !inline) return
+    if (d.type === 'intelform:resize' && inline && typeof d.height === 'number') {
+      inline.style.height = Math.max(120, Math.ceil(d.height)) + 'px'
+    } else if (d.type === 'intelform:close' && popup) {
+      close()
+    } else if (d.type === 'intelform:redirect' && typeof d.url === 'string' && /^https?:\/\//i.test(d.url)) {
       location.href = d.url
     }
   })

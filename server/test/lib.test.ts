@@ -6,7 +6,7 @@ import { CSV_BOM, contentDisposition, csvEscape, csvRow } from '../lib/csv'
 import { clientIp, ipKeyFor, normalizeIp, rateLimitBucket } from '../lib/ip'
 import { redactPayload } from '../lib/jobs'
 import { accessLog, logger, redactPath } from '../lib/logger'
-import { deviceOf } from '../lib/request-meta'
+import { countryOf, deviceOf } from '../lib/request-meta'
 import { assertSafeUrl, generateWebhookSecret, isPrivateAddress, readWebhookConfig, safeLookup, signWebhook } from '../lib/webhooks'
 import { contentSecurityPolicy, inlineScriptHashes, surfaceFor } from '../middleware/security-headers'
 import { verifyStandardWebhook } from './standard-webhooks'
@@ -163,6 +163,23 @@ describe('client IP', () => {
     expect(await ipFor({ 'x-forwarded-for': '6.6.6.6, 198.51.100.7, 10.0.0.2' }, 2)).toBe('198.51.100.7')
   })
 
+  it('falls back to the socket, never a client-written entry, when the chain is short', async () => {
+    // Two proxies configured, but the request reached the app directly with a forged header.
+    expect(await ipFor({ 'x-forwarded-for': '6.6.6.6' }, 2, '203.0.113.9')).toBe('203.0.113.9')
+    expect(await ipFor({}, 1, '203.0.113.9')).toBe('203.0.113.9')
+    expect(await ipFor({ 'x-forwarded-for': '' }, 1, '203.0.113.9')).toBe('203.0.113.9')
+    expect(await ipFor({ 'x-forwarded-for': ' , ,' }, 1, '203.0.113.9')).toBe('203.0.113.9')
+    expect(await ipFor({ 'x-forwarded-for': '6.6.6.6, 7.7.7.7' }, 5, '203.0.113.9')).toBe('203.0.113.9')
+  })
+
+  it('falls back to the socket when the trusted entry is not an IP', async () => {
+    expect(await ipFor({ 'x-forwarded-for': '6.6.6.6, unknown' }, 1, '10.0.0.5')).toBe('10.0.0.5')
+    expect(await ipFor({ 'x-forwarded-for': '<script>, 999.1.1.1' }, 1, '10.0.0.5')).toBe('10.0.0.5')
+    // Garbage further left (client-written) doesn't matter.
+    expect(await ipFor({ 'x-forwarded-for': 'garbage, 198.51.100.7' }, 1)).toBe('198.51.100.7')
+    expect(await ipFor({ 'x-forwarded-for': '198.51.100.7:4711' }, 1)).toBe('198.51.100.7')
+  })
+
   it('normalizes addresses', () => {
     expect(normalizeIp('::ffff:1.2.3.4')).toBe('1.2.3.4')
     expect(normalizeIp('1.2.3.4:5678')).toBe('1.2.3.4')
@@ -235,6 +252,20 @@ describe('log redaction', () => {
 })
 
 describe('request meta', () => {
+  async function countryFor(headers: Record<string, string>, header: string | undefined) {
+    const app = new Hono().get('/', (c) => c.text(countryOf(c, header) ?? 'null'))
+    return (await app.request('/', { headers })).text()
+  }
+
+  it('reads a country only from the configured header, as a two-letter code', async () => {
+    // Unset: CF-IPCountry is client-controlled without Cloudflare, so it's ignored.
+    expect(await countryFor({ 'cf-ipcountry': 'DE' }, undefined)).toBe('null')
+    expect(await countryFor({ 'cf-ipcountry': 'de' }, 'CF-IPCountry')).toBe('DE')
+    expect(await countryFor({ 'x-country': ' fr ' }, 'X-Country')).toBe('FR')
+    expect(await countryFor({ 'cf-ipcountry': 'DE' }, 'X-Country')).toBe('null')
+    for (const bad of ['XX', 'T1', 'DEU', 'D', '1A', '<b>', '']) expect(await countryFor({ 'x-country': bad }, 'X-Country')).toBe('null')
+  })
+
   it('detects device and browser, preferring client hints', () => {
     const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
     expect(deviceOf(iphone)).toEqual({ device: 'mobile', browser: 'Safari' })

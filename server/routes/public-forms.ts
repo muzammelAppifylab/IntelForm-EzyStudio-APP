@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { UNLOCK_HEADER, unlockInput, type UnlockResponse } from '../../shared/api-public'
 import { resolveLabels } from '../../shared/form/labels'
 import { ApiError, notFound } from '../lib/errors'
@@ -25,9 +25,36 @@ publicFormRoutes.use(async (c, next) => {
 
 /** Public GETs per IP per minute, across all forms: enough for any person, not for a scraper. */
 export const PUBLIC_GET_RATE_LIMIT = 300
+const PUBLIC_GET_MESSAGE = 'Too many requests. Wait a minute and try again.'
+
+/**
+ * Counts one public form load against the caller's per-minute budget; throws a 429 ApiError
+ * past it. The JSON definition and the /f/:slug HTML page share the key, so one budget covers
+ * both.
+ */
+export function limitPublicGet(c: Context): Promise<void> {
+  return rateLimit(`public-form:${ipKey(c)}`, PUBLIC_GET_RATE_LIMIT, 60, PUBLIC_GET_MESSAGE)
+}
+
+/** The same limit for the /f/:slug HTML page, answering a small plain page instead of JSON. */
+export const publicPageRateLimit: MiddlewareHandler = async (c, next) => {
+  try {
+    await limitPublicGet(c)
+  } catch (err) {
+    if (!(err instanceof ApiError) || err.status !== 429) throw err
+    for (const [k, v] of Object.entries(err.headers ?? {})) c.header(k, v)
+    c.header('Cache-Control', 'no-store')
+    c.header('X-Robots-Tag', 'noindex')
+    return c.html(
+      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Too many requests</title></head><body><h1>Too many requests</h1><p>${PUBLIC_GET_MESSAGE}</p></body></html>`,
+      429,
+    )
+  }
+  await next()
+}
 
 publicFormRoutes.get('/:slug', async (c) => {
-  await rateLimit(`public-form:${ipKey(c)}`, PUBLIC_GET_RATE_LIMIT, 60, 'Too many requests. Wait a minute and try again.')
+  await limitPublicGet(c)
   const payload = await payloadForSlug(c.req.param('slug'), c.req.header(UNLOCK_HEADER))
   if (!payload) throw notFound('This form doesn’t exist')
   return c.json(payload)
