@@ -2,6 +2,7 @@ import { sql } from '../db/client'
 import { failAbandonedJobs, purgeJobs, reportDbError } from './jobs'
 import { logger } from './logger'
 import { purgeLoginAttempts, purgeRateLimits } from './rate-limit'
+import { SESSION_MAX_DAYS } from './session'
 import { getSetting } from './settings'
 import { removeSignatureUrls } from './uploads'
 import { trimWebhookDeliveries } from './webhooks'
@@ -139,7 +140,9 @@ async function recountResponses(formIds: string[]): Promise<void> {
 /** Every hour: expired sessions, invites and resets; old rate limits; finished jobs; webhook log; retention. */
 export async function hourlyMaintenance(): Promise<Record<string, number>> {
   const abandonedJobs = await failAbandonedJobs()
-  const sessions = (await sql`DELETE FROM sessions WHERE expires_at < now()`).count
+  const sessions = (await sql`
+    DELETE FROM sessions WHERE expires_at < now() OR created_at <= now() - make_interval(days => ${SESSION_MAX_DAYS})
+  `).count
   const invites = (await sql`DELETE FROM invites WHERE accepted_at IS NULL AND expires_at < now() - interval '1 day'`).count
   const resets = (await sql`DELETE FROM password_resets WHERE expires_at < now() - interval '1 day' OR (used_at IS NOT NULL AND used_at < now() - interval '1 day')`).count
   return {

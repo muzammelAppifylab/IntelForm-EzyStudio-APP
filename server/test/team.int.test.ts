@@ -113,6 +113,25 @@ describe('membership changes', () => {
     expect((await m.request('POST', '/api/uploads?purpose=image', undefined, { raw: uploadBody() })).status).toBe(403)
   })
 
+  it('setting a member’s password needs the Owner’s own password and signs the member out', async () => {
+    const m = await addMember(ctx, owner, 'editor', 'Locked out')
+    const missing = await owner.patch(`/api/team/${m.me!.id}`, { password: 'owner-chosen-pass-1' })
+    expect(missing.status).toBe(422)
+    expect(missing.body.error.fields.currentPassword).toBeTruthy()
+    const wrong = await owner.patch(`/api/team/${m.me!.id}`, { password: 'owner-chosen-pass-1', currentPassword: 'wrong-guess' })
+    expect(wrong.status).toBe(422)
+    expect(wrong.body.error.fields.currentPassword).toBeTruthy()
+    const asEmail = await owner.patch(`/api/team/${m.me!.id}`, { password: m.me!.email, currentPassword: OWNER.password })
+    expect(asEmail.status).toBe(422)
+    expect(asEmail.body.error.fields.password).toBeTruthy()
+    expect((await m.get('/api/me')).status).toBe(200)
+
+    const ok = await owner.patch(`/api/team/${m.me!.id}`, { password: 'owner-chosen-pass-1', currentPassword: OWNER.password })
+    expect(ok.status, ok.text).toBe(200)
+    expect((await m.get('/api/me')).status).toBe(401)
+    expect((await ctx.client().post('/api/auth/login', { email: m.me!.email, password: 'owner-chosen-pass-1' })).status).toBe(200)
+  })
+
   it('the Owner can’t be removed or changed through the member routes', async () => {
     expect((await owner.del(`/api/team/${owner.me!.id}`)).status).toBe(400)
     expect((await owner.patch(`/api/team/${owner.me!.id}`, { role: 'viewer' })).status).toBe(400)

@@ -12,13 +12,18 @@ import { api } from '@/lib/api'
 import { setupStatusQuery } from '@/lib/auth'
 import { useFormErrors } from '@/lib/form-errors'
 
+const withToken = setupInput.refine((v) => !!v.setupToken, {
+  message: 'Enter the setup token from SETUP_TOKEN in the server’s environment',
+  path: ['setupToken'],
+})
+
 /** First-run setup: shown once on a fresh install, creates the Owner. */
 export default function SetupPage() {
   const status = useQuery(setupStatusQuery)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const errors = useFormErrors()
-  const [values, setValues] = useState<SetupInput>({ name: '', email: '', password: '', appName: 'IntelForm' })
+  const [values, setValues] = useState<SetupInput>({ name: '', email: '', password: '', appName: 'IntelForm', setupToken: '' })
 
   const setup = useMutation({
     mutationFn: (input: SetupInput) => api<Me>('/api/setup', { method: 'POST', body: input }),
@@ -32,11 +37,12 @@ export default function SetupPage() {
 
   if (status.isPending) return <FullPageSpinner />
   if (status.data && !status.data.needsSetup) return <Navigate to="/login" replace />
+  const tokenRequired = !!status.data?.tokenRequired
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    const input = errors.validate(setupInput, values)
-    if (input) setup.mutate(input)
+    const input = errors.validate(tokenRequired ? withToken : setupInput, values)
+    if (input) setup.mutate(tokenRequired ? input : { ...input, setupToken: undefined })
   }
   const set = (key: keyof SetupInput) => (e: React.ChangeEvent<HTMLInputElement>) => setValues((v) => ({ ...v, [key]: e.target.value }))
 
@@ -47,6 +53,11 @@ export default function SetupPage() {
       </AuthHeading>
       <form onSubmit={submit} noValidate className="grid gap-4">
         <FormError message={errors.form} />
+        {tokenRequired && (
+          <Field label="Setup token" description="Your server requires it. Copy the value of SETUP_TOKEN from the server’s environment." error={errors.fields.setupToken} required>
+            {(p) => <Input {...p} autoComplete="off" spellCheck={false} className="font-mono" value={values.setupToken ?? ''} onChange={set('setupToken')} />}
+          </Field>
+        )}
         <Field label="Your name" error={errors.fields.name} required>
           {(p) => <Input {...p} autoComplete="name" value={values.name} onChange={set('name')} />}
         </Field>

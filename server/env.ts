@@ -37,6 +37,8 @@ const schema = z
     ALLOW_PRIVATE_WEBHOOKS: flag,
     /** Apply pending migrations before the server starts listening. */
     MIGRATE_ON_BOOT: flag,
+    /** Optional: first-run setup (POST /api/setup) requires this token when it is set. */
+    SETUP_TOKEN: optionalText,
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent', '']).optional().transform((v) => v || undefined),
   })
   .superRefine((v, ctx) => {

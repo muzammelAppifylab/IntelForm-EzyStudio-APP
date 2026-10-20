@@ -1,4 +1,5 @@
 import { hash, verify } from '@node-rs/argon2'
+import { EMAIL_PASSWORD_MESSAGE, passwordMatchesEmail } from '../../shared/auth'
 import { ApiError } from './errors'
 
 /**
@@ -89,4 +90,14 @@ export async function burnPasswordCheck(password: string): Promise<void> {
     throw err
   })
   await verifyPassword(await dummyHash, password)
+}
+
+/**
+ * The account-password rule the zod schema can't check on its own: the password must not be
+ * the account's email or the part before the @. Throws a 422 on `field`. Call before hashing.
+ */
+export function assertPasswordNotEmail(password: string, email: string, field = 'password'): void {
+  if (passwordMatchesEmail(password, email)) {
+    throw new ApiError(422, 'validation_failed', 'Check the highlighted fields', { [field]: [EMAIL_PASSWORD_MESSAGE] })
+  }
 }

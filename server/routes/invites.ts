@@ -7,9 +7,9 @@ import { hashToken, randomToken } from '../lib/crypto'
 import { queueEmail } from '../lib/email'
 import { ApiError, notFound } from '../lib/errors'
 import { ipKey } from '../lib/ip'
-import { hashPassword } from '../lib/password'
+import { assertPasswordNotEmail, hashPassword } from '../lib/password'
 import { rateLimit } from '../lib/rate-limit'
-import { startSession, toMe, type UserRow } from '../lib/session'
+import { revokeCredentials, startSession, toMe, type UserRow } from '../lib/session'
 import { getSetting } from '../lib/settings'
 import { readBody, uuidParam } from '../lib/validate'
 import { requirePermission, requireUser, type AppEnv } from '../middleware/auth'
@@ -77,7 +77,8 @@ inviteRoutes.post('/:token/accept', async (c) => {
   const input = await readBody(c, acceptInviteInput)
   await rateLimit(`accept:ip:${ipKey(c)}`, 10, 15 * 60)
   // Cheap check first: only hash the password (argon2) for a live invite (A3).
-  await openInvite(c.req.param('token'))
+  const open = await openInvite(c.req.param('token'))
+  assertPasswordNotEmail(input.password, open.email)
   const passwordHash = await hashPassword(input.password)
   const tokenHash = hashToken(c.req.param('token'))
 
@@ -105,6 +106,8 @@ inviteRoutes.post('/:token/accept', async (c) => {
           RETURNING id, name, email, role, avatar_url
         `
     await tx`UPDATE invites SET accepted_at = now() WHERE id = ${invite.id}`
+    // A returning member has a new password: reset links (and any session) from before are void.
+    if (existing) await revokeCredentials(tx, user.id)
     await startSession(c, user.id, tx)
     return toMe(user)
   })

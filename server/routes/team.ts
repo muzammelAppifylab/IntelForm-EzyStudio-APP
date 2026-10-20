@@ -4,12 +4,25 @@ import { memberUpdateInput, transferOwnershipInput } from '../../shared/auth'
 import { can } from '../../shared/roles'
 import { sql } from '../db/client'
 import { ApiError, conflict, notFound } from '../lib/errors'
-import { hashPassword, verifyPassword } from '../lib/password'
+import { assertPasswordNotEmail, hashPassword, verifyPassword } from '../lib/password'
 import { rateLimit } from '../lib/rate-limit'
+import { revokeCredentials } from '../lib/session'
 import { readBody, uuidParam } from '../lib/validate'
 import { requirePermission, requireUser, type AppEnv } from '../middleware/auth'
 
 export const teamRoutes = new Hono<AppEnv>().use(requireUser)
+
+/**
+ * Re-checks the signed-in member's own password before a sensitive action. Shares one rate
+ * limit with the Profile page, so a stolen session can't use it as a password oracle.
+ */
+async function confirmOwnPassword(userId: string, currentPassword: string): Promise<void> {
+  await rateLimit(`reauth:user:${userId}`, 10, 15 * 60)
+  const [{ password_hash }] = await sql<{ password_hash: string }[]>`SELECT password_hash FROM users WHERE id = ${userId}`
+  if (!(await verifyPassword(password_hash, currentPassword))) {
+    throw new ApiError(422, 'validation_failed', 'Check the highlighted fields', { currentPassword: ['That password isn’t right'] })
+  }
+}
 
 teamRoutes.get('/', requirePermission('team.view'), async (c) => {
   const members = await sql<TeamMember[]>`
@@ -33,21 +46,28 @@ teamRoutes.patch('/:userId', requirePermission('team.manage'), async (c) => {
   const input = await readBody(c, memberUpdateInput)
   if (userId === c.var.user.id) throw new ApiError(400, 'own_account', 'Change your own details on your Profile page')
 
-  const passwordHash = input.password ? await hashPassword(input.password) : null
-  const [row] = await sql<{ id: string }[]>`
-    UPDATE users SET
-      role = COALESCE(${input.role ?? null}, role),
-      password_hash = COALESCE(${passwordHash}, password_hash),
-      updated_at = now()
-    WHERE id = ${userId} AND status = 'active' AND role <> 'owner'
-    RETURNING id
-  `
-  if (!row) throw notFound('That team member no longer exists')
-  if (passwordHash) {
-    // A password set by the Owner signs the member out everywhere and voids their reset links.
-    await sql`DELETE FROM sessions WHERE user_id = ${userId}`
-    await sql`UPDATE password_resets SET used_at = now() WHERE user_id = ${userId} AND used_at IS NULL`
+  let passwordHash: string | null = null
+  if (input.password) {
+    // Setting someone's password is an account takeover if the session is stolen: re-check ours.
+    await confirmOwnPassword(c.var.user.id, input.currentPassword ?? '')
+    const [member] = await sql<{ email: string }[]>`SELECT email FROM users WHERE id = ${userId} AND status = 'active' AND role <> 'owner'`
+    if (!member) throw notFound('That team member no longer exists')
+    assertPasswordNotEmail(input.password, member.email)
+    passwordHash = await hashPassword(input.password)
   }
+  await sql.begin(async (tx) => {
+    const [row] = await tx<{ id: string }[]>`
+      UPDATE users SET
+        role = COALESCE(${input.role ?? null}, role),
+        password_hash = COALESCE(${passwordHash}, password_hash),
+        updated_at = now()
+      WHERE id = ${userId} AND status = 'active' AND role <> 'owner'
+      RETURNING id
+    `
+    if (!row) throw notFound('That team member no longer exists')
+    // A password set by the Owner signs the member out everywhere and voids their reset links.
+    if (passwordHash) await revokeCredentials(tx, userId)
+  })
   return c.json({ ok: true })
 })
 
@@ -72,11 +92,7 @@ teamRoutes.post('/transfer-ownership', requirePermission('team.manage'), async (
   const me = c.var.user
   if (input.userId === me.id) throw new ApiError(400, 'own_account', 'You are already the Owner')
 
-  await rateLimit(`reauth:user:${me.id}`, 10, 15 * 60)
-  const [{ password_hash }] = await sql<{ password_hash: string }[]>`SELECT password_hash FROM users WHERE id = ${me.id}`
-  if (!(await verifyPassword(password_hash, input.currentPassword))) {
-    throw new ApiError(422, 'validation_failed', 'Check the highlighted fields', { currentPassword: ['That password isn’t right'] })
-  }
+  await confirmOwnPassword(me.id, input.currentPassword)
 
   await sql.begin(async (tx) => {
     // Demote first: the unique index allows only one active Owner at any moment. RETURNING

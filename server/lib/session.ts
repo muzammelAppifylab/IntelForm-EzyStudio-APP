@@ -13,6 +13,8 @@ import { clientIp } from './ip'
  */
 export const SESSION_COOKIE = isHttps ? '__Host-intelform_session' : 'intelform_session'
 const SESSION_DAYS = 30
+/** Absolute lifetime: a session ends this long after sign-in, however active it stays. */
+export const SESSION_MAX_DAYS = 90
 const DAY_MS = 24 * 60 * 60 * 1000
 /** Sliding expiry is written at most once an hour per session. */
 const EXTEND_AFTER_MS = 60 * 60 * 1000
@@ -63,21 +65,40 @@ export async function startSession(c: Context, userId: string, tx: Queryable = s
 export async function readSession(c: Context): Promise<SessionUser | null> {
   const token = getCookie(c, SESSION_COOKIE)
   if (!token) return null
-  const [row] = await sql<(UserRow & { session_id: string; expires_at: Date })[]>`
-    SELECT s.id AS session_id, s.expires_at, u.id, u.name, u.email, u.role, u.avatar_url
+  const [row] = await sql<(UserRow & { session_id: string; expires_at: Date; created_at: Date; too_old: boolean })[]>`
+    SELECT s.id AS session_id, s.expires_at, s.created_at,
+      s.created_at <= now() - make_interval(days => ${SESSION_MAX_DAYS}) AS too_old,
+      u.id, u.name, u.email, u.role, u.avatar_url
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ${hashToken(token)} AND s.expires_at > now() AND u.status = 'active'
   `
   if (!row) return null
+  if (row.too_old) {
+    // Past the absolute lifetime: sliding expiry can't keep it alive. Sign in again.
+    await endSession(c, row.session_id)
+    return null
+  }
 
-  // Sliding expiry: push the expiry forward, but write at most once an hour.
-  const fresh = Date.now() + SESSION_DAYS * DAY_MS
+  // Sliding expiry: push the expiry forward (never past the absolute lifetime), but write at
+  // most once an hour.
+  const fresh = Math.min(Date.now() + SESSION_DAYS * DAY_MS, row.created_at.getTime() + SESSION_MAX_DAYS * DAY_MS)
   if (fresh - row.expires_at.getTime() > EXTEND_AFTER_MS) {
     const expiresAt = new Date(fresh)
     await sql`UPDATE sessions SET expires_at = ${expiresAt} WHERE id = ${row.session_id}`
     setSessionCookie(c, token, expiresAt)
   }
   return { ...toMe(row), sessionId: row.session_id }
+}
+
+/**
+ * Call whenever a user's email or password changes (in the same transaction): voids every
+ * open password-reset link and ends every session except `keepSessionId` (the one making the
+ * change, if any), so a stolen session or an old reset link stops working.
+ */
+export async function revokeCredentials(tx: Queryable, userId: string, keepSessionId?: string): Promise<void> {
+  await tx`UPDATE password_resets SET used_at = now() WHERE user_id = ${userId} AND used_at IS NULL`
+  if (keepSessionId) await tx`DELETE FROM sessions WHERE user_id = ${userId} AND id <> ${keepSessionId}`
+  else await tx`DELETE FROM sessions WHERE user_id = ${userId}`
 }
 
 export async function endSession(c: Context, sessionId: string | undefined): Promise<void> {

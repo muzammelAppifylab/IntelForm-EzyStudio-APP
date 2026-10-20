@@ -59,6 +59,8 @@ export interface InviteInfo {
 
 export interface SetupStatus {
   needsSetup: boolean
+  /** The server sets SETUP_TOKEN, so the setup form must send it. */
+  tokenRequired: boolean
 }
 
 export interface AppInfo {

@@ -6,9 +6,9 @@ import { hashToken, randomToken } from '../lib/crypto'
 import { emailEnabled, queueEmail } from '../lib/email'
 import { ApiError } from '../lib/errors'
 import { ipKey } from '../lib/ip'
-import { burnPasswordCheck, hashPassword, verifyPassword } from '../lib/password'
+import { assertPasswordNotEmail, burnPasswordCheck, hashPassword, verifyPassword } from '../lib/password'
 import { assertLoginAllowed, clearAllLoginFailures, clearLoginFailures, rateLimit, recordLoginFailure } from '../lib/rate-limit'
-import { endSession, readSession, startSession, toMe, type UserRow } from '../lib/session'
+import { endSession, readSession, revokeCredentials, startSession, toMe, type UserRow } from '../lib/session'
 import { getSetting } from '../lib/settings'
 import { readBody } from '../lib/validate'
 
@@ -96,8 +96,12 @@ authRoutes.post('/reset', async (c) => {
   const tokenHash = hashToken(input.token)
 
   // Cheap check first: only hash the password (argon2, ~19 MiB) for a live link (A3).
-  const [open] = await sql`SELECT 1 FROM password_resets WHERE token_hash = ${tokenHash} AND used_at IS NULL AND expires_at > now()`
+  const [open] = await sql<{ email: string }[]>`
+    SELECT u.email FROM password_resets r JOIN users u ON u.id = r.user_id
+    WHERE r.token_hash = ${tokenHash} AND r.used_at IS NULL AND r.expires_at > now()
+  `
   if (!open) throw new ApiError(410, 'link_expired', RESET_EXPIRED)
+  assertPasswordNotEmail(input.password, open.email)
   const passwordHash = await hashPassword(input.password)
 
   const me = await sql.begin(async (tx) => {
@@ -108,14 +112,13 @@ authRoutes.post('/reset', async (c) => {
     `
     if (!reset) throw new ApiError(410, 'link_expired', RESET_EXPIRED)
 
-    // Uses this link and voids every other open one for the account.
-    await tx`UPDATE password_resets SET used_at = now() WHERE user_id = ${reset.user_id} AND used_at IS NULL`
     const [user] = await tx<UserRow[]>`
       UPDATE users SET password_hash = ${passwordHash}, updated_at = now() WHERE id = ${reset.user_id}
       RETURNING id, name, email, role, avatar_url
     `
-    // A reset signs out every device, then starts a fresh session here.
-    await tx`DELETE FROM sessions WHERE user_id = ${user.id}`
+    // Uses this link, voids every other open one and signs out every device, then starts a
+    // fresh session here.
+    await revokeCredentials(tx, user.id)
     await startSession(c, user.id, tx)
     return toMe(user)
   })
