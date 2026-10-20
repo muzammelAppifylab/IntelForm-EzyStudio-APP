@@ -5,7 +5,8 @@
  * Tailwind v4 + shadcn/ui: paste below `@import "tailwindcss";`. Dark mode: class="dark" on <html>.
  * Every documented pairing passes WCAG (text 4.5:1, borders/rings 3:1) in both modes. */
 
-@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+/* Fonts: self-hosted @font-face rules (fonts.css), so no page requests a third-party font. */
+@import "./fonts.css";
 
 @custom-variant dark (&:is(.dark *));
 
