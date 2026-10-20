@@ -30,7 +30,7 @@ describe('setup', () => {
   it('reports needsSetup on a fresh install', async () => {
     const res = await ctx.client().get('/api/setup')
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ needsSetup: true })
+    expect(res.body).toEqual({ needsSetup: true, tokenRequired: false })
   })
 
   it('creates the Owner once, signs them in, and then refuses', async () => {
@@ -41,7 +41,7 @@ describe('setup', () => {
     const again = await ctx.client().post('/api/setup', { ...OWNER, email: 'other@example.com' })
     expect(again.status).toBe(409)
     expect(again.body.error.code).toBe('already_set_up')
-    expect((await ctx.client().get('/api/setup')).body).toEqual({ needsSetup: false })
+    expect((await ctx.client().get('/api/setup')).body).toEqual({ needsSetup: false, tokenRequired: false })
   })
 
   it('rate-limits setup attempts per IP', async () => {
@@ -280,5 +280,78 @@ describe('forgot and reset', () => {
     } finally {
       setTestEmailDriver({ async send(m) { sent.push(m); return {} }, async verify() {} })
     }
+  })
+})
+
+async function resetToken(email: string) {
+  await ctx.client().post('/api/auth/forgot', { email })
+  await drainJobs()
+  return sent.filter((m) => m.to.includes(email) && m.subject.startsWith('Reset')).at(-1)?.text.match(/\/reset\/([\w-]+)/)?.[1]
+}
+
+describe('credential changes revoke access', () => {
+  it('an email change voids open reset links and ends other sessions, keeping this one', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Mover')
+    const other = ctx.client()
+    expect((await other.post('/api/auth/login', { email: member.me!.email, password: 'member-password-1' })).status).toBe(200)
+    const token = await resetToken(member.me!.email)
+    expect(token).toBeTruthy()
+
+    const moved = await member.patch('/api/me', { email: `moved.${member.me!.email}`, currentPassword: 'member-password-1' })
+    expect(moved.status, moved.text).toBe(200)
+    expect((await member.get('/api/me')).status).toBe(200)
+    expect((await other.get('/api/me')).status).toBe(401)
+    expect((await ctx.client().post('/api/auth/reset', { token, password: 'brand-new-pass-1' })).status).toBe(410)
+  })
+
+  it('a removed member invited back can’t use a reset link from before', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Returner')
+    const email = member.me!.email
+    const token = await resetToken(email)
+    expect(token).toBeTruthy()
+    expect((await owner.del(`/api/team/${member.me!.id}`)).status).toBe(204)
+    const inv = await owner.post('/api/invites', { email, role: 'viewer' })
+    const accepted = await ctx.client().post(`/api/invites/${inv.body.link.split('/invite/')[1]}/accept`, { name: 'Returner', password: 'returning-pass-1' })
+    expect(accepted.status, accepted.text).toBe(201)
+    expect((await ctx.client().post('/api/auth/reset', { token, password: 'brand-new-pass-1' })).status).toBe(410)
+  })
+})
+
+describe('session lifetime', () => {
+  it('refuses and deletes a session older than 90 days, however active', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Old timer')
+    await ctx.sql`UPDATE sessions SET created_at = now() - interval '91 days', expires_at = now() + interval '29 days' WHERE user_id = ${member.me!.id}`
+    expect((await member.get('/api/me')).status).toBe(401)
+    expect(await ctx.sql`SELECT 1 FROM sessions WHERE user_id = ${member.me!.id}`).toHaveLength(0)
+  })
+
+  it('sliding expiry never runs past the absolute lifetime', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Slider')
+    await ctx.sql`UPDATE sessions SET created_at = now() - interval '80 days', expires_at = now() + interval '1 day' WHERE user_id = ${member.me!.id}`
+    expect((await member.get('/api/me')).status).toBe(200)
+    const [row] = await ctx.sql<{ days: string }[]>`SELECT extract(epoch FROM expires_at - created_at) / 86400 AS days FROM sessions WHERE user_id = ${member.me!.id}`
+    expect(Number(row.days)).toBeCloseTo(90, 1)
+  })
+})
+
+describe('password rules', () => {
+  it('refuse common passwords and the account’s email on change, reset and invite accept', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Picky')
+    const email = member.me!.email
+    for (const newPassword of ['Password123', 'qwerty123', email, email.split('@')[0].toUpperCase()]) {
+      const res = await member.patch('/api/me', { currentPassword: 'member-password-1', newPassword })
+      expect(res.status, newPassword).toBe(422)
+      expect(res.body.error.fields.newPassword).toBeTruthy()
+    }
+
+    const token = await resetToken(email)
+    const reset = await ctx.client().post('/api/auth/reset', { token, password: email.split('@')[0] })
+    expect(reset.status).toBe(422)
+    expect(reset.body.error.fields.password).toBeTruthy()
+
+    const inv = await owner.post('/api/invites', { email: 'samelocal@example.com', role: 'viewer' })
+    const accept = await ctx.client().post(`/api/invites/${inv.body.link.split('/invite/')[1]}/accept`, { name: 'Same', password: 'samelocal' })
+    expect(accept.status).toBe(422)
+    expect(accept.body.error.fields.password).toBeTruthy()
   })
 })

@@ -275,11 +275,17 @@ function InviteLinkDialog({ created, onClose }: { created: CreatedInvite; onClos
   )
 }
 
+const setPasswordInput = z.object({
+  password: passwordSchema,
+  currentPassword: z.string().min(1, 'Enter your password to confirm'),
+})
+
 function SetPasswordDialog({ member, onClose }: { member: TeamMember; onClose: () => void }) {
   const errors = useFormErrors()
   const [password, setPassword] = useState('')
+  const [currentPassword, setCurrentPassword] = useState('')
   const save = useMutation({
-    mutationFn: (input: { password: string }) => api(`/api/team/${member.id}`, { method: 'PATCH', body: input }),
+    mutationFn: (input: { password: string; currentPassword: string }) => api(`/api/team/${member.id}`, { method: 'PATCH', body: input }),
     onSuccess: () => {
       toast.success(`New password set for ${member.name}`)
       onClose()
@@ -288,7 +294,7 @@ function SetPasswordDialog({ member, onClose }: { member: TeamMember; onClose: (
   })
   function submit(e: FormEvent) {
     e.preventDefault()
-    const input = errors.validate(z.object({ password: passwordSchema }), { password })
+    const input = errors.validate(setPasswordInput, { password, currentPassword })
     if (input) save.mutate(input)
   }
   return (
@@ -302,6 +308,9 @@ function SetPasswordDialog({ member, onClose }: { member: TeamMember; onClose: (
           <FormError message={errors.form} />
           <Field label="New password" description="At least 8 characters" error={errors.fields.password}>
             {(p) => <Input {...p} type="text" autoComplete="off" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} className="font-mono" />}
+          </Field>
+          <Field label="Your password" description="Enter your own password to confirm it’s you." error={errors.fields.currentPassword}>
+            {(p) => <Input {...p} type="password" autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />}
           </Field>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
