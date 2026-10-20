@@ -11,14 +11,36 @@ const optionalText = z
   .optional()
   .transform((v) => (v && v.trim() ? v.trim() : undefined))
 
+/** https, or http on a loopback host (local production-mode runs such as the e2e suite). */
+function isHttpsOrLocal(url: string): boolean {
+  const u = new URL(url)
+  return u.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+}
+
 const schema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+    /**
+     * TLS to Postgres: off | require (encrypted, certificate not checked) | verify-full (CA and
+     * host name checked). Unset: off in development; in production `require`, unless
+     * DATABASE_URL already has ?sslmode=… (which then decides) or points at localhost.
+     */
+    DATABASE_SSL: z.enum(['off', 'require', 'verify-full', '']).optional().transform((v) => v || undefined),
+    /** PEM file with the CA that signed the Postgres certificate (verify-full). Unset = the system CAs. */
+    DATABASE_CA: optionalText,
+    /** Per-statement limit in ms (Postgres statement_timeout); 0 = none. Migrations and secrets:reencrypt lift it. */
+    DATABASE_STATEMENT_TIMEOUT_MS: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.trim() ? Number(v) : 30_000))
+      .pipe(z.number().int('DATABASE_STATEMENT_TIMEOUT_MS must be a whole number of milliseconds').min(0)),
     APP_SECRET: z.string().min(32, 'APP_SECRET must be at least 32 characters'),
     /** The previous APP_SECRET while rotating: stored secrets encrypted with it still decrypt. */
     APP_SECRET_PREVIOUS: optionalText.pipe(z.string().min(32, 'APP_SECRET_PREVIOUS must be at least 32 characters').optional()),
     APP_URL: z.url().optional(),
+    /** Production only: accept an http:// APP_URL on a public host (cookies lose Secure and __Host-). localhost is always allowed. */
+    ALLOW_HTTP_APP_URL: flag,
     API_PORT: z.coerce.number().int().default(8787),
     /** How many reverse proxies sit in front of the app. 0 = use the socket address, ignore X-Forwarded-For. */
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
@@ -44,6 +66,13 @@ const schema = z
   .superRefine((v, ctx) => {
     if (v.NODE_ENV === 'production' && !v.APP_URL) {
       ctx.addIssue({ code: 'custom', path: ['APP_URL'], message: 'APP_URL is required in production (the public https URL of the site)' })
+    }
+    if (v.NODE_ENV === 'production' && v.APP_URL && !v.ALLOW_HTTP_APP_URL && !isHttpsOrLocal(v.APP_URL)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['APP_URL'],
+        message: 'APP_URL must be https in production (http drops the Secure cookie flag). Set ALLOW_HTTP_APP_URL=1 to allow it anyway',
+      })
     }
     if (v.NODE_ENV === 'production' && v.ALLOW_PRIVATE_WEBHOOKS) {
       ctx.addIssue({ code: 'custom', path: ['ALLOW_PRIVATE_WEBHOOKS'], message: 'ALLOW_PRIVATE_WEBHOOKS is for development only' })

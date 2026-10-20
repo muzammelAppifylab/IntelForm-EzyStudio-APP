@@ -1,4 +1,6 @@
 node_modules
+# Claude worktrees: full copies of the repo (and their .env files)
+.claude
 dist
 uploads
 test-results

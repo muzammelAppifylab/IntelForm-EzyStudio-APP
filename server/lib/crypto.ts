@@ -38,9 +38,11 @@ export function safeEqual(a: string, b: string): boolean {
 // v2.<kid>.<iv>.<tag>.<data>   AES-256-GCM, key = HKDF(APP_SECRET, "secrets"), kid = key id
 // v1.<iv>.<tag>.<data>         legacy, key = sha256("intelform:secrets:" + APP_SECRET); read only
 //
-// With APP_SECRET_PREVIOUS set, values written under the old secret still decrypt; re-save
-// them (or call reencryptSecret) to move them to the new key. Losing APP_SECRET makes every
-// stored secret unrecoverable.
+// With APP_SECRET_PREVIOUS set, values written under the old secret still decrypt. The server
+// moves them all to the new key at boot while APP_SECRET_PREVIOUS is set, and
+// `npm run secrets:reencrypt` does the same on demand (server/db/reencrypt.ts, which uses
+// reencryptSecret); remove APP_SECRET_PREVIOUS once it reports 0 unreadable. Losing
+// APP_SECRET makes every stored secret unrecoverable.
 // ---------------------------------------------------------------------------
 
 interface SecretKey {
