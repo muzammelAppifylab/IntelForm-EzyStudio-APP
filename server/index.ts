@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { app as api } from './app'
 import { sql } from './db/client'
 import { runMigrations } from './db/migrate'
+import { reencryptSecretsOnBoot } from './db/reencrypt'
 import { seedBuiltinTemplates } from './db/seed'
 import { env, isProduction } from './env'
 import { ApiError, errorResponse } from './lib/errors'
@@ -24,6 +25,8 @@ import { inlineScriptHashes, surfaceFor, surfaceHeaders } from './middleware/sec
  * with security headers per surface (dashboard, public form, API).
  */
 if (env.MIGRATE_ON_BOOT) await runMigrations(sql, (line) => logger.info(line))
+// While APP_SECRET_PREVIOUS is set, move stored secrets onto the current key (never blocks the boot).
+await reencryptSecretsOnBoot(sql)
 // Built-in templates ship as seed data; the upsert only writes rows whose content changed.
 try {
   const { written, deleted } = await seedBuiltinTemplates(sql)
