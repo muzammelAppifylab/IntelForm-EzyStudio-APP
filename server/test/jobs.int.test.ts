@@ -41,6 +41,13 @@ afterAll(async () => {
   await ctx?.teardown()
 })
 
+async function insertResponse(formId: string, versionId: string): Promise<string> {
+  const [r] = await ctx.sql<{ id: string }[]>`
+    INSERT INTO responses (form_id, form_version_id, answers) VALUES (${formId}, ${versionId}, '{}'::jsonb) RETURNING id
+  `
+  return r.id
+}
+
 describe('jobs', () => {
   it('a rolled-back transaction leaves no job', async () => {
     let ran = 0
@@ -95,6 +102,50 @@ describe('jobs', () => {
     await ctx.sql`UPDATE jobs SET run_at = now() WHERE id = ${id}`
     await jobs.drain()
     expect(calls).toBe(2)
+  })
+
+  it('redacts the payload once a job is done or failed for good, not while it retries', async () => {
+    jobs.registerJob('test-secret-ok', async () => {})
+    jobs.registerJob('test-secret-fail', async () => {
+      throw new Error('boom')
+    })
+    const secret = { to: ['a@example.com'], text: 'https://app.example/invite/live-token', formId: 'f1', responseId: 'r1' }
+    const ok = await jobs.enqueue(ctx.sql, 'test-secret-ok', secret)
+    const fail = await jobs.enqueue(ctx.sql, 'test-secret-fail', secret, { maxAttempts: 2 })
+    await jobs.drain()
+    const payloadOf = async (id: number) => (await ctx.sql`SELECT payload FROM jobs WHERE id = ${id}`)[0].payload
+    expect(await payloadOf(ok)).toEqual({ redacted: true, formId: 'f1', responseId: 'r1' })
+    // Still retrying: the worker needs the payload.
+    expect(await payloadOf(fail)).toEqual(secret)
+    await ctx.sql`UPDATE jobs SET run_at = now() WHERE id = ${fail}`
+    await jobs.drain()
+    expect(await payloadOf(fail)).toEqual({ redacted: true, formId: 'f1', responseId: 'r1' })
+
+    // A job abandoned on its last attempt is redacted when maintenance marks it failed.
+    const [abandoned] = await ctx.sql<{ id: number }[]>`
+      INSERT INTO jobs (kind, payload, max_attempts, attempts, locked_until)
+      VALUES ('test-secret-abandoned', ${ctx.sql.json({ text: 'reset link', formId: 'f2' })}, 1, 1, now() - interval '1 minute')
+      RETURNING id
+    `
+    await jobs.failAbandonedJobs()
+    expect(await payloadOf(abandoned.id)).toEqual({ redacted: true, formId: 'f2' })
+  })
+
+  it('an invite email job keeps no link once sent', async () => {
+    const email = await import('../lib/email')
+    const sent: string[] = []
+    email.setTestEmailDriver({ send: async (m) => (sent.push(m.text), {}), verify: async () => {} })
+    try {
+      await ctx.sql.begin((tx) => email.queueEmail(tx, { to: 'new@example.com', subject: 'Join', text: 'https://app.example/invite/tok_abc123' }))
+      await jobs.drain()
+      expect(sent.at(-1)).toContain('tok_abc123')
+      const [job] = await ctx.sql`SELECT payload, done_at FROM jobs WHERE kind = 'email' ORDER BY id DESC LIMIT 1`
+      expect(job.done_at).not.toBeNull()
+      expect(JSON.stringify(job.payload)).not.toContain('tok_abc123')
+      expect(job.payload).toEqual({ redacted: true })
+    } finally {
+      email.setTestEmailDriver(undefined)
+    }
   })
 })
 
@@ -154,9 +205,10 @@ describe('scheduler', () => {
 describe('webhook delivery', () => {
   it('signs per Standard Webhooks and logs the delivery', async () => {
     const form = await insertForm(ctx.sql, { settings: { webhook: { enabled: true, url: `${base}/hook`, headers: [{ key: 'X-Team', value: 'forms' }, { key: 'Host', value: 'evil' }] } } })
+    const responseId = await insertResponse(form.id, form.versionId)
     const payload = { type: 'form.response', data: { answers: { q1: 'Yes' } } }
-    const result = await webhooks.deliverWebhook(form.id, payload, { responseId: '11111111-1111-4111-8111-111111111111' })
-    expect(result).toMatchObject({ ok: true, statusCode: 200, webhookId: 'msg_11111111-1111-4111-8111-111111111111' })
+    const result = await webhooks.deliverWebhook(form.id, payload, { responseId })
+    expect(result).toMatchObject({ ok: true, statusCode: 200, webhookId: `msg_${responseId}` })
     const hit = received.at(-1)!
     expect(hit.headers['x-team']).toBe('forms')
     expect(hit.headers.host).not.toBe('evil')
@@ -196,11 +248,40 @@ describe('webhook delivery', () => {
 
   it('the webhook job delivers after commit with one attempt', async () => {
     const form = await insertForm(ctx.sql, { settings: { webhook: { url: `${base}/hook` } } })
-    await ctx.sql.begin((tx) => webhooks.queueWebhook(tx, form.id, '22222222-2222-4222-8222-222222222222', { ok: true }))
+    const responseId = await insertResponse(form.id, form.versionId)
+    await ctx.sql.begin((tx) => webhooks.queueWebhook(tx, form.id, responseId, { ok: true }))
     await jobs.drain()
     const [d] = await ctx.sql`SELECT webhook_id, status_code FROM webhook_deliveries WHERE form_id = ${form.id}`
-    expect(d).toMatchObject({ webhook_id: 'msg_22222222-2222-4222-8222-222222222222', status_code: 200 })
-    const [j] = await ctx.sql`SELECT max_attempts FROM jobs WHERE kind = 'webhook' ORDER BY id DESC LIMIT 1`
+    expect(d).toMatchObject({ webhook_id: `msg_${responseId}`, status_code: 200 })
+    const [j] = await ctx.sql`SELECT max_attempts, payload FROM jobs WHERE kind = 'webhook' ORDER BY id DESC LIMIT 1`
     expect(j.max_attempts).toBe(1)
+    expect(j.payload).toEqual({ redacted: true, formId: form.id, responseId })
+  })
+
+  it('deleting a response deletes its deliveries; a deleted response is never sent', async () => {
+    const form = await insertForm(ctx.sql, { settings: { webhook: { url: `${base}/hook` } } })
+    const responseId = await insertResponse(form.id, form.versionId)
+    const sent = await webhooks.deliverWebhook(form.id, { answers: { q: 'private' } }, { responseId })
+    const test = await webhooks.deliverWebhook(form.id, { answers: { q: 'sample' } }, { test: true })
+    await ctx.sql`DELETE FROM responses WHERE id = ${responseId}`
+    const left = await ctx.sql<{ id: string }[]>`SELECT id FROM webhook_deliveries WHERE form_id = ${form.id}`
+    expect(left.map((r) => r.id)).toEqual([test.deliveryId])
+
+    // Queued, then the response is deleted before the worker runs: nothing goes out.
+    const doomed = await insertResponse(form.id, form.versionId)
+    await ctx.sql.begin((tx) => webhooks.queueWebhook(tx, form.id, doomed, { answers: { q: 'private' } }))
+    await ctx.sql`DELETE FROM responses WHERE id = ${doomed}`
+    const before = received.length
+    await jobs.drain()
+    expect(received.length).toBe(before)
+    expect(await ctx.sql`SELECT 1 FROM webhook_deliveries WHERE webhook_id = ${'msg_' + doomed}`).toHaveLength(0)
+
+    // A row orphaned before 0007 (response_id NULL, not a test) can't be resent.
+    const [orphan] = await ctx.sql<{ id: string }[]>`
+      INSERT INTO webhook_deliveries (form_id, url, webhook_id, payload) VALUES (${form.id}, ${base + '/hook'}, ${'msg_' + sent.deliveryId}, ${ctx.sql.json({ q: 'private' })})
+      RETURNING id
+    `
+    await expect(webhooks.resendDelivery(orphan.id)).rejects.toMatchObject({ status: 410 })
+    expect(received.length).toBe(before)
   })
 })
