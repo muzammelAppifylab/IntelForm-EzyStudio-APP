@@ -63,10 +63,32 @@ describe('settings', () => {
   })
 
   it('omitting a secret keeps it; null clears it', async () => {
-    await owner.patch('/api/settings', { email: { smtpHost: 'smtp2.example.com' } })
+    // Same host, port and user (as the settings form re-sends them): the password stays.
+    await owner.patch('/api/settings', { email: { smtpHost: 'SMTP.example.com', smtpPort: 587, smtpUser: 'mailer', fromName: 'Forms' } })
     expect((await owner.get('/api/settings')).body.email.smtpPass).toEqual({ set: true })
     await owner.patch('/api/settings', { email: { smtpPass: null } })
     expect((await owner.get('/api/settings')).body.email.smtpPass).toEqual({ set: false })
+  })
+
+  it('a new SMTP host, port or user without a new password clears the stored password', async () => {
+    const { getSetting, readSecret } = await import('../lib/settings')
+    const setPass = async () => {
+      await owner.patch('/api/settings', { email: { smtpHost: 'smtp.example.com', smtpPort: 587, smtpUser: 'mailer', smtpPass: 'hunter2' } })
+      expect(readSecret((await getSetting('email')).smtpPass)).toBe('hunter2')
+    }
+    for (const change of [{ smtpHost: 'attacker.example' }, { smtpPort: 2525 }, { smtpUser: 'other' }, { smtpSecure: true, smtpPort: null }]) {
+      await setPass()
+      const res = await owner.patch('/api/settings', { email: change })
+      expect(res.status).toBe(200)
+      expect(res.body.email.smtpPass, JSON.stringify(change)).toEqual({ set: false })
+      expect((await getSetting('email')).smtpPass).toBeNull()
+    }
+    // A new host with a new password in the same request keeps the new one.
+    await setPass()
+    const res = await owner.patch('/api/settings', { email: { smtpHost: 'smtp3.example.com', smtpPass: 'new-pass' } })
+    expect(res.body.email.smtpPass).toEqual({ set: true })
+    expect(readSecret((await getSetting('email')).smtpPass)).toBe('new-pass')
+    await owner.patch('/api/settings', { email: { smtpPass: null } })
   })
 
   it('validates input with field errors', async () => {

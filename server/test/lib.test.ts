@@ -299,3 +299,116 @@ describe('webhook test payload', () => {
     expect(sample.answers).toEqual(real.answers)
   })
 })
+
+describe('logged errors', () => {
+  it('drop postgres row data and SQL, keep code, constraint and table', async () => {
+    const { pino } = await import('pino')
+    const { loggerOptions } = await import('../lib/logger')
+    const lines: string[] = []
+    class PostgresError extends Error {}
+    const log = pino({ ...loggerOptions, level: 'info' }, { write: (s: string) => void lines.push(s) })
+    const err = Object.assign(new PostgresError('duplicate key value violates unique constraint "users_email_key"'), {
+      severity: 'ERROR',
+      code: '23505',
+      detail: 'Key (email)=(ada@example.com) already exists.',
+      hint: 'value ada@example.com',
+      where: 'SQL function "f" statement 1: ada@example.com',
+      internal_query: "SELECT 'ada@example.com'",
+      schema_name: 'public',
+      table_name: 'users',
+      constraint_name: 'users_email_key',
+      // postgres.js adds these non-enumerable unless debug is on; enumerable here to be sure.
+      query: 'INSERT INTO users (email) VALUES ($1)',
+      parameters: ['ada@example.com'],
+      args: ['ada@example.com'],
+      types: [25],
+    })
+    log.error({ err }, 'one')
+    log.error(new Error('signup failed', { cause: err }), 'two')
+    log.error({ error: err }, 'three')
+    log.error({ err: { wrapped: err } }, 'four')
+    expect(lines).toHaveLength(4)
+    for (const line of lines) {
+      expect(line).not.toContain('ada@example.com')
+      expect(line).not.toContain('INSERT INTO')
+    }
+    const first = JSON.parse(lines[0]).err
+    expect(first).toMatchObject({ type: 'PostgresError', code: '23505', table_name: 'users', constraint_name: 'users_email_key', schema_name: 'public' })
+    expect(first.message).toContain('users_email_key')
+    expect(first.stack).toBeTypeOf('string')
+    for (const k of ['detail', 'hint', 'where', 'internal_query', 'query', 'parameters', 'args', 'types']) expect(first).not.toHaveProperty(k)
+    expect(JSON.parse(lines[2]).error.code).toBe('23505')
+  })
+})
+
+describe('SMTP transport', () => {
+  const base = {
+    driver: 'smtp' as const,
+    fromName: null,
+    fromAddress: null,
+    replyTo: null,
+    smtpHost: 'smtp.example.com',
+    smtpPort: 587,
+    smtpSecure: false,
+    smtpUser: 'u',
+    smtpPass: null,
+    resendApiKey: null,
+    postmarkToken: null,
+  }
+
+  it('requires STARTTLS off this machine and always verifies certificates', async () => {
+    const { smtpTransportOptions } = await import('../lib/email')
+    expect(smtpTransportOptions(base, 'pw')).toMatchObject({ secure: false, requireTLS: true, port: 587, tls: { rejectUnauthorized: true } })
+    expect(smtpTransportOptions({ ...base, smtpPort: 25 }, 'pw')).toMatchObject({ requireTLS: true })
+    expect(smtpTransportOptions({ ...base, smtpSecure: true, smtpPort: null }, 'pw')).toMatchObject({ secure: true, port: 465, tls: { rejectUnauthorized: true } })
+    // Look-alikes of loopback are not loopback.
+    for (const smtpHost of ['localhost.evil.com', '127.0.0.1.evil.com', '10.0.0.1', 'mailhog']) {
+      expect(smtpTransportOptions({ ...base, smtpHost }, 'pw').requireTLS, smtpHost).toBe(true)
+    }
+  })
+
+  it('lets a loopback mail catcher (MailHog) use plain SMTP', async () => {
+    const { smtpTransportOptions, isLoopbackHost } = await import('../lib/email')
+    for (const smtpHost of ['localhost', 'LOCALHOST.', '127.0.0.1', '127.1.2.3', '::1', '[::1]', 'mail.localhost']) {
+      expect(isLoopbackHost(smtpHost), smtpHost).toBe(true)
+      expect(smtpTransportOptions({ ...base, smtpHost, smtpPort: 1025 }, null).requireTLS).toBe(false)
+    }
+  })
+})
+
+describe('confirmation email link stripping', () => {
+  it('removes URLs, bare domains, IPs and link schemes from answers', async () => {
+    const { stripLinks } = await import('../respondent/notify')
+    const cases: [string, string][] = [
+      ['Go to www.evil.com/login now', 'Go to now'],
+      ['Log in at evil.com/x please', 'Log in at please'],
+      ['Visit EVIL.COM.', 'Visit .'],
+      ['see http://evil.example/claim now', 'see now'],
+      ['hxxp://evil.example and ftp://x', 'and'],
+      ['ip 192.168.1.10/admin and [::1]:8080/x', 'ip and'],
+      ['write mailto:bad@evil.com or tel:+15551234', 'write or'],
+      ['javascript:alert(1)', ''],
+      ['evil​.com/x', ''],
+      ['evil。com/x', ''],
+      ['xn--80ak6aa92e.com', ''],
+      ['пример.рф/путь', ''],
+      ['sub.evil.co.uk:8443/path?q=1#x', ''],
+      ['ada@evil.com/login', 'ada@'],
+    ]
+    for (const [input, out] of cases) expect(stripLinks(input), input).toBe(out)
+  })
+
+  it('keeps normal sentences and plain email addresses', async () => {
+    const { stripLinks, withoutLinks } = await import('../respondent/notify')
+    for (const text of [
+      'I love it. Really, e.g. this and i.e. that. Score 3.5 out of 5, version 1.2.',
+      'Hotel: Hilton. Tel: 555-1234. Note:nothing',
+      'Mr. Smith, Dr. Who and St. Ives… ok?',
+      'Reply to ada@example.com.',
+      'ada.lovelace+forms@mail.example.org',
+    ]) {
+      expect(stripLinks(text), text).toBe(text)
+    }
+    expect(withoutLinks({ a: ['x evil.com y'], b: { first: 'Ada www.x.io' }, n: 3 })).toEqual({ a: ['x y'], b: { first: 'Ada' }, n: 3 })
+  })
+})
