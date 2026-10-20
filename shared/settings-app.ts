@@ -47,6 +47,10 @@ export function setUploadCdnBase(base: string | null | undefined): void {
   uploadCdnBase = base ? base.replace(/\/+$/, '') + '/' : null
 }
 
+export function getUploadCdnBase(): UploadCdnBase {
+  return uploadCdnBase
+}
+
 /**
  * True for a file this app stored: a local upload path, or a URL under the configured CDN base.
  * Remote images elsewhere are refused: a teammate's avatar or the logo pointing at a server

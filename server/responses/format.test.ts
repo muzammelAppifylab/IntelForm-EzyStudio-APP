@@ -2,7 +2,7 @@ import '../test/env'
 import { describe, expect, it } from 'vitest'
 import type { FormField } from '../../shared/form/definition'
 import { imageUrl, isUploadedFileUrl } from '../../shared/settings-app'
-import { storedSignatureUrl } from '../lib/uploads'
+import { storedSignatureUrl } from '../lib/signature-url'
 import { displayAnswer } from './format'
 
 const SIG = '/api/uploads/files/intelform/signatures/0b6b2d3e-9a4f-4d0e-8a51-2f7f4d1c9e10/5c2e8d4a-1f3b-4b6e-9c7d-8e2f1a0b3c4d.png'

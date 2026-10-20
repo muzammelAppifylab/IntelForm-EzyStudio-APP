@@ -2,7 +2,7 @@ import type { FormField } from '../../shared/form/definition'
 import type { FieldType } from '../../shared/form/field-types'
 import { answerToCsv } from '../../shared/form/csv'
 import { countryName, formatDate, formatTime, isIsoDate, isTime } from '../../shared/form/types/registry'
-import { storedSignatureUrl } from '../lib/uploads'
+import { storedSignatureUrl } from '../lib/signature-url'
 
 /**
  * Answer → display text for the table, the drawer and the summary's latest answers.
