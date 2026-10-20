@@ -7,7 +7,7 @@ import { emailEnabled, queueEmail } from '../lib/email'
 import { ApiError } from '../lib/errors'
 import { ipKey } from '../lib/ip'
 import { burnPasswordCheck, hashPassword, verifyPassword } from '../lib/password'
-import { assertLoginAllowed, clearLoginFailures, rateLimit, recordLoginFailure } from '../lib/rate-limit'
+import { assertLoginAllowed, clearAllLoginFailures, clearLoginFailures, rateLimit, recordLoginFailure } from '../lib/rate-limit'
 import { endSession, readSession, startSession, toMe, type UserRow } from '../lib/session'
 import { getSetting } from '../lib/settings'
 import { readBody } from '../lib/validate'
@@ -19,9 +19,11 @@ const BAD_CREDENTIALS = 'That email and password don’t match. Try again.'
 
 authRoutes.post('/login', async (c) => {
   const input = await readBody(c, loginInput)
-  // Per IP: stops one client spraying many accounts. Per account: exponential backoff (below).
-  await rateLimit(`login:ip:${ipKey(c)}`, 30, 15 * 60)
-  await assertLoginAllowed(input.email)
+  const ip = ipKey(c)
+  // Per IP: stops one client spraying many accounts. Per account and IP: exponential backoff,
+  // plus a ceiling per account across all IPs (see rate-limit.ts).
+  await rateLimit(`login:ip:${ip}`, 30, 15 * 60)
+  await assertLoginAllowed(input.email, ip)
 
   const [user] = await sql<(UserRow & { password_hash: string })[]>`
     SELECT id, name, email, role, avatar_url, password_hash FROM users
@@ -29,14 +31,14 @@ authRoutes.post('/login', async (c) => {
   `
   if (!user) {
     await burnPasswordCheck(input.password)
-    await recordLoginFailure(input.email)
+    await recordLoginFailure(input.email, ip)
     throw new ApiError(401, 'invalid_credentials', BAD_CREDENTIALS)
   }
   if (!(await verifyPassword(user.password_hash, input.password))) {
-    await recordLoginFailure(input.email)
+    await recordLoginFailure(input.email, ip)
     throw new ApiError(401, 'invalid_credentials', BAD_CREDENTIALS)
   }
-  await clearLoginFailures(input.email)
+  await clearLoginFailures(input.email, ip)
   await startSession(c, user.id)
   return c.json(toMe(user))
 })
@@ -56,8 +58,14 @@ authRoutes.post('/forgot', async (c) => {
     throw new ApiError(503, 'email_not_configured', 'Password reset by email isn’t set up yet. Ask the Owner to set a new password for you.')
   }
   const { email } = await readBody(c, forgotInput)
-  await rateLimit(`forgot:ip:${ipKey(c)}`, 5, 15 * 60)
-  await rateLimit(`forgot:email:${hashToken(email)}`, 3, 60 * 60)
+  const ip = ipKey(c)
+  const emailHash = hashToken(email)
+  // Per IP overall, then per email from this IP: one client can't flood an inbox, and its
+  // requests never count against the real user's. The ceiling per email across all IPs bounds
+  // a distributed flood to 10 emails an hour; reaching it takes 4+ IPs, and it ends with the hour.
+  await rateLimit(`forgot:ip:${ip}`, 5, 15 * 60)
+  await rateLimit(`forgot:email-ip:${emailHash}:${ip}`, 3, 60 * 60)
+  await rateLimit(`forgot:email:${emailHash}`, 10, 60 * 60)
 
   const [user] = await sql<{ id: string; name: string }[]>`SELECT id, name FROM users WHERE email = ${email} AND status = 'active'`
   if (user) {
@@ -111,6 +119,6 @@ authRoutes.post('/reset', async (c) => {
     await startSession(c, user.id, tx)
     return toMe(user)
   })
-  await clearLoginFailures(me.email)
+  await clearAllLoginFailures(me.email)
   return c.json(me)
 })
