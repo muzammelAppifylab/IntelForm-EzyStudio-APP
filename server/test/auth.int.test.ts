@@ -104,16 +104,46 @@ describe('sessions', () => {
 })
 
 describe('login rate limits', () => {
-  it('backs off an account after 5 failures, from any IP, and for unknown emails too (A2)', async () => {
+  const login = (c: TestClient, email: string, password: string) => c.post('/api/auth/login', { email, password })
+
+  it('backs off a caller after 5 failures on an account, for unknown emails too (A2)', async () => {
     const member = await addMember(ctx, owner, 'viewer', 'Backoff')
     for (const target of [member.me!.email, 'nobody-here@example.com']) {
+      const attacker = ctx.client()
       const statuses: number[] = []
-      for (let i = 0; i < 6; i++) statuses.push((await ctx.client().post('/api/auth/login', { email: target, password: 'wrong-password' })).status)
+      for (let i = 0; i < 6; i++) statuses.push((await login(attacker, target, 'wrong-password')).status)
       expect(statuses).toEqual([401, 401, 401, 401, 401, 429])
-      const locked = await ctx.client().post('/api/auth/login', { email: target, password: 'member-password-1' })
+      // The same caller stays locked even with the right password.
+      const locked = await login(attacker, target, 'member-password-1')
       expect(locked.status).toBe(429)
       expect(locked.headers.get('retry-after')).toMatch(/^\d+$/)
     }
+  })
+
+  it('a caller failing many times does not lock the account for anyone else', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Victim')
+    const attacker = ctx.client()
+    for (let i = 0; i < 8; i++) await login(attacker, member.me!.email, 'wrong-password')
+    expect((await login(attacker, member.me!.email, 'member-password-1')).status).toBe(429)
+    expect((await login(ctx.client(), member.me!.email, 'member-password-1')).status).toBe(200)
+    // The real user's sign-in doesn't hand the attacker fresh tries.
+    expect((await login(attacker, member.me!.email, 'wrong-password')).status).toBe(429)
+  })
+
+  it('locks an account for everyone after 50 failures in 15 minutes across IPs', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Ceiling')
+    const { hashToken } = await import('../lib/crypto')
+    // Stand in for 48 failures from other IPs earlier in this window.
+    await ctx.sql`
+      INSERT INTO rate_limits (key, window_start, window_seconds, count)
+      VALUES (${`login:email-fail:${hashToken(member.me!.email)}`}, date_bin(make_interval(secs => 900), now(), 'epoch'), 900, 48)
+    `
+    expect((await login(ctx.client(), member.me!.email, 'wrong-password')).status).toBe(401)
+    expect((await login(ctx.client(), member.me!.email, 'member-password-1')).status).toBe(200)
+    expect((await login(ctx.client(), member.me!.email, 'wrong-password')).status).toBe(401)
+    const locked = await login(ctx.client(), member.me!.email, 'member-password-1')
+    expect(locked.status).toBe(429)
+    expect(Number(locked.headers.get('retry-after'))).toBeLessThanOrEqual(900)
   })
 
   it('limits one IP to 30 login attempts per 15 minutes', async () => {
@@ -214,6 +244,30 @@ describe('forgot and reset', () => {
     for (let i = 0; i < 11; i++) statuses.push((await c.post('/api/auth/reset', { token: `bad-${i}`, password: 'whatever-123' })).status)
     expect(statuses.slice(0, 10).every((s) => s === 410)).toBe(true)
     expect(statuses[10]).toBe(429)
+  })
+
+  it('one IP asking for resets does not block the real user, but the account has a ceiling', async () => {
+    const member = await addMember(ctx, owner, 'viewer', 'Flooded')
+    const email = member.me!.email
+    const attacker = ctx.client()
+    const statuses: number[] = []
+    for (let i = 0; i < 4; i++) statuses.push((await attacker.post('/api/auth/forgot', { email })).status)
+    expect(statuses).toEqual([200, 200, 200, 429])
+    expect(await requestReset(email)).toBeTruthy()
+
+    // 3 + 1 so far; two more IPs at 3 each reach the ceiling of 10 per hour.
+    for (let i = 0; i < 2; i++) {
+      const c = ctx.client()
+      for (let j = 0; j < 3; j++) expect((await c.post('/api/auth/forgot', { email })).status).toBe(200)
+    }
+    expect((await ctx.client().post('/api/auth/forgot', { email })).status).toBe(429)
+    // Same answer for an unknown email, so the limit reveals nothing.
+    const ghost = 'flood-ghost@example.com'
+    for (let i = 0; i < 4; i++) {
+      const c = ctx.client()
+      for (let j = 0; j < 3; j++) await c.post('/api/auth/forgot', { email: ghost })
+    }
+    expect((await ctx.client().post('/api/auth/forgot', { email: ghost })).status).toBe(429)
   })
 
   it('returns 503 when email is off', async () => {
