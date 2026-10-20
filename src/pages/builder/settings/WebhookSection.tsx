@@ -39,7 +39,7 @@ function readOnlySummary(webhook: { enabled: boolean; url: string | null }, reda
   return webhook.enabled && webhook.url ? `Responses are sent to ${webhook.url}.` : 'No webhook is set up.'
 }
 
-const isHttpUrl =(v: string) => /^https?:\/\/[^\s/]+\.[^\s]+/i.test(v.trim()) && URL.canParse(v.trim())
+const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+\.[^\s]+/i.test(v.trim()) && URL.canParse(v.trim())
 
 /** Webhook (PRD "Webhook"): URL, headers, signing secret, test, delivery log with Resend. */
 export function WebhookSection() {
@@ -111,7 +111,8 @@ export function WebhookSection() {
       title="Webhook"
       description="Sends each completed response as JSON to your URL, signed with HMAC-SHA256 (Standard Webhooks), so your server can check it came from here."
     >
-      {readOnly ? (
+      {/* Redacted data (a viewer promoted mid-session) stays read-only: saving it would blank the stored headers. */}
+      {readOnly || redacted ? (
         <p className="text-body-sm text-muted-foreground">{readOnlySummary(webhook, redacted)}</p>
       ) : (
         <>
