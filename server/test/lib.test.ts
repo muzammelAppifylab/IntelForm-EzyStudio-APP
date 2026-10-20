@@ -196,6 +196,15 @@ describe('security headers', () => {
     expect(surfaceFor('/dashboard')).toBe('dashboard')
     expect(surfaceFor('/fancy')).toBe('dashboard')
   })
+
+  it('allows only self-hosted styles and fonts (no third-party font CDN)', () => {
+    for (const surface of ['form', 'dashboard'] as const) {
+      const csp = contentSecurityPolicy(surface)
+      expect(csp).toContain("style-src 'self' 'unsafe-inline';")
+      expect(csp).toContain("font-src 'self' data:;")
+      expect(csp).not.toMatch(/googleapis|gstatic/)
+    }
+  })
 })
 
 describe('webhook test payload', () => {

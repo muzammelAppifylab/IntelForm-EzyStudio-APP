@@ -34,9 +34,6 @@ export function inlineScriptHashes(html: string): string[] {
   return hashes
 }
 
-const GOOGLE_FONTS_CSS = 'https://fonts.googleapis.com'
-const GOOGLE_FONTS_FILES = 'https://fonts.gstatic.com'
-
 export function contentSecurityPolicy(surface: Surface, scriptHashes: string[] = []): string {
   if (surface === 'api') return "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
   const cdn = cdnOrigin()
@@ -44,11 +41,11 @@ export function contentSecurityPolicy(surface: Surface, scriptHashes: string[] =
   const directives: [string, string[]][] = [
     ['default-src', ["'self'"]],
     ['script-src', ["'self'", ...scriptHashes, ...(form ? [TURNSTILE] : [])]],
-    // Radix, Sonner and theme variables set inline styles. The design system's fonts (Instrument
-    // Serif, Figtree, JetBrains Mono) load from Google Fonts: the stylesheet here, the files below.
-    ['style-src', ["'self'", "'unsafe-inline'", GOOGLE_FONTS_CSS]],
+    // Radix, Sonner and theme variables set inline styles. Every font is self-hosted (Fontsource
+    // files bundled into /assets), so no font origin is allowed: respondents' IPs never reach a font CDN.
+    ['style-src', ["'self'", "'unsafe-inline'"]],
     ['img-src', ["'self'", 'data:', 'blob:', ...(cdn ? [cdn] : [])]],
-    ['font-src', ["'self'", 'data:', GOOGLE_FONTS_FILES]],
+    ['font-src', ["'self'", 'data:']],
     ['connect-src', ["'self'", ...(form ? [TURNSTILE] : [])]],
     ['frame-src', ["'self'", ...(form ? [TURNSTILE] : [])]],
     ['worker-src', ["'self'", 'blob:']],
