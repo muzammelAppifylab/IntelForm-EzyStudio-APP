@@ -190,12 +190,23 @@ export const formSettingsPatch = z
   .strict()
 export type FormSettingsPatch = z.infer<typeof formSettingsPatch>
 
-/** Settings as the dashboard sees them: the password hash replaced by a flag. */
-export type ClientFormSettings = Omit<FormSettings, 'passwordHash'> & { hasPassword: boolean }
+/**
+ * Settings as the dashboard sees them: the password hash replaced by a flag. For people who
+ * can't edit the form (viewers), the webhook URL and header values are blanked and
+ * `webhookRedacted` is true: Slack or Zapier URLs and `Authorization` headers are secrets.
+ */
+export type ClientFormSettings = Omit<FormSettings, 'passwordHash'> & { hasPassword: boolean; webhookRedacted: boolean }
 
-export function clientSettings(settings: FormSettings): ClientFormSettings {
+export function clientSettings(settings: FormSettings, opts: { canEdit: boolean }): ClientFormSettings {
   const { passwordHash, ...rest } = settings
-  return { ...rest, hasPassword: !!passwordHash }
+  if (opts.canEdit) return { ...rest, hasPassword: !!passwordHash, webhookRedacted: false }
+  const { webhook } = settings
+  return {
+    ...rest,
+    hasPassword: !!passwordHash,
+    webhook: { enabled: webhook.enabled && !!webhook.url, url: null, headers: webhook.headers.map((h) => ({ key: h.key, value: '' })) },
+    webhookRedacted: true,
+  }
 }
 
 /** What a respondent's browser needs to render and submit a form. No secrets, no team data. */

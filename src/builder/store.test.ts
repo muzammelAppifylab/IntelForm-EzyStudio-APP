@@ -15,7 +15,7 @@ function detail(fields: FormField[] = [], responses = 0): FormDetail {
     status: 'draft',
     draft: { ...blankDefinition(), fields },
     theme: defaultTheme(),
-    settings: clientSettings(defaultFormSettings()),
+    settings: clientSettings(defaultFormSettings(), { canEdit: true }),
     revision: 1,
     publishedVersion: null,
     publishedAt: null,

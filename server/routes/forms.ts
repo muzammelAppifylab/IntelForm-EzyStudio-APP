@@ -29,6 +29,7 @@ import { clientSettings, copyableSettings, defaultFormSettings, formSettings, ty
 import { defaultTheme, formTheme, themePreset, type FormTheme } from '../../shared/form/theme'
 import { remapTemplateIds } from '../../shared/form/templates/remap'
 import { coreRegistry } from '../../shared/form/types/registry'
+import { can } from '../../shared/roles'
 import { sql, type Queryable } from '../db/client'
 import { ensureBuiltinTemplates } from '../db/seed'
 import { ApiError, notFound } from '../lib/errors'
@@ -348,7 +349,8 @@ formsRoutes.get('/:id', requirePermission('forms.view'), async (c) => {
     status: row.status,
     draft,
     theme: readTheme(row.theme),
-    settings: clientSettings(readSettings(row.settings)),
+    // Viewers get the webhook URL and header values blanked: they are secrets.
+    settings: clientSettings(readSettings(row.settings), { canEdit: can(c.var.user.role, 'forms.edit') }),
     revision: row.revision,
     publishedVersion: row.published_version,
     publishedAt: row.published_at?.toISOString() ?? null,
@@ -454,7 +456,7 @@ formsRoutes.patch('/:id', requirePermission('forms.edit'), async (c) => {
         hasUnpublished: updated.has_unpublished && updated.published_version_id !== null,
         slug,
         status,
-        settings: settings ? clientSettings(settings) : undefined,
+        settings: settings ? clientSettings(settings, { canEdit: true }) : undefined,
       } satisfies FormPatchResponse
     } catch (err) {
       if (isUniqueViolation(err)) throw slugTakenError()
