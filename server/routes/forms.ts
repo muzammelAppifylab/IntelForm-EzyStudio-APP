@@ -24,7 +24,7 @@ import {
 } from '../../shared/api-forms'
 import type { ApiErrorBody } from '../../shared/api'
 import { blankDefinition, formDefinition, type FormDefinition } from '../../shared/form/definition'
-import { lintLogic } from '../../shared/form/logic'
+import { lintLogic, lintOnePerEmail } from '../../shared/form/logic'
 import { clientSettings, copyableSettings, defaultFormSettings, formSettings, type FormSettings } from '../../shared/form/settings'
 import { defaultTheme, formTheme, themePreset, type FormTheme } from '../../shared/form/theme'
 import { remapTemplateIds } from '../../shared/form/templates/remap'
@@ -486,7 +486,7 @@ formsRoutes.post('/:id/publish', requirePermission('forms.edit'), async (c) => {
     if (definition.fields.filter((f) => f.type !== 'section_break').length === 0) {
       throw new ApiError(422, 'empty_form', 'Add at least one question before you publish')
     }
-    const issues = lintLogic(definition)
+    const issues = [...lintLogic(definition), ...lintOnePerEmail(definition, readSettings(row.settings))]
     if (issues.length > 0) return { issues }
 
     const [{ next }] = await tx<{ next: number }[]>`
