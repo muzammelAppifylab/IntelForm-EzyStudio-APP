@@ -246,6 +246,23 @@ describe('webhook delivery', () => {
     expect(row.n).toBe(1024)
   })
 
+  it('in production, refuses an http URL stored earlier and logs why', async () => {
+    const { env } = await import('../env')
+    const form = await insertForm(ctx.sql, { settings: { webhook: { url: `${base}/hook` } } })
+    const before = received.length
+    const saved = { NODE_ENV: env.NODE_ENV, ALLOW_PRIVATE_WEBHOOKS: env.ALLOW_PRIVATE_WEBHOOKS }
+    Object.assign(env, { NODE_ENV: 'production', ALLOW_PRIVATE_WEBHOOKS: false })
+    try {
+      const result = await webhooks.deliverWebhook(form.id, {}, { test: true })
+      expect(result).toMatchObject({ ok: false, statusCode: null, error: webhooks.HTTPS_REQUIRED })
+    } finally {
+      Object.assign(env, saved)
+    }
+    expect(received.length).toBe(before)
+    const [row] = await ctx.sql`SELECT error FROM webhook_deliveries WHERE form_id = ${form.id}`
+    expect(row.error).toMatch(/https:\/\//)
+  })
+
   it('the webhook job delivers after commit with one attempt', async () => {
     const form = await insertForm(ctx.sql, { settings: { webhook: { url: `${base}/hook` } } })
     const responseId = await insertResponse(form.id, form.versionId)

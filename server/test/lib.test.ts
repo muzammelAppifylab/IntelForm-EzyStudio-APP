@@ -7,7 +7,8 @@ import { clientIp, ipKeyFor, normalizeIp, rateLimitBucket } from '../lib/ip'
 import { redactPayload } from '../lib/jobs'
 import { accessLog, logger, redactPath } from '../lib/logger'
 import { countryOf, deviceOf } from '../lib/request-meta'
-import { assertSafeUrl, generateWebhookSecret, isPrivateAddress, readWebhookConfig, safeLookup, signWebhook } from '../lib/webhooks'
+import { env } from '../env'
+import { HTTPS_REQUIRED, assertSafeUrl, generateWebhookSecret, isPrivateAddress, readWebhookConfig, safeLookup, signWebhook } from '../lib/webhooks'
 import { contentSecurityPolicy, inlineScriptHashes, surfaceFor } from '../middleware/security-headers'
 import { verifyStandardWebhook } from './standard-webhooks'
 
@@ -108,6 +109,21 @@ describe('SSRF checks', () => {
     expect(assertSafeUrl('https://hooks.example.com/x').hostname).toBe('hooks.example.com')
     for (const bad of ['ftp://x.example', 'file:///etc/passwd', 'not a url', 'http://127.0.0.1/', 'http://[::1]/', 'http://169.254.169.254/latest', 'http://localhost:8080', 'http://db.internal/', 'https://user:pw@x.example/']) {
       expect(() => assertSafeUrl(bad), bad).toThrow()
+    }
+  })
+
+  it('requires https in production, unless ALLOW_PRIVATE_WEBHOOKS is set', () => {
+    const saved = { NODE_ENV: env.NODE_ENV, ALLOW_PRIVATE_WEBHOOKS: env.ALLOW_PRIVATE_WEBHOOKS }
+    try {
+      Object.assign(env, { NODE_ENV: 'production', ALLOW_PRIVATE_WEBHOOKS: false })
+      expect(() => assertSafeUrl('http://hooks.example.com/x')).toThrow(HTTPS_REQUIRED)
+      expect(assertSafeUrl('https://hooks.example.com/x').protocol).toBe('https:')
+      Object.assign(env, { NODE_ENV: 'development', ALLOW_PRIVATE_WEBHOOKS: false })
+      expect(assertSafeUrl('http://hooks.example.com/x').protocol).toBe('http:')
+      Object.assign(env, { NODE_ENV: 'production', ALLOW_PRIVATE_WEBHOOKS: true })
+      expect(assertSafeUrl('http://hooks.example.com/x').protocol).toBe('http:')
+    } finally {
+      Object.assign(env, saved)
     }
   })
 
@@ -291,6 +307,19 @@ describe('security headers', () => {
     expect(surfaceFor('/embed.js')).toBe('form')
     expect(surfaceFor('/dashboard')).toBe('dashboard')
     expect(surfaceFor('/fancy')).toBe('dashboard')
+  })
+
+  it('loads images only from this app and the configured CDN', () => {
+    for (const surface of ['form', 'dashboard'] as const) expect(contentSecurityPolicy(surface)).toContain("img-src 'self' data: blob:;")
+    const saved = env.BUNNY_CDN_URL
+    try {
+      env.BUNNY_CDN_URL = 'https://intelform.b-cdn.net/files/'
+      expect(contentSecurityPolicy('dashboard')).toContain("img-src 'self' data: blob: https://intelform.b-cdn.net;")
+      expect(contentSecurityPolicy('form')).toContain("img-src 'self' data: blob: https://intelform.b-cdn.net;")
+    } finally {
+      env.BUNNY_CDN_URL = saved
+    }
+    expect(contentSecurityPolicy('api')).not.toContain('img-src')
   })
 
   it('allows only self-hosted styles and fonts (no third-party font CDN)', () => {

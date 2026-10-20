@@ -148,6 +148,8 @@ export interface ResponseRow {
   country: string | null
   /** Display text per field id (current labels). Missing key = not answered. */
   cells: Record<string, string>
+  /** Signature image URL per field id; set only for files the server stored. */
+  urls?: Record<string, string>
 }
 
 export interface ResponsesListResponse {

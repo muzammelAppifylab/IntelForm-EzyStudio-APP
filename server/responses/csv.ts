@@ -1,10 +1,12 @@
 import type { ResponsesCsvQuery } from '../../shared/api-responses'
 import { responsesCsvQuery } from '../../shared/api-responses'
+import type { FormField } from '../../shared/form/definition'
 import { answerToCsv, csvHeaders } from '../../shared/form/csv'
 import { sql } from '../db/client'
 import { CSV_BOM, csvRow, type CsvCell } from '../lib/csv'
 import type { ExportForm } from '../lib/data-export'
 import { loadCatalog, type FormCatalog } from './catalog'
+import { displayAnswer } from './format'
 import { orderFragment, safeTz, sortSpec, whereFragment } from './query'
 
 /**
@@ -16,6 +18,13 @@ import { orderFragment, safeTz, sortSpec, whereFragment } from './query'
  */
 
 const CURSOR_ROWS = 500
+
+/** One field's cells. A signature column holds only URLs of PNGs this server stored. */
+function csvCells(field: FormField, value: unknown): CsvCell[] {
+  if (field.type !== 'signature' || value === undefined || value === null) return answerToCsv(field, value)
+  const d = displayAnswer(field, value)
+  return [d.url ?? d.text]
+}
 const META_HEADERS = ['Submitted at', 'Completion time (seconds)', 'Device', 'Browser', 'Country', 'Response ID']
 
 function headerRow(cat: FormCatalog): string {
@@ -49,7 +58,7 @@ export async function* formCsvChunks(formId: string, query: ResponsesCsvQuery, o
     if (opts.aborted?.()) return
     let chunk = ''
     for (const r of rows) {
-      const cells: CsvCell[] = cat.entries.flatMap((e) => answerToCsv(e.plain, r.answers[e.meta.id]))
+      const cells: CsvCell[] = cat.entries.flatMap((e) => csvCells(e.plain, r.answers[e.meta.id]))
       cells.push(r.submitted, r.duration_ms === null ? null : Math.round(r.duration_ms / 100) / 10, r.device, r.browser, r.country, r.id)
       chunk += csvRow(cells)
     }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, resolve, sep } from 'node:path'
 import { fileTypeFromBuffer } from 'file-type'
-import { MAX_UPLOAD_BYTES, SVG_PURPOSES, type UploadPurpose } from '../../shared/settings-app'
+import { LOCAL_UPLOAD_PREFIXES, MAX_UPLOAD_BYTES, SVG_PURPOSES, setUploadCdnBase, type UploadPurpose } from '../../shared/settings-app'
 import { env } from '../env'
 import { ApiError } from './errors'
 import { logger } from './logger'
@@ -15,6 +15,9 @@ import { logger } from './logger'
  */
 
 export const LOCAL_URL_PREFIX = '/api/uploads/files/'
+
+// Image URL fields (avatar, logo, favicon…) accept only files under these bases.
+setUploadCdnBase(env.BUNNY_CDN_URL)
 
 interface StorageDriver {
   name: 'bunny' | 'local'
@@ -114,7 +117,7 @@ const SIGNATURE_FILE = /^intelform\/signatures\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.pn
  */
 export function signaturePathFromUrl(url: unknown): string | null {
   if (typeof url !== 'string') return null
-  const bases = [LOCAL_URL_PREFIX]
+  const bases: string[] = [...LOCAL_UPLOAD_PREFIXES]
   if (env.BUNNY_CDN_URL) bases.push(env.BUNNY_CDN_URL.replace(/\/+$/, '') + '/')
   for (const base of bases) {
     if (!url.startsWith(base)) continue
@@ -122,6 +125,16 @@ export function signaturePathFromUrl(url: unknown): string | null {
     if (SIGNATURE_FILE.test(path)) return path
   }
   return null
+}
+
+/**
+ * The URL of a signature answer, only when it is `{ url }` pointing at a PNG this server stored.
+ * Anything else (free text kept from before the field became a signature, an outside URL) is
+ * not a signature and must never become a link or an image in the dashboard.
+ */
+export function storedSignatureUrl(value: unknown): string | null {
+  const url = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as { url?: unknown }).url : undefined
+  return typeof url === 'string' && signaturePathFromUrl(url) !== null ? url : null
 }
 
 /** Deletes stored files by storage path. Never throws: failures are logged and the caller carries on. */

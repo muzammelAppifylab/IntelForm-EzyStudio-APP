@@ -29,12 +29,44 @@ export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number]
 export const SVG_PURPOSES: readonly UploadPurpose[] = ['logo', 'favicon']
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
-/** An image URL: http(s), or a file this app serves itself. */
+/** URL prefixes of files the local storage driver serves (server/lib/uploads.ts). */
+export const LOCAL_UPLOAD_PREFIXES = ['/api/uploads/files/', '/uploads/'] as const
+const STORAGE_PATH = /^[A-Za-z0-9][A-Za-z0-9/_.-]*$/
+const isStoragePath = (p: string) => p.length <= 300 && STORAGE_PATH.test(p) && !p.includes('..') && !p.includes('//')
+
+/**
+ * Public base of the Bunny CDN (BUNNY_CDN_URL, ending in '/'), or null when files are only
+ * served locally. The server sets it at startup (server/lib/uploads.ts). In the browser it
+ * stays 'unknown': the browser can't know the CDN, so any https URL passes there and the
+ * server, the source of truth, checks the origin. On the server it starts as null (fail closed).
+ */
+export type UploadCdnBase = string | null | 'unknown'
+let uploadCdnBase: UploadCdnBase = typeof window === 'undefined' ? null : 'unknown'
+
+export function setUploadCdnBase(base: string | null | undefined): void {
+  uploadCdnBase = base ? base.replace(/\/+$/, '') + '/' : null
+}
+
+/**
+ * True for a file this app stored: a local upload path, or a URL under the configured CDN base.
+ * Remote images elsewhere are refused: a teammate's avatar or the logo pointing at a server
+ * they control would log every viewer's IP address.
+ */
+export function isUploadedFileUrl(v: string, cdnBase: UploadCdnBase = uploadCdnBase): boolean {
+  for (const prefix of LOCAL_UPLOAD_PREFIXES) if (v.startsWith(prefix)) return isStoragePath(v.slice(prefix.length))
+  if (cdnBase === 'unknown') return /^https:\/\//i.test(v) && URL.canParse(v)
+  return cdnBase !== null && v.startsWith(cdnBase) && isStoragePath(v.slice(cdnBase.length))
+}
+
+/**
+ * A team-supplied image shown in the dashboard (avatar, logo, favicon, front page images):
+ * only files uploaded to this app. The dashboard CSP (img-src) allows the same sources.
+ */
 export const imageUrl = z
   .string()
   .trim()
   .max(2048, 'Use a shorter link')
-  .refine((v) => /^https?:\/\//i.test(v) || v.startsWith('/api/uploads/files/') || v.startsWith('/uploads/'), 'Upload an image or use an https link')
+  .refine((v) => isUploadedFileUrl(v), 'Upload the image here instead of linking to another site')
 
 /** True when the text has no line breaks or other control characters (names end up in email headers). */
 export function isSingleLine(v: string): boolean {

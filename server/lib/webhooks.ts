@@ -18,8 +18,9 @@ import { logger } from './logger'
  *   webhook-signature: v1,<base64 HMAC-SHA256(key, id.timestamp.body)>
  *
  * The secret is `whsec_` + base64(32 random bytes), per form, stored encrypted in
- * forms.webhook_secret. SSRF: only http(s), and every resolved address is checked inside the
- * socket's DNS lookup (so DNS rebinding can't swap in a private IP after the check).
+ * forms.webhook_secret. Only https in production (http too in development, for local
+ * receivers). SSRF: every resolved address is checked inside the socket's DNS lookup (so DNS
+ * rebinding can't swap in a private IP after the check).
  *
  * Form config is read from forms.settings.webhook (owned by Agent D):
  *   { enabled?: boolean, url: string, headers?: {key,value}[] | Record<string,string> }
@@ -119,6 +120,10 @@ export function isPrivateAddress(address: string): boolean {
 }
 
 const allowPrivate = () => env.ALLOW_PRIVATE_WEBHOOKS
+/** Plain http only off production (local receivers) or with ALLOW_PRIVATE_WEBHOOKS: answers must travel encrypted. */
+const allowHttp = () => env.NODE_ENV !== 'production' || env.ALLOW_PRIVATE_WEBHOOKS
+
+export const HTTPS_REQUIRED = 'Use an https:// address. Webhooks carry answers, so plain http:// isn’t allowed.'
 
 /** Validates a webhook URL before saving or sending. Throws a 422 ApiError with a readable message. */
 export function assertSafeUrl(raw: string): URL {
@@ -128,7 +133,9 @@ export function assertSafeUrl(raw: string): URL {
   } catch {
     throw invalidUrl('Enter a full URL starting with https://')
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw invalidUrl('Use an http or https URL')
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw invalidUrl('Use an https:// address')
+  // Checked again at send time, so an http URL saved before this rule is refused and logged.
+  if (url.protocol === 'http:' && !allowHttp()) throw invalidUrl(HTTPS_REQUIRED)
   if (url.username || url.password) throw invalidUrl('Remove the user name and password from the URL; use a custom header instead')
   if (raw.length > 2048) throw invalidUrl('Use a shorter URL')
   // "localhost." and "db.internal." are the same names as without the final dot.

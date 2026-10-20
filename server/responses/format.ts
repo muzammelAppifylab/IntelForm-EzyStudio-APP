@@ -2,6 +2,7 @@ import type { FormField } from '../../shared/form/definition'
 import type { FieldType } from '../../shared/form/field-types'
 import { answerToCsv } from '../../shared/form/csv'
 import { countryName, formatDate, formatTime, isIsoDate, isTime } from '../../shared/form/types/registry'
+import { storedSignatureUrl } from '../lib/uploads'
 
 /**
  * Answer → display text for the table, the drawer and the summary's latest answers.
@@ -33,9 +34,11 @@ export function displayAnswer(field: FormField, value: unknown): DisplayValue {
     case 'consent':
       return { text: isRecord(value) && value.accepted === true ? 'Accepted' : '' }
     case 'signature': {
-      // Stored as { url } (form core); a bare URL string is accepted for older rows.
-      const url = isRecord(value) && typeof value.url === 'string' ? value.url : typeof value === 'string' ? value : ''
-      return url && !url.startsWith('data:') ? { text: 'Signed', url } : { text: '' }
+      // Only { url } pointing at a PNG this server stored is a signature. Anything else (say a
+      // text answer kept when an Editor changed the field's type but not its id) is plain text.
+      const url = storedSignatureUrl(value)
+      if (url) return { text: 'Signed', url }
+      return { text: typeof value === 'string' ? value : '' }
     }
     default:
       return { text: answerToCsv(field, value).join('; ') }

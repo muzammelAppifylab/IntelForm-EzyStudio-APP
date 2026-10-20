@@ -293,9 +293,11 @@ function Cell({ row, id, field }: { row: ResponseRow; id: string; field?: Catalo
   }
   const v = row.cells[id]
   if (v === undefined) return <span className="text-muted-foreground">–</span>
-  if (field?.type === 'signature') {
+  // The server sends a URL only for signature PNGs it stored; any other answer is plain text.
+  const url = field?.type === 'signature' ? row.urls?.[id] : undefined
+  if (url) {
     return (
-      <a href={v} target="_blank" rel="noreferrer" className="text-link underline underline-offset-4 hover:decoration-2" onClick={(e) => e.stopPropagation()}>
+      <a href={url} target="_blank" rel="noreferrer" className="text-link underline underline-offset-4 hover:decoration-2" onClick={(e) => e.stopPropagation()}>
         View signature
       </a>
     )
