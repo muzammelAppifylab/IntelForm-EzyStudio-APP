@@ -107,6 +107,12 @@ export const SYSTEM_LABELS = {
   unlock: 'Continue',
   wrongPassword: 'That password is not right. Try again.',
   alreadyResponded: 'You have already responded to this form.',
+  /** Submit from a page left open for over a day. The reload keeps the answers. */
+  pageExpired: 'This page has been open too long to submit. Reload to continue; your answers are kept.',
+  /** One response per email: the email question was left blank. */
+  emailNeeded: 'Enter your email address. This form accepts one response per address.',
+  /** One response per email, but the form has no email question to check. */
+  cannotAccept: 'This form can’t accept responses right now. Let the person who sent it know.',
 }
 
 export type LabelKey = keyof typeof SYSTEM_LABELS

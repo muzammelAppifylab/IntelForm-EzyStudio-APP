@@ -29,6 +29,39 @@ describe('injectForm', () => {
     expect(JSON.parse(json).title).toBe('Hi </script><script>alert(1)</script>')
   })
 
+  it('keeps $ replacement patterns in creator text literally', () => {
+    const tricky = "Salary $'000s $& $` $$ $1 $<x>"
+    const payload = {
+      status: 'live',
+      id: 'x',
+      slug: 's',
+      title: tricky,
+      theme: {},
+      labels: { submit: tricky },
+      lang: 'en',
+      definition: { fields: [{ id: 'f_1', type: 'short_text', label: tricky }] },
+      settings: { seoTitle: '', seoDescription: tricky, ogImage: tricky, noindex: false },
+    } as never
+    const html = injectForm(SHELL, payload)
+    const escaped = tricky.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    expect(html).toContain(`<title>${escaped}</title>`)
+    expect(html).toContain(`<meta name="description" content="${escaped}">`)
+    expect(html).toContain(`<meta property="og:title" content="${escaped}">`)
+    expect(html).toContain(`<meta property="og:image" content="${escaped}">`)
+    // The shell around the injected parts is intact: one head, one body, nothing spliced.
+    expect(html.match(/<\/head>/g)).toHaveLength(1)
+    expect(html.match(/<title>/g)).toHaveLength(1)
+    expect(html.endsWith('<body><div id="root"></div></body></html>')).toBe(true)
+    const json = /<script type="application\/json" id="__FORM__">([\s\S]*?)<\/script>\n<\/head>/.exec(html)![1]
+    expect(JSON.parse(json)).toEqual(payload)
+  })
+
+  it('keeps $ patterns in the payload of a moved or missing form', () => {
+    const payload = { status: 'moved', slug: "$'$`$&$$" } as never
+    const json = /<script type="application\/json" id="__FORM__">([\s\S]*?)<\/script>\n<\/head>/.exec(injectForm(SHELL, payload))![1]
+    expect(JSON.parse(json)).toEqual(payload)
+  })
+
   it('marks unknown forms as missing', () => {
     expect(injectForm(SHELL, null)).toContain('{"status":"missing"}')
   })

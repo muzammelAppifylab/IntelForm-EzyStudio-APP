@@ -5,8 +5,10 @@ import {
   PIPE_RE,
   computeVisibility,
   dependentsOf,
+  emailDedupeKey,
   interpolate,
   lintLogic,
+  lintOnePerEmail,
   orderViolations,
   parsePipes,
   pipeToken,
@@ -370,5 +372,46 @@ describe('logic properties', () => {
         }
       }),
     )
+  })
+})
+
+describe('one response per email', () => {
+  const email = { id: 'f_mail', type: 'email', label: 'Work email', required: true }
+  const on = { onePerEmail: true, onePerEmailFieldId: 'f_mail' }
+  const show = { action: 'show', match: 'all', conditions: [{ field: 'f_ques', op: 'is_yes' }] }
+  const yesNo = { id: 'f_ques', type: 'yes_no', label: 'Got one?' }
+  const message = (d: FormDefinition, s = on) => lintOnePerEmail(d, s).map((i) => i.message)
+
+  it('passes a required, always-shown email question, or when the setting is off', () => {
+    expect(lintOnePerEmail(def([yesNo, email]), on)).toEqual([])
+    expect(lintOnePerEmail(def([{ id: 'f_ques', type: 'short_text', label: 'Q' }]), { onePerEmail: false, onePerEmailFieldId: null })).toEqual([])
+    // A section break without a rule doesn't hide anything.
+    expect(lintOnePerEmail(def([yesNo, { id: 'f_sect', type: 'section_break', label: 'Two' }, email]), on)).toEqual([])
+  })
+
+  it('flags an optional, conditional, missing or non-email question', () => {
+    const base = 'One response per email needs a required email question that is always shown.'
+    const optional = message(def([{ ...email, required: false }]))
+    expect(optional).toEqual([`${base} Make "Work email" required, or turn the setting off.`])
+    const ruled = lintOnePerEmail(def([yesNo, { ...email, logic: show }]), on)
+    expect(ruled).toMatchObject([{ code: 'one_per_email', fieldId: 'f_mail' }])
+    expect(ruled[0].message).toContain('Remove the show or hide rule on "Work email"')
+    const onPage = message(def([yesNo, { id: 'f_sect', type: 'section_break', label: 'Two', logic: show }, email]))
+    expect(onPage[0]).toContain('rule on its page')
+    // A rule on an earlier page's break doesn't matter once a later break starts a new page.
+    expect(message(def([yesNo, { id: 'f_sect', type: 'section_break', label: 'Two', logic: show }, { id: 'f_sec2', type: 'section_break', label: 'Three' }, email]))).toEqual([])
+    expect(lintOnePerEmail(def([yesNo]), on)).toMatchObject([{ fieldId: 'settings' }])
+    expect(lintOnePerEmail(def([yesNo]), { onePerEmail: true, onePerEmailFieldId: null })).toHaveLength(1)
+    expect(lintOnePerEmail(def([{ id: 'f_mail', type: 'short_text', label: 'Mail', required: true }]), on)).toHaveLength(1)
+  })
+
+  it('dedupes on a trimmed, lowercase address without a +tag', () => {
+    expect(emailDedupeKey(' Ada+News@Example.COM ')).toBe('ada@example.com')
+    expect(emailDedupeKey('ada@example.com')).toBe('ada@example.com')
+    expect(emailDedupeKey('ada+@example.com')).toBe('ada@example.com')
+    expect(emailDedupeKey('a.b+c+d@x.io')).toBe('a.b@x.io')
+    // A local part that is only a tag stays as it is; the domain is never touched.
+    expect(emailDedupeKey('+x@example.com')).toBe('+x@example.com')
+    expect(emailDedupeKey('ada@ex+ample.com')).toBe('ada@ex+ample.com')
   })
 })

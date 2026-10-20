@@ -20,8 +20,9 @@ export function injectForm(shell: string, payload: PublicFormResponse | null): s
   if (payload && payload.status !== 'moved') {
     const s = payload.settings
     const title = s.seoTitle || payload.title
-    html = html.replace(/<html lang="[^"]*"/, `<html lang="${esc(payload.lang)}"`)
-    html = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(title)}</title>`)
+    // Replacer functions, never replacement strings: creator text may contain `$&`, `$'`…
+    html = html.replace(/<html lang="[^"]*"/, () => `<html lang="${esc(payload.lang)}"`)
+    html = html.replace(/<title>[^<]*<\/title>/, () => `<title>${esc(title)}</title>`)
     if (s.seoDescription) head.push(`<meta name="description" content="${esc(s.seoDescription)}">`)
     if (s.noindex) head.push('<meta name="robots" content="noindex, nofollow">')
     head.push(`<meta property="og:title" content="${esc(title)}">`)
@@ -29,7 +30,7 @@ export function injectForm(shell: string, payload: PublicFormResponse | null): s
     if (s.ogImage) head.push(`<meta property="og:image" content="${esc(s.ogImage)}">`)
   }
   head.push(`<script type="application/json" id="__FORM__">${safeJson(payload ?? { status: 'missing' })}</script>`)
-  return html.replace('</head>', `${head.join('\n')}\n</head>`)
+  return html.replace('</head>', () => `${head.join('\n')}\n</head>`)
 }
 
 /** The page for a slug and its HTTP status (404 for a draft or unknown form). */

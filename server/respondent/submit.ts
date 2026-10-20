@@ -4,10 +4,10 @@ import * as z from 'zod'
 import { submitInput, type SubmitInput, type SubmitResponse } from '../../shared/api-public'
 import { formDefinition, type FormDefinition } from '../../shared/form/definition'
 import { resolveLabels, type Labels } from '../../shared/form/labels'
-import { validateSubmission } from '../../shared/form/logic'
+import { computeVisibility, emailDedupeKey, validateSubmission } from '../../shared/form/logic'
 import { formSettings } from '../../shared/form/settings'
 import { isSignatureDataUrl, signatureBytes } from '../../shared/form/types/registry'
-import { sql } from '../db/client'
+import { sql, type Queryable } from '../db/client'
 import { ApiError } from '../lib/errors'
 import { clientIp, ipKey } from '../lib/ip'
 import { logger } from '../lib/logger'
@@ -30,8 +30,8 @@ import './validators'
  *  1. body limit (3 MB at the app, 256 KB for everything but signatures here)
  *  2. live, close date, cap, password token
  *  3. rate limit: 10 per minute per IP per form
- *  4. honeypot + minimum fill time (a fake 200 on a hit)
- *  5. validateSubmission against the version the browser rendered
+ *  4. honeypot + minimum fill time (a fake 200 on a hit); a render token over 24 h old: reload
+ *  5. validateSubmission against the version the browser rendered (+ the one-per-email answer)
  *  6. Turnstile (when on and configured)
  *  7. one per browser
  *  8. cheap pre-checks (still live, cap, one per email), then signature uploads (PNG only)
@@ -147,18 +147,47 @@ async function uploadSignatures(def: FormDefinition, answers: Record<string, unk
   return stored
 }
 
+/**
+ * One response per email needs an answer to check. Missing (left blank, hidden by logic, or the
+ * question is gone) is a rejection, not a free pass. Returns the dedupe key, or null when off.
+ */
+function onePerEmailKey(form: LoadedForm, def: FormDefinition, answers: Record<string, unknown>, labels: Labels): string | null {
+  const s = form.settings
+  if (!s.onePerEmail) return null
+  const fieldId = s.onePerEmailFieldId
+  const email = fieldId ? answers[fieldId] : undefined
+  if (typeof email === 'string' && email.trim()) return emailDedupeKey(email)
+  const field = fieldId ? def.fields.find((f) => f.id === fieldId && f.type === 'email') : undefined
+  if (field && computeVisibility(def, answers).fields.has(field.id)) {
+    throw new ApiError(422, 'validation_failed', labels.errorSummary, { [field.id]: [labels.emailNeeded] })
+  }
+  // The respondent can't fix this one: no field error, so the form shows the message.
+  logger.warn({ formId: form.id, fieldId }, 'one response per email has no shown email question')
+  throw new ApiError(422, 'validation_failed', labels.cannotAccept)
+}
+
+/**
+ * Responses on this form whose one-per-email answer has the same dedupe key. The SQL mirrors
+ * emailDedupeKey (shared/form/logic.ts): lowercase, trimmed, `+tag` dropped from the local part.
+ */
+const emailTaken = (q: Queryable, formId: string, fieldId: string, key: string) => q`
+  SELECT 1 FROM responses
+  WHERE form_id = ${formId}
+    AND regexp_replace(lower(btrim(answers->>${fieldId})), ${'^([^@+]+)[+][^@]*@'}, ${'\\1@'}) = ${key}
+  LIMIT 1
+`
+
 /** Still live and under the cap, and (one per email) not a known address. Not locked: step 9 is exact. */
-async function preCheck(form: LoadedForm, answers: Record<string, unknown>, labels: Labels): Promise<void> {
+async function preCheck(form: LoadedForm, emailKey: string | null, labels: Labels): Promise<void> {
   const [row] = await sql<{ status: LoadedForm['status']; response_count: number; settings: unknown }[]>`
     SELECT status, response_count, settings FROM forms WHERE id = ${form.id}
   `
   if (!row) throw closedError(form, labels)
   const fresh = formSettings.parse(row.settings)
   if (isClosed({ status: row.status, responseCount: row.response_count, settings: fresh })) throw closedError(form, labels)
-  const fieldId = fresh.onePerEmail ? fresh.onePerEmailFieldId : null
-  const email = fieldId ? answers[fieldId] : undefined
-  if (fieldId && typeof email === 'string' && email) {
-    const [dupe] = await sql`SELECT 1 FROM responses WHERE form_id = ${form.id} AND answers @> ${sql.json({ [fieldId]: email })} LIMIT 1`
+  const fieldId = form.settings.onePerEmailFieldId
+  if (emailKey && fieldId) {
+    const [dupe] = await emailTaken(sql, form.id, fieldId, emailKey)
     if (dupe) throw new ApiError(422, 'validation_failed', labels.alreadyResponded, { [fieldId]: [labels.alreadyResponded] })
   }
 }
@@ -182,10 +211,13 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
 
   // 4. Honeypot and minimum time: pretend it worked, keep nothing.
   const renderedAt = readRenderToken(input.renderToken, form.id)
-  if ((input.hp ?? '') !== '' || renderedAt === null || Date.now() - renderedAt < MIN_FILL_MS) {
+  if ((input.hp ?? '') !== '' || renderedAt === null || (renderedAt !== 'expired' && Date.now() - renderedAt < MIN_FILL_MS)) {
     logger.info({ formId: form.id, honeypot: !!input.hp, renderedAt }, 'submission dropped by spam checks')
     return { ok: true }
   }
+  // A genuine token, but the page has been open for over a day: no fake success (a real person
+  // would lose their answers). The form offers a reload that keeps them and fetches a new token.
+  if (renderedAt === 'expired') throw new ApiError(409, 'page_expired', labels.pageExpired)
 
   // 5. Validate against the version that was rendered (consent stamped with server time and version)
   const version = await versionFor(form, input.formVersionId)
@@ -194,6 +226,7 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
   const result = validateSubmission(def, input.answers, { labels: form.settings.labels, context: { now, formVersion: version.version }, hidden: 'reject' })
   if (!result.ok) throw new ApiError(422, 'validation_failed', labels.errorSummary, fieldErrors(result.errors))
   const answers = result.answers
+  const emailKey = onePerEmailKey(form, def, answers, labels)
 
   // 6. Turnstile (after validation: a token works only once)
   const turnstile = await turnstileFor(form.settings)
@@ -207,7 +240,7 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
   }
 
   // 8. Cheap checks the transaction repeats exactly, so a doomed submit uploads nothing.
-  await preCheck(form, answers, labels)
+  await preCheck(form, emailKey, labels)
   const stored = await uploadSignatures(def, answers, form.id, labels)
 
   // 9. One transaction (if it fails, the signatures just stored are deleted again)
@@ -218,15 +251,12 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
   const search = buildSearchText(def.fields, answers)
 
   await sql.begin(async (tx) => {
-    const s = form.settings
-    const email = s.onePerEmail && s.onePerEmailFieldId ? answers[s.onePerEmailFieldId] : undefined
-    if (typeof email === 'string' && email) {
-      // Serialises submits for this email on this form, so two at once can't both pass.
-      await tx`SELECT pg_advisory_xact_lock(hashtext(${form.id + '|' + email}))`
-      const [dupe] = await tx`
-        SELECT 1 FROM responses WHERE form_id = ${form.id} AND answers @> ${tx.json({ [s.onePerEmailFieldId!]: email })} LIMIT 1
-      `
-      if (dupe) throw new ApiError(422, 'validation_failed', labels.alreadyResponded, { [s.onePerEmailFieldId!]: [labels.alreadyResponded] })
+    const fieldId = form.settings.onePerEmailFieldId
+    if (emailKey && fieldId) {
+      // Serialises submits for this address on this form, so two at once can't both pass.
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${form.id + '|' + emailKey}))`
+      const [dupe] = await emailTaken(tx, form.id, fieldId, emailKey)
+      if (dupe) throw new ApiError(422, 'validation_failed', labels.alreadyResponded, { [fieldId]: [labels.alreadyResponded] })
     }
 
     // The counter update locks the form row: the cap check below is exact.

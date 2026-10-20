@@ -228,6 +228,10 @@ function LiveForm({
         // that keeps the answers in memory.
         return { ok: false, errors: {}, message: labels.formUpdated, action: { label: labels.reload, run: () => onOutdated(answers) } }
       }
+      if (err.code === 'page_expired') {
+        // Open for over a day: a reload fetches a fresh render token and keeps the answers.
+        return { ok: false, errors: {}, message: labels.pageExpired, action: { label: labels.reload, run: () => onOutdated(answers) } }
+      }
       return { ok: false, errors: {}, message: err.status === 0 ? labels.submitError : err.message }
     }
   }

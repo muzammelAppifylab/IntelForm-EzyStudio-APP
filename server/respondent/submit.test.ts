@@ -202,6 +202,22 @@ describe('POST /api/public/forms/:slug/responses', () => {
     expect(await count(form.id)).toBe(0)
   })
 
+  it('asks for a reload when the render token is over 24 hours old', async () => {
+    const form = await makeForm()
+    const c = ctx.client()
+    const old = await c.post(`/api/public/forms/${form.slug}/responses`, body(form, good(), { renderToken: renderToken(form.id, Date.now() - 24 * 60 * 60 * 1000 - 60_000) }))
+    expect(old.status).toBe(409)
+    expect(old.body.error.code).toBe('page_expired')
+    expect(old.body.error.message).toMatch(/Reload/)
+    // A forged old token is still a silent drop, and a day-old-minus-a-minute token still works.
+    const forged = await c.post(`/api/public/forms/${form.slug}/responses`, body(form, good(), { renderToken: `${Date.now() - 2 * 24 * 60 * 60 * 1000}.forged` }))
+    expect(forged.status).toBe(200)
+    expect(await count(form.id)).toBe(0)
+    const fresh = await c.post(`/api/public/forms/${form.slug}/responses`, body(form, good(), { renderToken: renderToken(form.id, Date.now() - 24 * 60 * 60 * 1000 + 60_000) }))
+    expect(fresh.status).toBe(200)
+    expect(await count(form.id)).toBe(1)
+  })
+
   it('rate limits to 10 per minute per IP per form', async () => {
     const form = await makeForm()
     const c = ctx.client()
@@ -226,6 +242,51 @@ describe('POST /api/public/forms/:slug/responses', () => {
     expect(await count(form.id)).toBe(1)
     // A different email still works.
     expect((await ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, good({ f_email: 'other@example.com' })))).status).toBe(200)
+  })
+
+  it('treats case, spaces and +tags as the same address for one per email', async () => {
+    const form = await makeForm({ onePerEmail: true, onePerEmailFieldId: 'f_email' })
+    const send = (email: string) => ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, good({ f_email: email })))
+    expect((await send('Grace+first@Example.com')).status).toBe(200)
+    for (const again of ['grace@example.com', ' GRACE+second@example.com ', 'grace+@example.com']) {
+      const r = await send(again)
+      expect(r.status, again).toBe(422)
+      expect(r.body.error.fields.f_email[0]).toMatch(/already responded/)
+    }
+    expect((await send('grace.h@example.com')).status).toBe(200)
+    // Stored as typed (trimmed, lowercased), not as the dedupe key.
+    const rows = await sql<{ e: string }[]>`SELECT answers->>'f_email' AS e FROM responses WHERE form_id = ${form.id} ORDER BY submitted_at`
+    expect(rows.map((r) => r.e)).toEqual(['grace+first@example.com', 'grace.h@example.com'])
+  })
+
+  it('rejects a one-per-email submit without an email answer', async () => {
+    const optional = formDefinition.parse({
+      ...DEF,
+      fields: DEF.fields.map((f) => (f.id === 'f_email' ? { ...f, required: false } : f)),
+    })
+    const form = await makeForm({ onePerEmail: true, onePerEmailFieldId: 'f_email' }, { definition: optional })
+    const { f_email: _, ...noEmail } = good()
+    const blank = await ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, noEmail))
+    expect(blank.status).toBe(422)
+    expect(blank.body.error.fields.f_email[0]).toMatch(/Enter your email address/)
+
+    // Hidden by logic: the respondent can't fix it, so a form-level message and no field error.
+    const hidden = formDefinition.parse({
+      ...DEF,
+      fields: DEF.fields.map((f) => (f.id === 'f_email' ? { ...f, required: false, logic: { action: 'show', match: 'all', conditions: [{ field: 'f_name', op: 'is_empty' }] } } : f)),
+    })
+    const hiddenForm = await makeForm({ onePerEmail: true, onePerEmailFieldId: 'f_email' }, { definition: hidden })
+    const r = await ctx.client().post(`/api/public/forms/${hiddenForm.slug}/responses`, body(hiddenForm, noEmail))
+    expect(r.status).toBe(422)
+    expect(r.body.error.fields ?? {}).toEqual({})
+    expect(r.body.error.message).toMatch(/can’t accept responses/)
+
+    // The checked question is gone (or none was picked).
+    const gone = await makeForm({ onePerEmail: true, onePerEmailFieldId: 'f_gone' })
+    expect((await ctx.client().post(`/api/public/forms/${gone.slug}/responses`, body(gone, good()))).status).toBe(422)
+    const unset = await makeForm({ onePerEmail: true, onePerEmailFieldId: null })
+    expect((await ctx.client().post(`/api/public/forms/${unset.slug}/responses`, body(unset, good()))).status).toBe(422)
+    expect(await count(form.id) + (await count(hiddenForm.id)) + (await count(gone.id)) + (await count(unset.id))).toBe(0)
   })
 
   it('blocks a second response from the same browser token when one-per-browser is on', async () => {

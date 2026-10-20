@@ -201,6 +201,7 @@ export type LogicIssueCode =
   | 'unknown_option'
   | 'pipe_missing'
   | 'pipe_later'
+  | 'one_per_email'
 
 export interface LogicIssue {
   code: LogicIssueCode
@@ -311,6 +312,39 @@ export function lintLogic(def: FormDefinition): LogicIssue[] {
     }
   }
   return issues
+}
+
+/**
+ * Publish check for the "One response per email" setting (it lives in settings, so lintLogic
+ * can't see it): the checked question must exist, be an Email question, be required and be
+ * shown to everyone (no rule on it or on its page). Otherwise a respondent can skip it and
+ * submit as often as they like. Every issue blocks publish, like lintLogic's.
+ */
+export function lintOnePerEmail(def: FormDefinition, settings: { onePerEmail: boolean; onePerEmailFieldId: string | null }): LogicIssue[] {
+  if (!settings.onePerEmail) return []
+  const base = 'One response per email needs a required email question that is always shown.'
+  const issue = (fieldId: string, fix: string): LogicIssue[] => [{ code: 'one_per_email', fieldId, message: `${base} ${fix}` }]
+  const id = settings.onePerEmailFieldId
+  const index = id ? def.fields.findIndex((f) => f.id === id) : -1
+  const field = def.fields[index]
+  if (!field || field.type !== 'email') {
+    return issue('settings', 'Choose an email question in Settings, or turn the setting off.')
+  }
+  const section = def.fields.slice(0, index).findLast((f) => f.type === 'section_break')
+  if (field.logic || section?.logic) {
+    return issue(field.id, `Remove the show or hide rule on ${field.logic ? name(field) : 'its page'}, or turn the setting off.`)
+  }
+  if (!field.required) return issue(field.id, `Make ${name(field)} required, or turn the setting off.`)
+  return []
+}
+
+/**
+ * The key one-response-per-email compares: trimmed, lowercase, and without a `+tag` in the
+ * local part, so "Ada+2@Example.com" and "ada@example.com" count as one address. Only for the
+ * check: the answer itself is stored as typed (trimmed and lowercased by the email type).
+ */
+export function emailDedupeKey(email: string): string {
+  return email.trim().toLowerCase().replace(/^([^@+]+)\+[^@]*@/, (_m, local: string) => `${local}@`)
 }
 
 export interface Dependent {

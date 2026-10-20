@@ -6,6 +6,7 @@ import { safeEqual, subkey } from '../lib/crypto'
  * third-party iframes, where cookies are partitioned or blocked.
  *
  * - render token: `<ms>.<mac>` proves when the server handed out the form (minimum fill time).
+ *   Good for 24 hours, so one page load can't be replayed for submits forever.
  * - unlock token: `<exp>.<mac>` after a correct form password; bound to the current hash, so
  *   changing the password invalidates every token.
  * - browser token hash: what responses.browser_token stores for one-response-per-browser.
@@ -20,11 +21,17 @@ export function renderToken(formId: string, now = Date.now()): string {
   return `${now}.${mac('render', formId, String(now))}`
 }
 
-/** The render time in epoch ms, or null if the token is forged or for another form. */
-export function readRenderToken(token: string, formId: string): number | null {
+export const RENDER_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * The render time in epoch ms; 'expired' for a genuine token older than 24 hours (the page
+ * has simply been open that long); null if the token is forged or for another form.
+ */
+export function readRenderToken(token: string, formId: string, now = Date.now()): number | 'expired' | null {
   const [ts, sig] = token.split('.')
   if (!ts || !sig || !/^\d{10,16}$/.test(ts)) return null
-  return safeEqual(sig, mac('render', formId, ts)) ? Number(ts) : null
+  if (!safeEqual(sig, mac('render', formId, ts))) return null
+  return now - Number(ts) > RENDER_TOKEN_MAX_AGE_MS ? 'expired' : Number(ts)
 }
 
 export const UNLOCK_TTL_MS = 3 * 60 * 60 * 1000
