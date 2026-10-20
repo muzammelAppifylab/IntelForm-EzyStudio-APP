@@ -42,4 +42,4 @@ Replaced the v1 look. `IntelForm-Research/03-Design-System/MIGRATION.md` has the
 
 ## 1.0, 19 Oct 2026 (superseded)
 
-Built from a review of the "Lilac Carnival" export: a violet primary with coral highlights, Space Grotesk and Inter, and fixed dark mode and contrast. It is kept for history in `IntelForm-Research/03-Design-System/superseded-v1/`. Do not build from it.
+Built from a review of the "Lilac Carnival" export: a violet primary with coral highlights, Space Grotesk and Inter, and fixed dark mode and contrast. Its files were removed on 2026-10-20. Do not build from it.
