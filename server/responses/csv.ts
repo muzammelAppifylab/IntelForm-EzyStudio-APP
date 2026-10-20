@@ -2,7 +2,7 @@ import type { ResponsesCsvQuery } from '../../shared/api-responses'
 import { responsesCsvQuery } from '../../shared/api-responses'
 import type { FormField } from '../../shared/form/definition'
 import { answerToCsv, csvHeaders } from '../../shared/form/csv'
-import { sql } from '../db/client'
+import { sql, withoutStatementTimeout } from '../db/client'
 import { CSV_BOM, csvRow, type CsvCell } from '../lib/csv'
 import type { ExportForm } from '../lib/data-export'
 import { loadCatalog, type FormCatalog } from './catalog'
@@ -49,21 +49,24 @@ export async function* formCsvChunks(formId: string, query: ResponsesCsvQuery, o
     : whereFragment(cat, query, tz)
   const order = orderFragment(sortSpec(cat, query.sort, query.dir))
   yield CSV_BOM + headerRow(cat)
-  const cursor = sql<{ id: string; submitted: string; duration_ms: number | null; device: string | null; browser: string | null; country: string | null; answers: Record<string, unknown> }[]>`
-    SELECT id, to_char(submitted_at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS submitted, duration_ms, device, browser, country, answers
-    FROM responses WHERE ${where} ORDER BY ${order}
-  `.cursor(CURSOR_ROWS)
-  // Breaking out of for-await closes the cursor (postgres.js cancels the rest).
-  for await (const rows of cursor) {
-    if (opts.aborted?.()) return
-    let chunk = ''
-    for (const r of rows) {
-      const cells: CsvCell[] = cat.entries.flatMap((e) => csvCells(e.plain, r.answers[e.meta.id]))
-      cells.push(r.submitted, r.duration_ms === null ? null : Math.round(r.duration_ms / 100) / 10, r.device, r.browser, r.country, r.id)
-      chunk += csvRow(cells)
+  // A cursor is one statement for its whole life: lift the pool's statement_timeout while streaming.
+  yield* withoutStatementTimeout(async function* (db) {
+    const cursor = db<{ id: string; submitted: string; duration_ms: number | null; device: string | null; browser: string | null; country: string | null; answers: Record<string, unknown> }[]>`
+      SELECT id, to_char(submitted_at AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS submitted, duration_ms, device, browser, country, answers
+      FROM responses WHERE ${where} ORDER BY ${order}
+    `.cursor(CURSOR_ROWS)
+    // Breaking out of for-await closes the cursor (postgres.js cancels the rest).
+    for await (const rows of cursor) {
+      if (opts.aborted?.()) return
+      let chunk = ''
+      for (const r of rows) {
+        const cells: CsvCell[] = cat.entries.flatMap((e) => csvCells(e.plain, r.answers[e.meta.id]))
+        cells.push(r.submitted, r.duration_ms === null ? null : Math.round(r.duration_ms / 100) / 10, r.device, r.browser, r.country, r.id)
+        chunk += csvRow(cells)
+      }
+      yield chunk
     }
-    yield chunk
-  }
+  })
 }
 
 /** For the data-export ZIP: every response of the form, newest first like the table. */
