@@ -13,7 +13,8 @@ import { clientIp, ipKey } from '../lib/ip'
 import { logger } from '../lib/logger'
 import { rateLimit } from '../lib/rate-limit'
 import { requestMeta } from '../lib/request-meta'
-import { storeBuffer } from '../lib/uploads'
+import { PngError, validatePng } from '../lib/png'
+import { removeStoredFiles, storeBuffer } from '../lib/uploads'
 import { buildSearchText } from '../responses/format'
 import { redirectWithAnswers } from './answers'
 import { isClosed, requireForm, turnstileFor, type LoadedForm } from './load'
@@ -46,7 +47,8 @@ const MAX_STARTED_AGO_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_TTC_MS = 24 * 60 * 60 * 1000
 /** A browser that rendered the version just replaced may still submit it for this long. */
 export const PREVIOUS_VERSION_GRACE_MS = 24 * 60 * 60 * 1000
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+/** All signature PNGs of one submit together, decoded. */
+export const MAX_SIGNATURE_BYTES = 1024 * 1024
 
 const fieldErrors = (errors: Record<string, string>) =>
   Object.fromEntries(Object.entries(errors).map(([k, v]) => [k, [v]])) as Record<string, string[]>
@@ -105,28 +107,44 @@ function cleanTtc(ttc: Record<string, number> | undefined, answers: Record<strin
 
 /**
  * Signature answers arrive only as PNG data URLs (the answer schema rejects anything else).
- * Decode them all and check the PNG signature first, so a bad one costs no upload; then store each.
+ * Decode them all and check each is a strict, plain PNG (server/lib/png.ts) and that together
+ * they stay under 1 MB, so a bad one costs no upload; then store each. Returns the storage
+ * paths written, so the caller can delete them if the response is not saved after all.
  */
-async function uploadSignatures(def: FormDefinition, answers: Record<string, unknown>, formId: string, labels: Labels): Promise<void> {
+async function uploadSignatures(def: FormDefinition, answers: Record<string, unknown>, formId: string, labels: Labels): Promise<string[]> {
   const pending: { id: string; bytes: Buffer }[] = []
+  let total = 0
   for (const f of def.fields) {
     if (f.type !== 'signature' || answers[f.id] === undefined) continue
     const v = answers[f.id] as { url?: unknown }
     const bytes = isSignatureDataUrl(v.url) ? Buffer.from(signatureBytes(v.url)) : null
-    if (!bytes || bytes.length <= PNG_MAGIC.length || !bytes.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
-      throw new ApiError(422, 'validation_failed', labels.errorSummary, { [f.id]: [labels.invalidSignature] })
+    const invalid = () => new ApiError(422, 'validation_failed', labels.errorSummary, { [f.id]: [labels.invalidSignature] })
+    if (!bytes) throw invalid()
+    total += bytes.length
+    if (total > MAX_SIGNATURE_BYTES) throw new ApiError(413, 'payload_too_large', 'Your signatures are too large to save. Clear them, sign again and resubmit.')
+    try {
+      await validatePng(bytes)
+    } catch (err) {
+      if (!(err instanceof PngError)) throw err
+      logger.info({ formId, fieldId: f.id, reason: err.message }, 'signature rejected')
+      throw invalid()
     }
     pending.push({ id: f.id, bytes })
   }
+  const stored: string[] = []
   for (const { id, bytes } of pending) {
+    const path = `intelform/signatures/${formId}/${randomUUID()}.png`
     try {
-      const { url } = await storeBuffer(bytes, 'image/png', `intelform/signatures/${formId}/${randomUUID()}.png`)
+      const { url } = await storeBuffer(bytes, 'image/png', path)
+      stored.push(path)
       answers[id] = { url }
     } catch (err) {
       logger.error({ err }, 'signature upload failed')
+      await removeStoredFiles(stored)
       throw new ApiError(502, 'storage_failed', 'Your signature couldn’t be saved. Try again in a moment.')
     }
   }
+  return stored
 }
 
 /** Still live and under the cap, and (one per email) not a known address. Not locked: step 9 is exact. */
@@ -190,9 +208,9 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
 
   // 8. Cheap checks the transaction repeats exactly, so a doomed submit uploads nothing.
   await preCheck(form, answers, labels)
-  await uploadSignatures(def, answers, form.id, labels)
+  const stored = await uploadSignatures(def, answers, form.id, labels)
 
-  // 9. One transaction
+  // 9. One transaction (if it fails, the signatures just stored are deleted again)
   const meta = requestMeta(c)
   const startedAt = input.startedAt && input.startedAt <= now.getTime() && now.getTime() - input.startedAt < MAX_STARTED_AGO_MS ? new Date(input.startedAt) : null
   const durationMs = startedAt ? now.getTime() - startedAt.getTime() : null
@@ -238,6 +256,9 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
       version: version.version,
       answers,
     })
+  }).catch(async (err: unknown) => {
+    await removeStoredFiles(stored)
+    throw err
   })
 
   // 10. Reply
