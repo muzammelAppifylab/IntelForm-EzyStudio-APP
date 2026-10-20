@@ -115,7 +115,7 @@ export function ResponseDrawer({
                   <div key={a.fieldId} className="grid gap-1">
                     <dt className="text-label text-muted-foreground">{a.label}</dt>
                     <dd className="text-body break-words whitespace-pre-line text-foreground">
-                      {a.url ? (
+                      {a.type === 'signature' && a.url ? (
                         <a href={a.url} target="_blank" rel="noreferrer" className="inline-block rounded-md border border-border bg-card p-2">
                           <img src={a.url} alt={`Signature for “${a.label}”`} className="h-24 w-auto" />
                         </a>

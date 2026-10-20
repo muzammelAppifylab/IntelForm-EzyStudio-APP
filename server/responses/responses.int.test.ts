@@ -9,9 +9,10 @@ process.env.TEST_DATABASE_URL ??= 'postgres://intelform:intelform@localhost:5433
 process.env.TEST_APP_URL ??= 'http://localhost:5187'
 
 const { setupTestDb, setupOwner, addMember } = await import('../test/harness')
+const ctx = await setupTestDb()
+// After setupTestDb: format.ts loads server/env.ts (via lib/uploads), which must see the test database.
 const { buildSearchText } = await import('./format')
 const { insertBenchForm, insertFakeResponses } = await import('./fixtures')
-const ctx = await setupTestDb()
 const { sql } = ctx
 
 type Client = Awaited<ReturnType<typeof setupOwner>>

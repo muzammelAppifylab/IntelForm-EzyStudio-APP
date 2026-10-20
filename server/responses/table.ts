@@ -28,15 +28,18 @@ interface DbRow {
   answers: Record<string, unknown>
 }
 
-export function rowCells(cat: FormCatalog, answers: Record<string, unknown>): Record<string, string> {
+/** Display text per field, plus the signature image URLs (only files this server stored). */
+export function rowCells(cat: FormCatalog, answers: Record<string, unknown>): Pick<ResponseRow, 'cells' | 'urls'> {
   const cells: Record<string, string> = {}
+  const urls: Record<string, string> = {}
   for (const e of cat.entries) {
     const v = answers[e.meta.id]
     if (v === undefined) continue
     const d = displayAnswer(e.display, v)
-    if (d.url || d.text) cells[e.meta.id] = d.url ?? d.text
+    if (d.text) cells[e.meta.id] = d.text
+    if (d.url) urls[e.meta.id] = d.url
   }
-  return cells
+  return Object.keys(urls).length ? { cells, urls } : { cells }
 }
 
 export async function listResponses(formId: string, q: ResponsesListQuery): Promise<ResponsesListResponse> {
@@ -63,7 +66,7 @@ export async function listResponses(formId: string, q: ResponsesListQuery): Prom
         device: r.device,
         browser: r.browser,
         country: r.country,
-        cells: rowCells(cat, r.answers),
+        ...rowCells(cat, r.answers),
       }),
     ),
     total,
