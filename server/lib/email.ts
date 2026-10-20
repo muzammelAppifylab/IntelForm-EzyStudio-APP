@@ -41,18 +41,35 @@ function consoleDriver(): EmailDriver {
   }
 }
 
-function smtpDriver(cfg: EmailConfig): EmailDriver {
+/** localhost, 127.x.x.x and ::1: a relay or catcher (MailHog, Mailpit) on this machine. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '')
+  return h === 'localhost' || h.endsWith('.localhost') || h === '::1' || /^127(?:\.\d{1,3}){3}$/.test(h)
+}
+
+/**
+ * Transport options for an SMTP config. TLS is never optional off this machine: port 465 uses
+ * TLS from the start, anything else must upgrade with STARTTLS (`requireTLS`), so a network
+ * attacker can't strip STARTTLS and read the password. Certificates are always verified. Only
+ * a loopback host (a development mail catcher such as MailHog) may talk plain SMTP.
+ */
+export function smtpTransportOptions(cfg: EmailConfig, pass: string | null) {
   if (!cfg.smtpHost) throw new Error('Enter the SMTP host')
-  const pass = readSecret(cfg.smtpPass)
-  const transport: Transporter = createTransport({
+  return {
     host: cfg.smtpHost,
     port: cfg.smtpPort ?? (cfg.smtpSecure ? 465 : 587),
     secure: cfg.smtpSecure,
+    requireTLS: !cfg.smtpSecure && !isLoopbackHost(cfg.smtpHost),
+    tls: { rejectUnauthorized: true },
     auth: cfg.smtpUser ? { user: cfg.smtpUser, pass: pass ?? '' } : undefined,
     connectionTimeout: TIMEOUT_MS,
     greetingTimeout: TIMEOUT_MS,
     socketTimeout: TIMEOUT_MS,
-  })
+  }
+}
+
+function smtpDriver(cfg: EmailConfig): EmailDriver {
+  const transport: Transporter = createTransport(smtpTransportOptions(cfg, readSecret(cfg.smtpPass)))
   return {
     async send(m) {
       const info = await transport.sendMail({ from: m.from, to: m.to, subject: m.subject, text: m.text, html: m.html, replyTo: m.replyTo })

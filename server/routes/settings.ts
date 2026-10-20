@@ -55,6 +55,21 @@ function defined<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>
 }
 
+type EmailPatch = Partial<Pick<AppSettings['email'], 'smtpHost' | 'smtpPort' | 'smtpSecure' | 'smtpUser'>>
+
+const smtpTarget = (e: EmailPatch & Pick<AppSettings['email'], 'smtpSecure'>) => ({
+  host: (e.smtpHost ?? '').trim().toLowerCase().replace(/\.$/, ''),
+  port: e.smtpPort ?? (e.smtpSecure ? 465 : 587),
+  user: e.smtpUser ?? '',
+})
+
+/** Whether the patch sends the SMTP login somewhere else: another host, port or username. */
+export function smtpEndpointChanged(stored: AppSettings['email'], patch: EmailPatch): boolean {
+  const before = smtpTarget(stored)
+  const after = smtpTarget({ ...stored, ...defined(patch) })
+  return before.host !== after.host || before.port !== after.port || before.user !== after.user
+}
+
 settingsRoutes.get('/', async (c) => c.json<AppSettingsView>(await settingsView()))
 
 settingsRoutes.patch('/', async (c) => {
@@ -69,11 +84,14 @@ settingsRoutes.patch('/', async (c) => {
     }
     if (input.email) {
       const { smtpPass, resendApiKey, postmarkToken, ...plain } = input.email
+      // A new server or login without a new password drops the stored one, so a hijacked
+      // session can't point SMTP at its own host and "Send test" the password to it.
+      const smtpMoved = smtpPass === undefined && smtpEndpointChanged(await getSetting('email', tx), plain)
       await setSetting(
         'email',
         defined({
           ...plain,
-          smtpPass: secretUpdate(smtpPass),
+          smtpPass: smtpMoved ? null : secretUpdate(smtpPass),
           resendApiKey: secretUpdate(resendApiKey),
           postmarkToken: secretUpdate(postmarkToken),
         }) as Partial<AppSettings['email']>,

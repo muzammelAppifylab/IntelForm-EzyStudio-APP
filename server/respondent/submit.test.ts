@@ -485,17 +485,22 @@ describe('security follow-ups', () => {
       confirmationEmail: true,
       confirmationEmailFieldId: 'f_email',
       confirmationSubject: 'Thanks {f_name.first}',
-      confirmationBody: 'Hi {f_name.first}. You said: {f_detail}',
+      confirmationBody: 'Hi {f_name.first}. You said: {f_detail} Help: https://owner.example/help',
     })
-    const answers = good({ f_name: { first: 'Win https://spam.example/x', last: 'L' }, f_more: true, f_detail: 'see http://evil.example/claim now' })
+    const answers = good({
+      f_name: { first: 'Win www.spam.example/x', last: 'L' },
+      f_more: true,
+      f_detail: 'see http://evil.example/claim, evil.com/login or 10.0.0.1/admin, mailto:x@evil.com now',
+    })
     expect((await ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, answers))).status).toBe(200)
     const confirmations = async () =>
       (await sql<{ payload: Json }[]>`SELECT payload FROM jobs WHERE kind = 'email' AND created_at > now() - interval '1 minute'`)
         .map((j) => j.payload)
         .filter((p) => p.subject?.startsWith('Thanks Win'))
     const [mail] = await confirmations()
-    expect(mail.text).toBe('Hi Win. You said: see now')
-    expect(mail.text).not.toMatch(/https?:/)
+    expect(mail.subject).toBe('Thanks Win')
+    // The answers lose every link; the owner's own link in the template stays.
+    expect(mail.text).toBe('Hi Win. You said: see or now Help: https://owner.example/help')
 
     await fillLimit(`confirm:${form.id}`, 200)
     expect((await ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, answers))).status).toBe(200)

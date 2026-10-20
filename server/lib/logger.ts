@@ -1,15 +1,46 @@
 import type { MiddlewareHandler } from 'hono'
 import { requestId } from 'hono/request-id'
-import { pino } from 'pino'
+import { pino, type LoggerOptions } from 'pino'
 import { env, isTest } from '../env'
 
 /**
- * JSON logs to stdout. Passwords, tokens, cookies and authorization headers are redacted, and
- * raw IPs are never logged (only the salted hash, where needed).
+ * Error fields that can carry row data or SQL: postgres puts the offending values in `detail`
+ * ("Key (email)=(a@b.com) already exists"), `where`, `hint` and `internal_query`, and
+ * postgres.js attaches `query`, `parameters`, `args` and `types`. They are dropped from logged
+ * errors; `code`, `constraint_name`, `table_name`, `column_name` and the stack stay.
  */
-export const logger = pino({
+const ERROR_DATA_FIELDS = ['detail', 'hint', 'where', 'position', 'internal_query', 'internal_position', 'query', 'parameters', 'args', 'types']
+
+/**
+ * pino's error serializer, then the data-bearing fields removed, also from causes, aggregated
+ * errors and errors nested in a plain object.
+ */
+export function serializeError(err: unknown): unknown {
+  return scrubError(err, 0)
+}
+
+function scrubError(value: unknown, depth: number): unknown {
+  if (!value || typeof value !== 'object') return value
+  if (depth > 5) return '[too deep]'
+  const obj: object = value instanceof Error ? pino.stdSerializers.err(value) : value
+  if (Array.isArray(obj)) return obj.map((v) => scrubError(v, depth + 1))
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (ERROR_DATA_FIELDS.includes(k)) continue
+    out[k] = scrubError(v, depth + 1)
+  }
+  return out
+}
+
+/**
+ * JSON logs to stdout. Passwords, tokens, cookies and authorization headers are redacted, and
+ * raw IPs are never logged (only the salted hash, where needed). Logged errors lose fields that
+ * carry row data (see ERROR_DATA_FIELDS).
+ */
+export const loggerOptions = {
   level: env.LOG_LEVEL ?? (isTest ? 'silent' : 'info'),
   base: { service: 'intelform' },
+  serializers: { err: serializeError, error: serializeError },
   redact: {
     paths: [
       'password',
@@ -33,7 +64,9 @@ export const logger = pino({
     ],
     censor: '[redacted]',
   },
-})
+} satisfies LoggerOptions
+
+export const logger = pino(loggerOptions)
 
 /** Adds X-Request-Id (accepts a sane incoming one) and exposes it as c.var.requestId. */
 export const requestIdMiddleware = requestId({
