@@ -18,6 +18,8 @@ export async function runMigrations(sql: Sql = defaultSql, log: (line: string) =
   const conn = await sql.reserve()
   const applied: string[] = []
   try {
+    // Waiting for the lock and long DDL must not hit the pool's statement_timeout (reset below).
+    await conn`SET statement_timeout = 0`
     await conn`SELECT pg_advisory_lock(hashtext(${LOCK_KEY}))`
     await conn`
       CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -48,6 +50,8 @@ export async function runMigrations(sql: Sql = defaultSql, log: (line: string) =
     return applied
   } finally {
     await conn`SELECT pg_advisory_unlock(hashtext(${LOCK_KEY}))`.catch(() => {})
+    // Back to the connection's startup value before it returns to the pool.
+    await conn`RESET statement_timeout`.catch(() => {})
     conn.release()
   }
 }

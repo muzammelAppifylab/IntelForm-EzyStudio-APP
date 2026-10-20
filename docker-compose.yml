@@ -6,8 +6,10 @@ services:
       POSTGRES_USER: intelform
       POSTGRES_PASSWORD: intelform
       POSTGRES_DB: intelform
+    # Loopback only: the dev credentials above must not be reachable from the network.
+    # (Takes effect on the next `docker compose up`.)
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - intelform-db:/var/lib/postgresql/data
 volumes:

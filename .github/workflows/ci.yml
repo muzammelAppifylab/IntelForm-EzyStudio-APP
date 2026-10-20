@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege for the GITHUB_TOKEN: the jobs only read the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -22,7 +26,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
         env:
           POSTGRES_USER: intelform
           POSTGRES_PASSWORD: intelform
@@ -40,8 +44,8 @@ jobs:
       E2E_PORT: '8793'
       APP_URL: http://localhost:8793
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -64,7 +68,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: End-to-end (all specs; retries 1, traces on failure)
         run: npx playwright test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: playwright-results
