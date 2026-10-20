@@ -33,13 +33,20 @@ import { SettingsCard } from './shared'
 
 type Header = { key: string; value: string }
 
-const isHttpUrl = (v: string) => /^https?:\/\/[^\s/]+\.[^\s]+/i.test(v.trim()) && URL.canParse(v.trim())
+/** View-only line. Viewers get the URL blanked by the server (it is a secret), so say only on or off. */
+function readOnlySummary(webhook: { enabled: boolean; url: string | null }, redacted: boolean): string {
+  if (redacted) return webhook.enabled ? 'Webhook is on: each response is sent to a URL an editor set up.' : 'No webhook is set up.'
+  return webhook.enabled && webhook.url ? `Responses are sent to ${webhook.url}.` : 'No webhook is set up.'
+}
+
+const isHttpUrl =(v: string) => /^https?:\/\/[^\s/]+\.[^\s]+/i.test(v.trim()) && URL.canParse(v.trim())
 
 /** Webhook (PRD "Webhook"): URL, headers, signing secret, test, delivery log with Resend. */
 export function WebhookSection() {
   const formId = useBuilder((s) => s.meta.id)
   const webhook = useBuilder((s) => s.settings.webhook)
   const readOnly = useBuilder((s) => s.readOnly)
+  const redacted = useBuilder((s) => s.settings.webhookRedacted)
   const { save, errors } = useSettingsSave()
   const queryClient = useQueryClient()
   const base = `${BUILDER_API}/forms/${formId}/webhook`
@@ -105,7 +112,7 @@ export function WebhookSection() {
       description="Sends each completed response as JSON to your URL, signed with HMAC-SHA256 (Standard Webhooks), so your server can check it came from here."
     >
       {readOnly ? (
-        <p className="text-body-sm text-muted-foreground">{webhook.enabled && webhook.url ? `Responses are sent to ${webhook.url}.` : 'No webhook is set up.'}</p>
+        <p className="text-body-sm text-muted-foreground">{readOnlySummary(webhook, redacted)}</p>
       ) : (
         <>
           <TextRow

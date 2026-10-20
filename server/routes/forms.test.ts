@@ -100,6 +100,30 @@ describe('roles', () => {
     const form = await newForm('editor')
     expect((await call('editor', 'PATCH', `/api/forms/${form.id}`, { title: 'Edited' })).status).toBe(200)
   })
+
+  it('hides the webhook URL and header values from a Viewer', async () => {
+    const form = await newForm()
+    const url = 'https://hooks.example.com/services/T000/B000/s3cr3tpath'
+    const webhook = { url, enabled: true, headers: [{ key: 'Authorization', value: 'Bearer tok_live_123' }] }
+    const saved = await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { webhook } })
+    expect(saved.status).toBe(200)
+    expect(saved.body.settings).toMatchObject({ webhook, webhookRedacted: false })
+
+    const viewer = await call('viewer', 'GET', `/api/forms/${form.id}`)
+    expect(viewer.status).toBe(200)
+    expect(viewer.body.settings.webhook).toEqual({ enabled: true, url: null, headers: [{ key: 'Authorization', value: '' }] })
+    expect(viewer.body.settings.webhookRedacted).toBe(true)
+    for (const path of [`/api/forms/${form.id}`, '/api/forms', '/api/templates']) {
+      const text = JSON.stringify((await call('viewer', 'GET', path)).body)
+      expect(text, path).not.toContain('s3cr3tpath')
+      expect(text, path).not.toContain('tok_live_123')
+    }
+
+    for (const role of ['owner', 'editor'] as const) {
+      const res = await call(role, 'GET', `/api/forms/${form.id}`)
+      expect(res.body.settings, role).toMatchObject({ webhook, webhookRedacted: false })
+    }
+  })
 })
 
 describe('create', () => {
