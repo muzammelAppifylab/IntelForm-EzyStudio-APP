@@ -7,6 +7,7 @@ import { AllAtOnce } from './layouts/AllAtOnce'
 import type { FormErrorAction, LayoutContext, SubmitOutcome } from './layouts/context'
 import { OneAtATime } from './layouts/OneAtATime'
 import { Paged } from './layouts/Paged'
+import { redirectAfterSubmit } from './redirect'
 import { EndScreenView, StartScreen } from './screens'
 import { FormShell } from './Shell'
 import './extras.css'
@@ -120,7 +121,7 @@ export function FormRenderer(props: FormRendererProps) {
       const r = await onSubmit(final.answers, { startedAt: startedAt.current ?? Date.now(), ttc: ttc.snapshot() })
       if (r.ok) {
         if (r.redirectUrl) {
-          redirect(r.redirectUrl, !!embed)
+          redirectAfterSubmit(r.redirectUrl, def.fields.map((f) => f.id), !!embed)
           if (!embed) return { ok: true }
         }
         setPhase('end')
@@ -212,17 +213,4 @@ export function FormRenderer(props: FormRendererProps) {
       </p>
     </FormShell>
   )
-}
-
-/**
- * After submit: top-level pages navigate; embedded forms ask embed.js on the host page to
- * navigate the top window (a cross-origin iframe can't), and show the end screen meanwhile.
- */
-function redirect(url: string, embedded: boolean): void {
-  if (!/^https?:\/\//i.test(url)) return
-  if (embedded && window.parent !== window) {
-    window.parent.postMessage({ type: 'intelform:redirect', url }, '*')
-    return
-  }
-  window.location.assign(url)
 }

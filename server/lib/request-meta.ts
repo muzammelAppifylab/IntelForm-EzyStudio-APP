@@ -17,8 +17,9 @@ export interface RequestMeta {
 
 /**
  * Respondent metadata stored with a response (PRD privacy: hashed IP, country at submit time).
- * Country is read from COUNTRY_HEADER (or CF-IPCountry when a trusted proxy is configured);
- * without a trusted proxy the header is client-controlled, so it's ignored.
+ * Country is read only from the header named in COUNTRY_HEADER (e.g. CF-IPCountry behind
+ * Cloudflare). Unset means no country: without a proxy that sets it, any such header came from
+ * the client.
  */
 export function requestMeta(c: Context): RequestMeta {
   const ip = clientIp(c)
@@ -32,10 +33,10 @@ export function requestMeta(c: Context): RequestMeta {
   }
 }
 
-function countryOf(c: Context): string | null {
-  const header = env.COUNTRY_HEADER ?? (env.TRUSTED_PROXY_HOPS > 0 ? 'cf-ipcountry' : undefined)
+/** The visitor's country from the configured proxy header: a two-letter code, or null. */
+export function countryOf(c: Context, header: string | undefined = env.COUNTRY_HEADER): string | null {
   if (!header) return null
-  const v = c.req.header(header)?.trim().toUpperCase()
+  const v = c.req.header(header.trim())?.trim().toUpperCase()
   // XX = unknown, T1 = Tor (Cloudflare).
   return v && /^[A-Z]{2}$/.test(v) && v !== 'XX' && v !== 'T1' ? v : null
 }
