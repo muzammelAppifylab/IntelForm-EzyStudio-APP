@@ -1,9 +1,9 @@
 import './env'
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
-import { decryptSecret, encryptSecret, needsReencrypt } from '../lib/crypto'
+import { decryptSecret, encryptSecret, hashIp, needsReencrypt } from '../lib/crypto'
 import { CSV_BOM, contentDisposition, csvEscape, csvRow } from '../lib/csv'
-import { clientIp, normalizeIp } from '../lib/ip'
+import { clientIp, ipKeyFor, normalizeIp, rateLimitBucket } from '../lib/ip'
 import { deviceOf } from '../lib/request-meta'
 import { assertSafeUrl, generateWebhookSecret, isPrivateAddress, readWebhookConfig, safeLookup, signWebhook } from '../lib/webhooks'
 import { contentSecurityPolicy, inlineScriptHashes, surfaceFor } from '../middleware/security-headers'
@@ -166,6 +166,30 @@ describe('client IP', () => {
     expect(normalizeIp('1.2.3.4:5678')).toBe('1.2.3.4')
     expect(normalizeIp('[2001:db8::1]:443')).toBe('2001:db8::1')
     expect(normalizeIp('nonsense')).toBeNull()
+  })
+
+  it('buckets IPv6 by /64 for rate limits, expanding compressed forms first', () => {
+    expect(rateLimitBucket('2001:db8::1')).toBe('2001:db8:0:0::/64')
+    expect(rateLimitBucket('2001:db8:0:0:ffff:ffff:ffff:ffff')).toBe('2001:db8:0:0::/64')
+    expect(rateLimitBucket('2001:0DB8:0000:0001:0000:0000:0000:0001')).toBe('2001:db8:0:1::/64')
+    expect(rateLimitBucket('2001:db8:0:1::')).toBe('2001:db8:0:1::/64')
+    expect(rateLimitBucket('2001:db8:aa:bb:cc::')).toBe('2001:db8:aa:bb::/64')
+    expect(rateLimitBucket('::1')).toBe('0:0:0:0::/64')
+    expect(rateLimitBucket('::')).toBe('0:0:0:0::/64')
+    expect(rateLimitBucket('fe80::1%eth0')).toBe('fe80:0:0:0::/64')
+    expect(rateLimitBucket('64:ff9b::192.0.2.1')).toBe('64:ff9b:0:0::/64')
+    // IPv4, and IPv4-mapped in either spelling, stay per address.
+    expect(rateLimitBucket('203.0.113.9')).toBe('203.0.113.9')
+    expect(rateLimitBucket('::ffff:102:304')).toBe('1.2.3.4')
+    expect(rateLimitBucket(normalizeIp('::ffff:1.2.3.4')!)).toBe('1.2.3.4')
+  })
+
+  it('gives every address in a /64 the same rate-limit key', () => {
+    expect(ipKeyFor('2001:db8:1:2::1')).toBe(ipKeyFor('2001:db8:1:2:dead:beef:0:42'))
+    expect(ipKeyFor('2001:db8:1:2::1')).toBe(hashIp('2001:db8:1:2::/64'))
+    expect(ipKeyFor('2001:db8:1:2::1')).not.toBe(ipKeyFor('2001:db8:1:3::1'))
+    expect(ipKeyFor('203.0.113.9')).toBe(hashIp('203.0.113.9'))
+    expect(ipKeyFor('203.0.113.9')).not.toBe(ipKeyFor('203.0.113.10'))
   })
 })
 

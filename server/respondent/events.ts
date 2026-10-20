@@ -12,6 +12,8 @@ import { isClosed, requireForm } from './load'
  * only for rows actually inserted (docs/research/05-data-analytics.md "Funnel events").
  */
 export const EVENTS_RATE_LIMIT = 30
+/** Events per IP per minute across all forms (a page sends a view and a start per form). */
+export const EVENTS_IP_RATE_LIMIT = 120
 
 export async function handleEvent(c: Context, slug: string): Promise<void> {
   let raw: unknown
@@ -23,9 +25,12 @@ export async function handleEvent(c: Context, slug: string): Promise<void> {
   }
   const parsed = formEventInput.safeParse(raw)
   if (!parsed.success) throw new ApiError(400, 'invalid_request', 'Unknown event')
-  // Before the form load, keyed by slug: a flood of events costs one upsert each, not a form read.
-  await rateLimit(`events:${ipKey(c)}:${slug.toLowerCase().slice(0, 100)}`, EVENTS_RATE_LIMIT, 60)
+  // Per IP before the form load (so a flood of made-up slugs costs one upsert each, under one
+  // key), then per IP and form once the form is known: never a key per attacker-chosen slug.
+  const ip = ipKey(c)
+  await rateLimit(`events:ip:${ip}`, EVENTS_IP_RATE_LIMIT, 60)
   const form = await requireForm(slug)
+  await rateLimit(`events:${ip}:${form.id}`, EVENTS_RATE_LIMIT, 60)
   if (isClosed(form)) return
   const { type, session } = parsed.data
   await sql`

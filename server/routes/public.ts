@@ -1,9 +1,8 @@
 import { Hono, type Context } from 'hono'
 import { LEGAL_KINDS, LEGAL_TITLE, type LegalKind, type PublicAppInfo, type PublicHome, type PublicLegal } from '../../shared/api-front'
-import { hashIp } from '../lib/crypto'
 import { emailEnabled } from '../lib/email'
 import { ApiError } from '../lib/errors'
-import { clientIp } from '../lib/ip'
+import { clientIp, ipKeyFor } from '../lib/ip'
 import { rateLimit } from '../lib/rate-limit'
 import { getSetting } from '../lib/settings'
 import { loadFrontPage, publicFormCards } from './front-page'
@@ -14,7 +13,7 @@ export const publicRoutes = new Hono()
 /** Generous per-IP limit for the page data routes (a visitor loads one or two per page view). */
 async function limitVisitor(c: Context) {
   const ip = clientIp(c)
-  if (ip) await rateLimit(`public-page:ip:${hashIp(ip)}`, 300, 60)
+  if (ip) await rateLimit(`public-page:ip:${ipKeyFor(ip)}`, 300, 60)
 }
 
 publicRoutes.get('/app', async (c) => {

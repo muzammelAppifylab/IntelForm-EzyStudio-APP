@@ -232,6 +232,9 @@ describe('autosave revisions', () => {
   it('rejects server-only settings keys and invalid values', async () => {
     const form = await newForm()
     expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { passwordHash: 'x' } })).status).toBe(422)
+    // New passwords need 8 characters (existing shorter ones keep working).
+    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { password: '1234567' } })).status).toBe(422)
+    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { password: '12345678' } })).status).toBe(200)
     expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { webhook: { url: 'ftp://x' } } })).status).toBe(422)
     expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { webhook: { enabled: true } } })).status).toBe(422)
     expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { afterSubmit: 'redirect' } })).status).toBe(422)
@@ -422,7 +425,7 @@ describe('templates', () => {
     expect((await call('owner', 'PATCH', `/api/templates/${builtins[0].id}`, { name: 'Mine' })).status).toBe(403)
 
     const form = await newForm('owner', { title: 'Team survey' })
-    await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { password: 'secret1', webhook: { url: 'https://example.com/h', enabled: true } } })
+    await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { password: 'secret-12', webhook: { url: 'https://example.com/h', enabled: true } } })
     const saved = await call('editor', 'POST', `/api/forms/${form.id}/save-as-template`, {})
     expect(saved.status).toBe(201)
     expect(saved.body).toMatchObject({ name: 'Team survey', isBuiltin: false, category: 'Saved' })
