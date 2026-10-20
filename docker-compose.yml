@@ -1,0 +1,14 @@
+# Local Postgres for development. EzyStudio provides the database in production.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: intelform
+      POSTGRES_PASSWORD: intelform
+      POSTGRES_DB: intelform
+    ports:
+      - "5433:5432"
+    volumes:
+      - intelform-db:/var/lib/postgresql/data
+volumes:
+  intelform-db:

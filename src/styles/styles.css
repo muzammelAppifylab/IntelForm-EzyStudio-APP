@@ -1,0 +1,496 @@
+/* Theme: IntelForm design system v2.1 (stable) — "paper & ink", IntelForm palette */
+/* Oat paper canvas, warm violet-black ink, periwinkle actions edged in 2px ink,
+ * pine green for confirmations, persimmon for the single live accent. Instrument Serif for
+ * display, Figtree for UI. Shadowless: separation comes from borders and fills.
+ * Tailwind v4 + shadcn/ui: paste below `@import "tailwindcss";`. Dark mode: class="dark" on <html>.
+ * Every documented pairing passes WCAG (text 4.5:1, borders/rings 3:1) in both modes. */
+
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+  :root {
+    /* paper: Oat paper neutral: canvas, quiet borders, muted text. Anchor paper-50 #F5F2EA. */
+    --palette-paper-50: #F5F2EA;
+    --palette-paper-100: #EAE8E3;
+    --palette-paper-200: #DAD8D2;
+    --palette-paper-300: #C3C0BA;
+    --palette-paper-400: #A6A39C;
+    --palette-paper-500: #8B8881;
+    --palette-paper-600: #716E67;
+    --palette-paper-700: #5A5851;
+    --palette-paper-800: #45433D;
+    --palette-paper-900: #302E29;
+    --palette-paper-950: #1D1B17;
+    /* ink: Warm violet-black ink: text, 2px signature borders, dark chambers. Anchor ink-950 #211D2A. */
+    --palette-ink-50: #F8F5FE;
+    --palette-ink-100: #EEEBF8;
+    --palette-ink-200: #DEDAE9;
+    --palette-ink-300: #C7C2D2;
+    --palette-ink-400: #A9A5B5;
+    --palette-ink-500: #8F8A9A;
+    --palette-ink-600: #747080;
+    --palette-ink-700: #5E5A68;
+    --palette-ink-800: #484552;
+    --palette-ink-900: #34313C;
+    --palette-ink-950: #211D2A;
+    /* periwinkle: IntelForm periwinkle: primary action fill and selection; deep steps for links and focus. Anchor periwinkle-200 #C9C0FF. */
+    --palette-periwinkle-50: #F6F6FE;
+    --palette-periwinkle-100: #E5E2FE;
+    --palette-periwinkle-200: #C9C0FF;
+    --palette-periwinkle-300: #B4A5FE;
+    --palette-periwinkle-400: #9B80FB;
+    --palette-periwinkle-500: #8462E9;
+    --palette-periwinkle-600: #6C48CA;
+    --palette-periwinkle-700: #5737A8;
+    --palette-periwinkle-800: #432984;
+    --palette-periwinkle-900: #2F1C5F;
+    --palette-periwinkle-950: #1D0F3F;
+    /* pine: Pine green: Live badge, confirmations, NPS promoters (also success). Anchor pine-700 #2F5D46. */
+    --palette-pine-50: #F2F9F5;
+    --palette-pine-100: #E3F0E8;
+    --palette-pine-200: #C9E2D4;
+    --palette-pine-300: #A6CCB7;
+    --palette-pine-400: #7EAF94;
+    --palette-pine-500: #5D9377;
+    --palette-pine-600: #42765C;
+    --palette-pine-700: #2F5D46;
+    --palette-pine-800: #224735;
+    --palette-pine-900: #173325;
+    --palette-pine-950: #0C1F16;
+    /* persimmon: Persimmon: the live accent, once per screen. Anchor persimmon-500 #E8613F. */
+    --palette-persimmon-50: #FEF4F2;
+    --palette-persimmon-100: #FEE8E2;
+    --palette-persimmon-200: #FFD3C7;
+    --palette-persimmon-300: #FEB29E;
+    --palette-persimmon-400: #FE8363;
+    --palette-persimmon-500: #E8613F;
+    --palette-persimmon-600: #C54422;
+    --palette-persimmon-700: #A23112;
+    --palette-persimmon-800: #7D2208;
+    --palette-persimmon-900: #591604;
+    --palette-persimmon-950: #390800;
+    /* raspberry: Errors and destructive actions. Anchor raspberry-600 #C43358. */
+    --palette-raspberry-50: #FFF4F5;
+    --palette-raspberry-100: #FEE6E9;
+    --palette-raspberry-200: #FECFD4;
+    --palette-raspberry-300: #FFA9B5;
+    --palette-raspberry-400: #FD758E;
+    --palette-raspberry-500: #E55071;
+    --palette-raspberry-600: #C43358;
+    --palette-raspberry-700: #A12144;
+    --palette-raspberry-800: #7D1633;
+    --palette-raspberry-900: #590D22;
+    --palette-raspberry-950: #390312;
+    /* ochre: Warnings and rating stars. Anchor ochre-500 #D9961A. */
+    --palette-ochre-50: #FEF5EA;
+    --palette-ochre-100: #FDEDD6;
+    --palette-ochre-200: #FDDEB3;
+    --palette-ochre-300: #F8C883;
+    --palette-ochre-400: #EAAD4F;
+    --palette-ochre-500: #D9961A;
+    --palette-ochre-600: #B07701;
+    --palette-ochre-700: #8C5E02;
+    --palette-ochre-800: #694602;
+    --palette-ochre-900: #492F01;
+    --palette-ochre-950: #2A1A01;
+    /* info: Chart series 5 only. Anchor info-500 #2F7CF6. */
+    --palette-info-50: #F2F7FF;
+    --palette-info-100: #E2EDFE;
+    --palette-info-200: #C6DCFE;
+    --palette-info-300: #9BC1FF;
+    --palette-info-400: #639FFF;
+    --palette-info-500: #2F7CF6;
+    --palette-info-600: #1361D6;
+    --palette-info-700: #054DB2;
+    --palette-info-800: #023A8C;
+    --palette-info-900: #022965;
+    --palette-info-950: #001842;
+  }
+
+  :root {
+    --typeface-display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+    --typeface-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+    --typeface-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    --text-hero: 400 6rem/5.75rem var(--typeface-display);  /* 96/92 Front page hero headline only. */
+    --text-hero-tracking: -0.02em;
+    --text-title: 400 3.5rem/3.5rem var(--typeface-display);  /* 56/56 Public page titles and front page sections. */
+    --text-title-tracking: -0.015em;
+    --text-heading: 400 2.5rem/2.75rem var(--typeface-display);  /* 40/44 Dashboard and builder page titles. */
+    --text-heading-tracking: -0.01em;
+    --text-heading-sm: 400 1.75rem/2rem var(--typeface-display);  /* 28/32 Section titles inside chambers and large cards. */
+    --text-heading-sm-tracking: -0.005em;
+    --text-metric: 400 3rem/3rem var(--typeface-display);  /* 48/48 Hero KPI numbers (one or two per screen). */
+    --text-metric-tracking: -0.01em;
+    --text-question-xl: 400 2.5rem/2.75rem var(--typeface-display);  /* 40/44 One-at-a-time question text. */
+    --text-question-xl-tracking: -0.01em;
+    --text-subheading: 600 1.125rem/1.5rem var(--typeface-sans);  /* 18/24 Card and panel titles. */
+    --text-body: 400 1rem/1.5rem var(--typeface-sans);  /* 16/24 Default UI and paragraph text. */
+    --text-body-sm: 400 0.875rem/1.25rem var(--typeface-sans);  /* 14/20 Tables, dense lists, descriptions. */
+    --text-label: 500 0.875rem/1.25rem var(--typeface-sans);  /* 14/20 Labels, buttons, tabs, nav items. */
+    --text-caption: 400 0.75rem/1rem var(--typeface-sans);  /* 12/16 Timestamps, helper text, chart axes. */
+    --text-overline: 600 0.75rem/1rem var(--typeface-sans);  /* 12/16 Section eyebrows. Uppercase. */
+    --text-overline-tracking: 0.06em;
+    --text-question: 600 1.125rem/1.625rem var(--typeface-sans);  /* 18/26 Question label in classic and paged layouts. */
+    --text-answer: 400 1rem/1.5rem var(--typeface-sans);  /* 16/24 Respondent inputs. Never below 16px. */
+    --radius: 20px;  /* card radius; see @theme for the full scale */
+    --border-thin: 1px;  /* quiet stone hairlines */
+    --border-ink: 2px;   /* signature ink edge on buttons, selected states, key panels */
+    --spacing: 0.25rem;  /* 4px grid */
+    --control-sm: 2rem; --control-md: 2.5rem; --control-lg: 3rem;
+    --sidebar-width: 15rem; --builder-palette-width: 16rem; --builder-settings-width: 20rem;
+    --form-width: 40rem; --question-width: 45rem; --content-width: 75rem;
+    --duration-fast: 120ms; --duration-base: 200ms; --duration-slow: 320ms;
+    --easing-out: cubic-bezier(0.2, 0, 0, 1);
+    --ring-width: 2px; --ring-offset: 2px;
+    --z-sticky: 40; --z-dropdown: 50; --z-overlay: 60; --z-modal: 70; --z-toast: 80; --z-tooltip: 90;
+  }
+
+  :root {
+    --background: var(--palette-paper-50);  /* Page canvas: warm paper. Dashboard, builder canvas, front page. */
+    --foreground: var(--palette-ink-950);  /* Body text and headings on background, card, muted. */
+    --card: #FDFCF9;  /* Cards and panels. Always with a 1px border. */
+    --card-foreground: var(--palette-ink-950);  /* Text on card. */
+    --popover: #FDFCF9;  /* Menus, selects, dialogs. The only surfaces with a shadow. */
+    --popover-foreground: var(--palette-ink-950);  /* Text on popover. */
+    --primary: var(--palette-periwinkle-200);  /* Primary action fill: soft periwinkle, always with a 2px ink border. */
+    --primary-foreground: var(--palette-ink-950);  /* Label on primary (ink in both modes). */
+    --primary-hover: var(--palette-periwinkle-300);  /* Hover / pressed primary. */
+    --primary-border: var(--palette-ink-950);  /* 2px edge of primary and secondary buttons. */
+    --secondary: #FDFCF9;  /* Outlined secondary button fill. */
+    --secondary-foreground: var(--palette-ink-950);  /* Label on secondary. */
+    --muted: var(--palette-paper-100);  /* Quiet fills: table header, segmented control track, skeletons. */
+    --muted-foreground: var(--palette-paper-700);  /* Helper text, captions, timestamps on background, card and muted. */
+    --accent: var(--palette-paper-100);  /* Hover surface for rows, menu items, ghost buttons. */
+    --accent-foreground: var(--palette-ink-950);  /* Text on accent. */
+    --link: var(--palette-periwinkle-700);  /* Inline links (deep periwinkle). */
+    --destructive: var(--palette-raspberry-700);  /* Delete actions and error text. */
+    --destructive-foreground: #FFFFFF;  /* Label on a destructive fill. */
+    --border: var(--palette-paper-200);  /* Quiet 1px hairlines: cards, tables, dividers. */
+    --border-ink: var(--palette-ink-950);  /* Signature 2px ink edge: buttons, selected states, key panels. */
+    --input: var(--palette-paper-500);  /* 1px form control outline, 3:1 on card in both modes. */
+    --ring: var(--palette-periwinkle-600);  /* 2px focus ring with 2px offset. */
+    --chamber: var(--palette-ink-950);  /* Dark "chamber" surface: KPI hero card, front page bands. */
+    --chamber-foreground: var(--palette-paper-50);  /* Text on chamber. */
+    --chamber-muted: var(--palette-paper-300);  /* Secondary text on chamber. */
+    --highlight: var(--palette-persimmon-500);  /* Live accent (persimmon): new-response dot, today marker, recording state. Once per screen. */
+    --highlight-foreground: var(--palette-ink-950);  /* Text on persimmon. */
+    --pine: var(--palette-pine-700);  /* Brand secondary (pine green): Live badge, confirmations. */
+    --pine-foreground: var(--palette-paper-50);  /* Text on pine. */
+    --success-subtle: var(--palette-pine-50);  /* Success banner. */
+    --success-subtle-foreground: var(--palette-pine-700);  /* Text on success-subtle. */
+    --warning-subtle: var(--palette-ochre-50);  /* Warning banner, unpublished changes. */
+    --warning-subtle-foreground: var(--palette-ochre-700);  /* Text on warning-subtle. */
+    --info-subtle: var(--palette-periwinkle-50);  /* Tips and notices. */
+    --info-subtle-foreground: var(--palette-periwinkle-800);  /* Text on info-subtle. */
+    --danger-subtle: var(--palette-raspberry-50);  /* Error banner, invalid field message. */
+    --danger-subtle-foreground: var(--palette-raspberry-700);  /* Text on danger-subtle. */
+    --field: #FDFCF9;  /* Input background. */
+    --field-placeholder: var(--palette-paper-600);  /* Placeholder text, 4.5:1 on field. */
+    --option: #FDFCF9;  /* Choice tile background. */
+    --option-border: var(--palette-paper-500);  /* Choice tile outline at rest (3:1). */
+    --option-selected: var(--palette-periwinkle-200);  /* Selected choice tile fill (periwinkle). */
+    --option-selected-border: var(--palette-ink-950);  /* Selected tile edge, 2px. */
+    --option-selected-foreground: var(--palette-ink-950);  /* Text in a selected tile. */
+    --progress: var(--palette-ink-950);  /* Respondent progress fill. */
+    --progress-track: var(--palette-paper-200);  /* Progress track. */
+    --rating: var(--palette-ochre-400);  /* Filled rating star. */
+    --rating-empty: var(--palette-paper-400);  /* Empty rating star. */
+    --nps-detractor: var(--palette-raspberry-500);  /* NPS 0-6. */
+    --nps-passive: var(--palette-ochre-400);  /* NPS 7-8. */
+    --nps-promoter: var(--palette-pine-600);  /* NPS 9-10. */
+    --chart-1: var(--palette-periwinkle-600);  /* First series (violet). */
+    --chart-2: var(--palette-pine-600);  /* Second series. */
+    --chart-3: var(--palette-persimmon-500);  /* Third series. */
+    --chart-4: var(--palette-ochre-500);  /* Fourth series. */
+    --chart-5: var(--palette-info-600);  /* Fifth series. */
+    --chart-6: var(--palette-paper-500);  /* Other. */
+    --sidebar: #FDFCF9;  /* Dashboard sidebar panel. */
+    --sidebar-foreground: var(--palette-ink-800);  /* Sidebar text and icons. */
+    --sidebar-accent: var(--palette-periwinkle-200);  /* Active nav item fill (with 2px ink border). */
+    --sidebar-accent-foreground: var(--palette-ink-950);  /* Active nav item text. */
+    --sidebar-border: var(--palette-paper-200);  /* Sidebar edge. */
+    --shadow-color: var(--palette-ink-950);  /* Tint for the one popover shadow. */
+    --elevation-pop: 0 12px 32px color-mix(in oklab, var(--shadow-color) 12%, transparent);  /* menus, popovers, dialogs, dragged field ONLY */
+    color-scheme: light;
+  }
+
+  :root.dark, .dark {
+    --background: #17151D;
+    --foreground: var(--palette-paper-50);
+    --card: #221F2A;
+    --card-foreground: var(--palette-paper-50);
+    --popover: #221F2A;
+    --popover-foreground: var(--palette-paper-50);
+    --primary: var(--palette-periwinkle-200);
+    --primary-foreground: var(--palette-ink-950);
+    --primary-hover: var(--palette-periwinkle-300);
+    --primary-border: var(--palette-paper-50);
+    --secondary: #221F2A;
+    --secondary-foreground: var(--palette-paper-50);
+    --muted: #2A2638;
+    --muted-foreground: var(--palette-paper-300);
+    --accent: #2A2638;
+    --accent-foreground: var(--palette-paper-50);
+    --link: var(--palette-periwinkle-300);
+    --destructive: var(--palette-raspberry-400);
+    --destructive-foreground: var(--palette-ink-950);
+    --border: #34304A;
+    --border-ink: var(--palette-paper-50);
+    --input: var(--palette-paper-500);
+    --ring: var(--palette-periwinkle-300);
+    --chamber: #0E0C15;
+    --chamber-foreground: var(--palette-paper-50);
+    --chamber-muted: var(--palette-paper-300);
+    --highlight: var(--palette-persimmon-500);
+    --highlight-foreground: var(--palette-ink-950);
+    --pine: var(--palette-pine-300);
+    --pine-foreground: var(--palette-ink-950);
+    --success-subtle: #0E2B27;
+    --success-subtle-foreground: var(--palette-pine-200);
+    --warning-subtle: #33240A;
+    --warning-subtle-foreground: var(--palette-ochre-300);
+    --info-subtle: #2A2140;
+    --info-subtle-foreground: var(--palette-periwinkle-300);
+    --danger-subtle: #3A1018;
+    --danger-subtle-foreground: var(--palette-raspberry-300);
+    --field: #17151D;
+    --field-placeholder: var(--palette-paper-400);
+    --option: #221F2A;
+    --option-border: var(--palette-paper-500);
+    --option-selected: #3A2A5C;
+    --option-selected-border: var(--palette-periwinkle-300);
+    --option-selected-foreground: var(--palette-paper-50);
+    --progress: var(--palette-periwinkle-300);
+    --progress-track: #34304A;
+    --rating: var(--palette-ochre-400);
+    --rating-empty: var(--palette-paper-600);
+    --nps-detractor: var(--palette-raspberry-400);
+    --nps-passive: var(--palette-ochre-400);
+    --nps-promoter: var(--palette-pine-400);
+    --chart-1: var(--palette-periwinkle-300);
+    --chart-2: var(--palette-pine-400);
+    --chart-3: var(--palette-persimmon-500);
+    --chart-4: var(--palette-ochre-400);
+    --chart-5: var(--palette-info-400);
+    --chart-6: var(--palette-paper-500);
+    --sidebar: #221F2A;
+    --sidebar-foreground: var(--palette-paper-200);
+    --sidebar-accent: #3A2A5C;
+    --sidebar-accent-foreground: var(--palette-paper-50);
+    --sidebar-border: #34304A;
+    --shadow-color: #000000;
+    --elevation-pop: 0 12px 32px color-mix(in oklab, var(--shadow-color) 50%, transparent);
+    color-scheme: dark;
+  }
+
+  .form-theme {
+    --form-bg: var(--background); --form-surface: var(--card); --form-question: var(--foreground);
+    --form-answer: var(--foreground); --form-button: var(--primary); --form-button-foreground: var(--primary-foreground);
+    --form-button-border: var(--primary-border); --form-progress: var(--progress);
+    --form-font: var(--typeface-sans); --form-question-font: var(--typeface-display); --form-radius: 12px;
+    background: var(--form-bg); color: var(--form-question); font-family: var(--form-font);
+  }
+  @keyframes question-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-border: var(--primary-border);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-link: var(--link);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-ink: var(--border-ink);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chamber: var(--chamber);
+  --color-chamber-foreground: var(--chamber-foreground);
+  --color-chamber-muted: var(--chamber-muted);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-pine: var(--pine);
+  --color-pine-foreground: var(--pine-foreground);
+  --color-success-subtle: var(--success-subtle);
+  --color-success-subtle-foreground: var(--success-subtle-foreground);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-warning-subtle-foreground: var(--warning-subtle-foreground);
+  --color-info-subtle: var(--info-subtle);
+  --color-info-subtle-foreground: var(--info-subtle-foreground);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-danger-subtle-foreground: var(--danger-subtle-foreground);
+  --color-field: var(--field);
+  --color-field-placeholder: var(--field-placeholder);
+  --color-option: var(--option);
+  --color-option-border: var(--option-border);
+  --color-option-selected: var(--option-selected);
+  --color-option-selected-border: var(--option-selected-border);
+  --color-option-selected-foreground: var(--option-selected-foreground);
+  --color-progress: var(--progress);
+  --color-progress-track: var(--progress-track);
+  --color-rating: var(--rating);
+  --color-rating-empty: var(--rating-empty);
+  --color-nps-detractor: var(--nps-detractor);
+  --color-nps-passive: var(--nps-passive);
+  --color-nps-promoter: var(--nps-promoter);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-paper-50: var(--palette-paper-50);
+  --color-paper-100: var(--palette-paper-100);
+  --color-paper-200: var(--palette-paper-200);
+  --color-paper-300: var(--palette-paper-300);
+  --color-paper-400: var(--palette-paper-400);
+  --color-paper-500: var(--palette-paper-500);
+  --color-paper-600: var(--palette-paper-600);
+  --color-paper-700: var(--palette-paper-700);
+  --color-paper-800: var(--palette-paper-800);
+  --color-paper-900: var(--palette-paper-900);
+  --color-paper-950: var(--palette-paper-950);
+  --color-ink-50: var(--palette-ink-50);
+  --color-ink-100: var(--palette-ink-100);
+  --color-ink-200: var(--palette-ink-200);
+  --color-ink-300: var(--palette-ink-300);
+  --color-ink-400: var(--palette-ink-400);
+  --color-ink-500: var(--palette-ink-500);
+  --color-ink-600: var(--palette-ink-600);
+  --color-ink-700: var(--palette-ink-700);
+  --color-ink-800: var(--palette-ink-800);
+  --color-ink-900: var(--palette-ink-900);
+  --color-ink-950: var(--palette-ink-950);
+  --color-periwinkle-50: var(--palette-periwinkle-50);
+  --color-periwinkle-100: var(--palette-periwinkle-100);
+  --color-periwinkle-200: var(--palette-periwinkle-200);
+  --color-periwinkle-300: var(--palette-periwinkle-300);
+  --color-periwinkle-400: var(--palette-periwinkle-400);
+  --color-periwinkle-500: var(--palette-periwinkle-500);
+  --color-periwinkle-600: var(--palette-periwinkle-600);
+  --color-periwinkle-700: var(--palette-periwinkle-700);
+  --color-periwinkle-800: var(--palette-periwinkle-800);
+  --color-periwinkle-900: var(--palette-periwinkle-900);
+  --color-periwinkle-950: var(--palette-periwinkle-950);
+  --color-pine-50: var(--palette-pine-50);
+  --color-pine-100: var(--palette-pine-100);
+  --color-pine-200: var(--palette-pine-200);
+  --color-pine-300: var(--palette-pine-300);
+  --color-pine-400: var(--palette-pine-400);
+  --color-pine-500: var(--palette-pine-500);
+  --color-pine-600: var(--palette-pine-600);
+  --color-pine-700: var(--palette-pine-700);
+  --color-pine-800: var(--palette-pine-800);
+  --color-pine-900: var(--palette-pine-900);
+  --color-pine-950: var(--palette-pine-950);
+  --color-persimmon-50: var(--palette-persimmon-50);
+  --color-persimmon-100: var(--palette-persimmon-100);
+  --color-persimmon-200: var(--palette-persimmon-200);
+  --color-persimmon-300: var(--palette-persimmon-300);
+  --color-persimmon-400: var(--palette-persimmon-400);
+  --color-persimmon-500: var(--palette-persimmon-500);
+  --color-persimmon-600: var(--palette-persimmon-600);
+  --color-persimmon-700: var(--palette-persimmon-700);
+  --color-persimmon-800: var(--palette-persimmon-800);
+  --color-persimmon-900: var(--palette-persimmon-900);
+  --color-persimmon-950: var(--palette-persimmon-950);
+  --color-raspberry-50: var(--palette-raspberry-50);
+  --color-raspberry-100: var(--palette-raspberry-100);
+  --color-raspberry-200: var(--palette-raspberry-200);
+  --color-raspberry-300: var(--palette-raspberry-300);
+  --color-raspberry-400: var(--palette-raspberry-400);
+  --color-raspberry-500: var(--palette-raspberry-500);
+  --color-raspberry-600: var(--palette-raspberry-600);
+  --color-raspberry-700: var(--palette-raspberry-700);
+  --color-raspberry-800: var(--palette-raspberry-800);
+  --color-raspberry-900: var(--palette-raspberry-900);
+  --color-raspberry-950: var(--palette-raspberry-950);
+  --color-ochre-50: var(--palette-ochre-50);
+  --color-ochre-100: var(--palette-ochre-100);
+  --color-ochre-200: var(--palette-ochre-200);
+  --color-ochre-300: var(--palette-ochre-300);
+  --color-ochre-400: var(--palette-ochre-400);
+  --color-ochre-500: var(--palette-ochre-500);
+  --color-ochre-600: var(--palette-ochre-600);
+  --color-ochre-700: var(--palette-ochre-700);
+  --color-ochre-800: var(--palette-ochre-800);
+  --color-ochre-900: var(--palette-ochre-900);
+  --color-ochre-950: var(--palette-ochre-950);
+  --color-info-50: var(--palette-info-50);
+  --color-info-100: var(--palette-info-100);
+  --color-info-200: var(--palette-info-200);
+  --color-info-300: var(--palette-info-300);
+  --color-info-400: var(--palette-info-400);
+  --color-info-500: var(--palette-info-500);
+  --color-info-600: var(--palette-info-600);
+  --color-info-700: var(--palette-info-700);
+  --color-info-800: var(--palette-info-800);
+  --color-info-900: var(--palette-info-900);
+  --color-info-950: var(--palette-info-950);
+  --font-display: var(--typeface-display);
+  --font-sans: var(--typeface-sans);
+  --font-mono: var(--typeface-mono);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-2xl: 48px;
+  --radius-full: 9999px;
+  --shadow-pop: var(--elevation-pop);
+  --ease-out: var(--easing-out);
+  --animate-question-in: question-in var(--duration-slow) var(--easing-out);
+}
+
+@layer base {
+  * { border-color: var(--border); }
+  body { background-color: var(--background); color: var(--foreground); font: var(--text-body); -webkit-font-smoothing: antialiased; }
+  :focus-visible { outline: var(--ring-width) solid var(--ring); outline-offset: var(--ring-offset); }
+  ::selection { background: var(--palette-periwinkle-200); color: var(--palette-ink-950); }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; } }
+}
+
+@layer components {
+  .text-hero { font: var(--text-hero); letter-spacing: var(--text-hero-tracking); text-wrap: balance; }
+  .text-title { font: var(--text-title); letter-spacing: var(--text-title-tracking); text-wrap: balance; }
+  .text-heading { font: var(--text-heading); letter-spacing: var(--text-heading-tracking); text-wrap: balance; }
+  .text-heading-sm { font: var(--text-heading-sm); letter-spacing: var(--text-heading-sm-tracking); text-wrap: balance; }
+  .text-metric { font: var(--text-metric); letter-spacing: var(--text-metric-tracking); font-variant-numeric: lining-nums tabular-nums; }
+  .text-question-xl { font: var(--text-question-xl); letter-spacing: var(--text-question-xl-tracking); text-wrap: balance; }
+  .text-subheading { font: var(--text-subheading); }
+  .text-body { font: var(--text-body); }
+  .text-body-sm { font: var(--text-body-sm); }
+  .text-label { font: var(--text-label); }
+  .text-caption { font: var(--text-caption); }
+  .text-overline { font: var(--text-overline); letter-spacing: var(--text-overline-tracking); text-transform: uppercase; }
+  .text-question { font: var(--text-question); }
+  .text-answer { font: var(--text-answer); }
+  .tabular { font-variant-numeric: tabular-nums; }
+  /* Signature buttons: soft fill + 2px ink edge */
+  .btn { display: inline-flex; align-items: center; gap: 0.5rem; height: var(--control-md); padding: 0 1rem; border-radius: 12px; border: var(--border-ink) solid var(--primary-border); font: var(--text-label); transition: background var(--duration-fast) var(--easing-out); }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+  .btn-secondary:hover { background: var(--accent); }
+  .btn-ghost { background: transparent; border-color: transparent; color: var(--foreground); }
+  .btn-ghost:hover { background: var(--accent); }
+}

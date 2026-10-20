@@ -1,0 +1,79 @@
+IntelForm design system v2.1 "paper & ink"
+Copyright (c) 2026 EzyStudio
+
+The IntelForm design system is EzyStudio's own work: the palettes, semantic tokens, type scale
+and pairings, shape and border rules, the motion vocabulary (src/styles/motion.css), the
+components in src/components/ds, and the rulebook (docs/DESIGN.md).
+
+It is built on the open-source software and fonts below. Each is used under its own licence,
+whose full text ships with the package in node_modules (or at the URL given for the fonts).
+Keep this file, and those licence texts, with any copy or redistribution of this code.
+
+----------------------------------------------------------------------------------------------
+Component source copied into this repository
+----------------------------------------------------------------------------------------------
+
+shadcn/ui (new-york style). The files in src/components/ui started from shadcn/ui and were
+restyled to the IntelForm tokens.
+  MIT License. Copyright (c) 2023 shadcn
+  https://github.com/shadcn-ui/ui
+
+----------------------------------------------------------------------------------------------
+Libraries
+----------------------------------------------------------------------------------------------
+
+Radix UI primitives (radix-ui, @radix-ui/*)
+  MIT License. Copyright (c) 2022 WorkOS
+
+Tailwind CSS (tailwindcss, @tailwindcss/vite)
+  MIT License. Copyright (c) Tailwind Labs, Inc.
+
+tw-animate-css
+  MIT License. Copyright (c) 2025 Wombosvideo
+
+class-variance-authority
+  Apache License 2.0. Copyright 2022 Joe Bell
+
+clsx
+  MIT License. Copyright (c) Luke Edwards
+
+tailwind-merge
+  MIT License. Copyright (c) 2021 Dany Castillo
+
+Lucide icons (lucide-react)
+  ISC License. Copyright (c) 2026 Lucide Icons and Contributors
+  Icons derived from Feather: MIT License. Copyright (c) 2013-present Cole Bemis
+
+cmdk
+  MIT License. Copyright (c) 2022 Paco Coursey
+
+sonner
+  MIT License. Copyright (c) 2023 Emil Kowalski
+
+react-day-picker
+  MIT License. Copyright (c) 2014-2026 Giampaolo Bellavite and contributors
+
+recharts
+  MIT License. Copyright (c) 2015-present recharts
+
+----------------------------------------------------------------------------------------------
+Fonts (loaded from Google Fonts)
+----------------------------------------------------------------------------------------------
+
+Instrument Serif
+  SIL Open Font License 1.1. Copyright 2022 The Instrument Serif Project Authors
+  https://github.com/Instrument/instrument-serif
+
+Figtree
+  SIL Open Font License 1.1. Copyright 2022 The Figtree Project Authors
+  https://github.com/erikdkennedy/figtree
+
+JetBrains Mono
+  SIL Open Font License 1.1. Copyright 2020 The JetBrains Mono Project Authors
+  https://github.com/JetBrains/JetBrainsMono
+
+----------------------------------------------------------------------------------------------
+
+This file covers the design system layer. The rest of the application (server, form engine,
+bundled form-theme fonts from @fontsource) uses further open-source packages, each under the
+licence in its own package in node_modules.

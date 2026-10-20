@@ -1,0 +1,20 @@
+/*
+ * Fonts: the same Google Fonts import styles.css opens with. CSS only honours @import at the top of
+ * the file, and once Tailwind inlines styles.css it is no longer at the top, so the build drops it.
+ * Keep this line identical to the one in styles.css.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+/*
+ * IntelForm design system v2.1 ("paper & ink"): palettes, semantic light/dark tokens, the @theme
+ * mapping, type classes and the Instrument Serif / Figtree / JetBrains Mono fonts. Components use
+ * only its semantic tokens: bg-card, text-muted-foreground, border-input, border-border-ink...
+ */
+@import "./styles/styles.css";
+@import "tw-animate-css";
+
+/* Focus ring utility and the .form-theme tokens, shared with the public form entry. */
+@import "./styles/form-theme.css";
+
+/* Motion vocabulary (press, pop-in, fade-up, live ping), shared with the public form entry. */
+@import "./styles/motion.css";

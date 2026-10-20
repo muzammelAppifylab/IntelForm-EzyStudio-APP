@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# One Postgres service per job, so every CI run gets its own databases:
+#   intelform_ci       migrated + seeded by the steps below
+#   intelform_ci_tpl   + intelform_ci_t_*  server tests (server/test/harness.ts: template DB, one DB per test file)
+#   intelform_e2e      dropped and recreated by Playwright's web server (server/test/e2e-global-setup.ts)
+env:
+  APP_SECRET: ci-secret-0123456789abcdef0123456789abcdef
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: intelform
+          POSTGRES_PASSWORD: intelform
+          POSTGRES_DB: intelform_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U intelform"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://intelform:intelform@localhost:5432/intelform_ci
+      TEST_DATABASE_URL: postgres://intelform:intelform@localhost:5432/intelform_ci
+      E2E_DATABASE_URL: postgres://intelform:intelform@localhost:5432/intelform_e2e
+      E2E_PORT: '8793'
+      APP_URL: http://localhost:8793
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Migrate
+        run: npm run db:migrate
+      - name: Seed
+        run: npm run db:seed
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Bundle budget (/f/* entry, 120 KB gzip)
+        run: npx tsx e2e/helpers/bundle-size.ts
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end (all specs; retries 1, traces on failure)
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
+

@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "src/pages/builder/BuilderHeader.tsx"
+        ],
+        "createdAt": "2026-10-19T10:53:19.943Z",
+        "reason": "lead (Claude) triage: active-tab underline (border-b-2) on a tab with only top corners rounded (rounded-t-md); the bottom edge is square, so no clash"
+      }
+    ]
+  }
+}
