@@ -184,7 +184,7 @@ export const formSettingsPatch = z
     ...editable,
     /** Only the keys sent change. */
     webhook: webhookSettings.partial(),
-    password: z.string().min(4, 'Use at least 4 characters').max(200).nullable(),
+    password: z.string().min(8, 'Use at least 8 characters').max(200).nullable(),
   })
   .partial()
   .strict()

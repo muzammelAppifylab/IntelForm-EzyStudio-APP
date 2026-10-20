@@ -450,11 +450,74 @@ describe('security follow-ups', () => {
     await fillLimit(`public-form:${hashIp(c.ip)}`, 300)
     expect((await c.get(`/api/public/forms/${form.slug}`)).status).toBe(429)
 
-    // An unknown slug still spends a hit: the limit runs before the lookup.
+    // An unknown slug still spends a hit: the per-IP limit runs before the lookup.
     const res = await c.request('POST', '/api/public/forms/no-such-form/events', undefined, { raw: JSON.stringify({ type: 'view', session: crypto.randomUUID() }), headers: { 'content-type': 'text/plain' } })
     expect(res.status).toBe(404)
-    const [hit] = await sql`SELECT 1 FROM rate_limits WHERE key = ${`events:${hashIp(c.ip)}:no-such-form`}`
+    const [hit] = await sql`SELECT 1 FROM rate_limits WHERE key = ${`events:ip:${hashIp(c.ip)}`}`
     expect(hit).toBeTruthy()
+  })
+
+  const event = (c: ReturnType<typeof ctx.client>, slug: string) =>
+    c.request('POST', `/api/public/forms/${slug}/events`, undefined, { raw: JSON.stringify({ type: 'view', session: crypto.randomUUID() }), headers: { 'content-type': 'text/plain' } })
+
+  it('never keys event limits on the slug: per IP first, then per IP and form', async () => {
+    const form = await makeForm()
+    const c = ctx.client()
+    for (let i = 0; i < 5; i++) expect((await event(c, `made-up-${i}`)).status).toBe(404)
+    expect((await event(c, form.slug)).status).toBe(204)
+    const keys = (await sql<{ key: string; count: number }[]>`SELECT key, count FROM rate_limits WHERE key LIKE ${`events:%${hashIp(c.ip)}%`}`).map((r) => [r.key, r.count])
+    expect(keys.sort()).toEqual([[`events:${hashIp(c.ip)}:${form.id}`, 1], [`events:ip:${hashIp(c.ip)}`, 6]].sort())
+
+    // The per-IP budget covers every slug, real or not.
+    await fillLimit(`events:ip:${hashIp(c.ip)}`, 120)
+    expect((await event(c, form.slug)).status).toBe(429)
+    expect((await event(c, 'another-made-up')).status).toBe(429)
+  })
+
+  it('pools an IPv6 /64 into one rate-limit key, and keeps IPv4 per address', async () => {
+    const form = await makeForm({ passwordHash: await hashPassword('correct horse') })
+    const a = ctx.client('2001:db8:aa:1::1')
+    const b = ctx.client('2001:db8:aa:1:ffff:ffff:ffff:fffe')
+    const other = ctx.client('2001:db8:aa:2::1')
+    for (let i = 0; i < 10; i++) expect((await a.post(`/api/public/forms/${form.slug}/unlock`, { password: `wrong-${i}` })).status).toBe(422)
+    // Same /64, different address: same budget.
+    expect((await b.post(`/api/public/forms/${form.slug}/unlock`, { password: 'wrong-x' })).status).toBe(429)
+    // Next /64 over: its own budget.
+    expect((await other.post(`/api/public/forms/${form.slug}/unlock`, { password: 'wrong-y' })).status).toBe(422)
+    const [row] = await sql`SELECT 1 FROM rate_limits WHERE key = ${`unlock:${hashIp('2001:db8:aa:1::/64')}:${form.id}`}`
+    expect(row).toBeTruthy()
+
+    // Submits from the /64 share one key too.
+    const open = await makeForm()
+    expect((await a.post(`/api/public/forms/${open.slug}/responses`, body(open, good()))).status).toBe(200)
+    expect((await b.post(`/api/public/forms/${open.slug}/responses`, body(open, good()))).status).toBe(200)
+    const [respond] = await sql<{ count: number }[]>`SELECT count FROM rate_limits WHERE key = ${`respond:${hashIp('2001:db8:aa:1::/64')}:${open.id}`}`
+    expect(respond.count).toBe(2)
+    // The stored response hash stays per address.
+    const hashes = await sql<{ ip_hash: string }[]>`SELECT ip_hash FROM responses WHERE form_id = ${open.id}`
+    expect(new Set(hashes.map((h) => h.ip_hash))).toEqual(new Set([hashIp('2001:db8:aa:1::1'), hashIp('2001:db8:aa:1:ffff:ffff:ffff:fffe')]))
+  })
+
+  it('caps wrong passwords per form across all IPs, without counting correct ones', async () => {
+    const form = await makeForm({ passwordHash: await hashPassword('correct horse') })
+    const key = `unlock-fail:form:${form.id}`
+    const failures = async () => (await sql<{ count: number }[]>`SELECT count FROM rate_limits WHERE key = ${key}`)[0]?.count ?? 0
+    expect((await ctx.client().post(`/api/public/forms/${form.slug}/unlock`, { password: 'wrong' })).status).toBe(422)
+    expect((await ctx.client().post(`/api/public/forms/${form.slug}/unlock`, { password: 'correct horse' })).status).toBe(200)
+    expect(await failures()).toBe(1)
+
+    await fillLimit(key, 100)
+    // A fresh address, even with the right password, waits for the window to pass.
+    const res = await ctx.client().post(`/api/public/forms/${form.slug}/unlock`, { password: 'correct horse' })
+    expect(res.status).toBe(429)
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0)
+    // Other forms are unaffected; forms without a password never touch the key.
+    const other = await makeForm({ passwordHash: await hashPassword('correct horse') })
+    expect((await ctx.client().post(`/api/public/forms/${other.slug}/unlock`, { password: 'correct horse' })).status).toBe(200)
+    const open = await makeForm()
+    expect((await ctx.client().post(`/api/public/forms/${open.slug}/unlock`, { password: 'anything' })).status).toBe(200)
+    const [none] = await sql`SELECT 1 FROM rate_limits WHERE key = ${`unlock-fail:form:${open.id}`}`
+    expect(none).toBeUndefined()
   })
 
   it('exposes the form language', async () => {

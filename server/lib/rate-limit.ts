@@ -30,6 +30,18 @@ export async function hit(key: string, windowSeconds: number): Promise<number> {
   return row.count
 }
 
+/**
+ * Gives back one hit in the current window, for limits that should count only failures: take
+ * the hit with `rateLimit` before the attempt (so parallel attempts can't overshoot), then
+ * release it when the attempt succeeds.
+ */
+export async function release(key: string, windowSeconds: number): Promise<void> {
+  await sql`
+    UPDATE rate_limits SET count = greatest(count - 1, 0)
+    WHERE key = ${key} AND window_start = date_bin(make_interval(secs => ${windowSeconds}), now(), 'epoch')
+  `
+}
+
 export function tooMany(retryAfterSeconds: number, message?: string): ApiError {
   const wait = Math.max(1, Math.round(retryAfterSeconds))
   const human = wait < 90 ? 'a minute' : `${Math.ceil(wait / 60)} minutes`

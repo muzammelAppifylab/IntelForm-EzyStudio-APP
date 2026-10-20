@@ -43,8 +43,52 @@ export function normalizeIp(raw: string): string | null {
   return isIP(ip) ? ip.toLowerCase() : null
 }
 
-/** Rate-limit key part for the caller: the salted IP hash, or "unknown" without a socket (tests). */
+/**
+ * The address block one client controls, for rate limiting: an IPv4 address stays as is, an
+ * IPv6 address becomes its /64 prefix (`2001:db8:0:1::/64`). One host or home router is
+ * normally handed a whole /64, so counting each /128 separately would let a single client
+ * rotate through billions of addresses. An IPv4-mapped address (`::ffff:...`) maps back to
+ * the IPv4 address. Takes the output of `normalizeIp`; anything else is returned unchanged.
+ */
+export function rateLimitBucket(ip: string): string {
+  if (isIP(ip) !== 6) return ip
+  const groups = ipv6Groups(ip)
+  if (!groups) return ip
+  // ::ffff:a.b.c.d written in hex (::ffff:102:304), which normalizeIp leaves as IPv6.
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+    return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join('.')
+  }
+  return `${groups.slice(0, 4).map((g) => g.toString(16)).join(':')}::/64`
+}
+
+/** The eight 16-bit groups of an IPv6 address (handles `::`, a dotted IPv4 tail and a %zone). */
+function ipv6Groups(ip: string): number[] | null {
+  let s = ip.split('%')[0]
+  const tail = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s)
+  if (tail) {
+    const [a, b, c, d] = tail.slice(2).map(Number)
+    s = `${tail[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`
+  }
+  const halves = s.split('::')
+  if (halves.length > 2) return null
+  const head = halves[0] ? halves[0].split(':') : []
+  const rest = halves.length === 2 ? (halves[1] ? halves[1].split(':') : []) : null
+  const parts = rest === null ? head : [...head, ...Array<string>(8 - head.length - rest.length).fill('0'), ...rest]
+  if (parts.length !== 8 || parts.some((p) => !/^[0-9a-f]{1,4}$/i.test(p))) return null
+  return parts.map((p) => parseInt(p, 16))
+}
+
+/** Rate-limit key part for an address: the salted hash of its `rateLimitBucket`. */
+export function ipKeyFor(ip: string): string {
+  return hashIp(rateLimitBucket(ip))
+}
+
+/**
+ * Rate-limit key part for the caller: the salted hash of their address block (IPv4 address
+ * or IPv6 /64), or "unknown" without a socket (tests). Stored hashes (responses, sessions)
+ * use the full address via `hashIp`; only rate limits pool the /64.
+ */
 export function ipKey(c: Context): string {
   const ip = clientIp(c)
-  return ip ? hashIp(ip) : 'unknown'
+  return ip ? ipKeyFor(ip) : 'unknown'
 }
