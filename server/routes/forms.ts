@@ -35,6 +35,7 @@ import { ApiError, notFound } from '../lib/errors'
 import { hashPassword } from '../lib/password'
 import { assertSafeUrl } from '../lib/webhooks'
 import { getSetting } from '../lib/settings'
+import { removeSignatureDir } from '../lib/uploads'
 import { readBody, uuidParam, UUID_RE } from '../lib/validate'
 import { requirePermission, requireUser, type AppEnv } from '../middleware/auth'
 
@@ -611,5 +612,7 @@ formsRoutes.delete('/:id', requirePermission('forms.edit'), async (c) => {
   }
   // Cascades to versions, responses, events, webhook deliveries and old slugs.
   await sql`DELETE FROM forms WHERE id = ${id}`
+  // Then the responses' signature PNGs (logged, not failed, if storage is down).
+  await removeSignatureDir(id)
   return c.body(null, 204)
 })

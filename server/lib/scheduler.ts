@@ -3,6 +3,7 @@ import { failAbandonedJobs, purgeJobs, reportDbError } from './jobs'
 import { logger } from './logger'
 import { purgeLoginAttempts, purgeRateLimits } from './rate-limit'
 import { getSetting } from './settings'
+import { removeSignatureUrls } from './uploads'
 import { trimWebhookDeliveries } from './webhooks'
 
 /**
@@ -102,15 +103,20 @@ export async function applyRetention(): Promise<number> {
   if (!retentionDays || retentionDays < 1) return 0
   let total = 0
   for (;;) {
-    const deleted = await sql<{ form_id: string }[]>`
+    const deleted = await sql<{ form_id: string; sig_urls: string[] }[]>`
       DELETE FROM responses WHERE id IN (
         SELECT id FROM responses
         WHERE submitted_at < now() - make_interval(days => ${retentionDays})
         LIMIT ${RETENTION_BATCH}
       )
-      RETURNING form_id
+      RETURNING form_id, ARRAY(
+        SELECT v->>'url' FROM jsonb_each(answers) e(k, v)
+        WHERE jsonb_typeof(v) = 'object' AND v->>'url' LIKE '%/intelform/signatures/%'
+      ) AS sig_urls
     `
     total += deleted.count
+    // The rows are gone (the DELETE committed on its own): now their signature PNGs.
+    await removeSignatureUrls(deleted.flatMap((r) => r.sig_urls))
     const formIds = [...new Set(deleted.map((r) => r.form_id))].sort()
     if (formIds.length) await recountResponses(formIds)
     if (deleted.count < RETENTION_BATCH) break

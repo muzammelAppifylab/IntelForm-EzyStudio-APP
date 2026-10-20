@@ -5,6 +5,7 @@ import { fileTypeFromBuffer } from 'file-type'
 import { MAX_UPLOAD_BYTES, SVG_PURPOSES, type UploadPurpose } from '../../shared/settings-app'
 import { env } from '../env'
 import { ApiError } from './errors'
+import { logger } from './logger'
 
 /**
  * Image storage. With BUNNY_STORAGE_ZONE + BUNNY_STORAGE_KEY + BUNNY_CDN_URL set, files go to
@@ -18,6 +19,7 @@ export const LOCAL_URL_PREFIX = '/api/uploads/files/'
 interface StorageDriver {
   name: 'bunny' | 'local'
   put(path: string, buf: Buffer, contentType: string): Promise<string>
+  /** Deletes one file, or a folder and everything in it when `path` ends in '/'. A missing path is fine. */
   remove(path: string): Promise<void>
   publicBase: string
 }
@@ -70,7 +72,8 @@ const localDriver: StorageDriver = {
   },
   async remove(path) {
     const full = localFilePath(path)
-    if (full) await rm(full, { force: true })
+    // A path ending in '/' is a folder, deleted with everything in it (as Bunny does).
+    if (full) await rm(full, { force: true, recursive: path.endsWith('/') })
   },
 }
 
@@ -94,6 +97,57 @@ function checkPath(path: string): string {
 export async function storeBuffer(buf: Buffer, contentType: string, path: string): Promise<{ url: string }> {
   const url = await storageDriver().put(checkPath(path), buf, contentType)
   return { url }
+}
+
+// ---------------------------------------------------------------------------
+// Signature files
+// ---------------------------------------------------------------------------
+
+/** Storage folder of one form's signature PNGs. */
+export const signatureDir = (formId: string) => `intelform/signatures/${formId}/`
+const SIGNATURE_FILE = /^intelform\/signatures\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.png$/
+
+/**
+ * Storage path of a signature URL the server stored, or null for anything else. Both drivers'
+ * URL prefixes are recognised, so a file written before a switch to (or from) Bunny still
+ * resolves; it is then removed through the driver configured now.
+ */
+export function signaturePathFromUrl(url: unknown): string | null {
+  if (typeof url !== 'string') return null
+  const bases = [LOCAL_URL_PREFIX]
+  if (env.BUNNY_CDN_URL) bases.push(env.BUNNY_CDN_URL.replace(/\/+$/, '') + '/')
+  for (const base of bases) {
+    if (!url.startsWith(base)) continue
+    const path = url.slice(base.length)
+    if (SIGNATURE_FILE.test(path)) return path
+  }
+  return null
+}
+
+/** Deletes stored files by storage path. Never throws: failures are logged and the caller carries on. */
+export async function removeStoredFiles(paths: string[]): Promise<void> {
+  if (!paths.length) return
+  const d = storageDriver()
+  const results = await Promise.allSettled(paths.map((p) => d.remove(checkPath(p))))
+  const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+  if (failed.length) logger.error({ err: failed[0].reason, failed: failed.length, total: paths.length }, 'stored file delete failed')
+}
+
+/**
+ * Deletes the signature files behind stored answer URLs; anything that isn't one is skipped.
+ * Call it after the rows are deleted and committed. Never throws.
+ */
+export async function removeSignatureUrls(urls: readonly unknown[]): Promise<void> {
+  await removeStoredFiles(urls.map(signaturePathFromUrl).filter((p): p is string => p !== null))
+}
+
+/** Deletes a form's whole signature folder (after the form row is gone). Never throws. */
+export async function removeSignatureDir(formId: string): Promise<void> {
+  try {
+    await storageDriver().remove(checkPath(signatureDir(formId)))
+  } catch (err) {
+    logger.error({ err, formId }, 'signature folder delete failed')
+  }
 }
 
 /** Settings "Test upload": writes and deletes a 1-byte file. */

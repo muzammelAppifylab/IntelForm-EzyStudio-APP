@@ -11,6 +11,7 @@ import type { FormDefinition, FormField } from '../../shared/form/definition'
 import { interpolate } from '../../shared/form/logic'
 import { sql } from '../db/client'
 import { notFound } from '../lib/errors'
+import { removeSignatureUrls } from '../lib/uploads'
 import { loadCatalog, parseField, type FormCatalog } from './catalog'
 import { displayAnswer } from './format'
 import { keysetFragments, orderFragment, reverseOrderFragment, safeTz, sortSpec, whereFragment } from './query'
@@ -122,13 +123,24 @@ export async function responseDetail(formId: string, rid: string, q: ResponsesFi
   }
 }
 
-/** Deletes responses of one form and keeps forms.response_count / last_response_at in sync. */
+/**
+ * Deletes responses of one form and keeps forms.response_count / last_response_at in sync.
+ * Their signature PNGs are deleted from storage once the transaction has committed.
+ */
 export async function deleteResponses(formId: string, ids: string[]): Promise<number> {
-  return sql.begin(async (tx) => {
+  const urls: string[] = []
+  const count = await sql.begin(async (tx) => {
     // Lock the form row so concurrent deletes and submits serialise on the counter.
     const [form] = await tx`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`
     if (!form) throw notFound('That form no longer exists')
-    const deleted = await tx`DELETE FROM responses WHERE form_id = ${formId} AND id = ANY(${sql.array(ids)}::uuid[]) RETURNING id`
+    const deleted = await tx<{ sig_urls: string[] }[]>`
+      DELETE FROM responses WHERE form_id = ${formId} AND id = ANY(${sql.array(ids)}::uuid[])
+      RETURNING ARRAY(
+        SELECT v->>'url' FROM jsonb_each(answers) e(k, v)
+        WHERE jsonb_typeof(v) = 'object' AND v->>'url' LIKE '%/intelform/signatures/%'
+      ) AS sig_urls
+    `
+    for (const r of deleted) urls.push(...r.sig_urls)
     if (deleted.count > 0) {
       await tx`
         UPDATE forms SET
@@ -139,4 +151,6 @@ export async function deleteResponses(formId: string, ids: string[]): Promise<nu
     }
     return deleted.count
   })
+  await removeSignatureUrls(urls)
+  return count
 }

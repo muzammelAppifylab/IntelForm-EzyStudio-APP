@@ -6,7 +6,7 @@ import { BOOL_OPS, PRESENCE_OPS, base, defineType, isRecord, str, type AnswerCon
 
 /**
  * Submit format: the browser sends `{ url: "data:image/png;base64,…" }`. The server checks it
- * (isSignatureDataUrl, then the PNG magic bytes), uploads the PNG (storeBuffer) and stores
+ * (isSignatureDataUrl, then a strict PNG check in server/lib/png.ts), uploads the PNG (storeBuffer) and stores
  * `{ url: "https://cdn…/sig.png" }`. Only the data URL validates here: a client-supplied URL
  * would let a respondent point a stored answer (and the owner's emails) at any image.
  */
