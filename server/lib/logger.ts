@@ -42,7 +42,21 @@ export const requestIdMiddleware = requestId({
   generator: () => crypto.randomUUID(),
 })
 
-/** One line per API request: method, path, status, duration, user id and role. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The request path with secrets in it replaced, for logs. Invite links carry their token in
+ * the path (/api/invites/<token>, …/accept), and uploaded files are unguessable capability
+ * URLs (respondent signatures, file answers), so both are cut. Invite ids (UUIDs, used by the
+ * dashboard's DELETE) are not secret and stay.
+ */
+export function redactPath(path: string): string {
+  return path
+    .replace(/^(\/api\/invites\/)([^/]+)/, (all, prefix: string, seg: string) => (UUID.test(seg) ? all : `${prefix}[redacted]`))
+    .replace(/^(\/api\/uploads\/files\/(?:.*\/)?)[^/]+$/, '$1[redacted]')
+}
+
+/** One line per API request: method, path (secrets cut, see redactPath), status, duration, user id and role. */
 export const accessLog: MiddlewareHandler = async (c, next) => {
   const start = performance.now()
   await next()
@@ -51,7 +65,7 @@ export const accessLog: MiddlewareHandler = async (c, next) => {
   const line = {
     reqId: c.get('requestId' as never) as string | undefined,
     method: c.req.method,
-    path: c.req.path,
+    path: redactPath(c.req.path),
     status,
     ms: Math.round(performance.now() - start),
     userId: user?.id,

@@ -11,6 +11,10 @@ import { logger } from './logger'
  * - Wake-ups: a pg_notify sent inside the transaction (delivered on commit) and a microtask
  *   drain after enqueue start delivery at once; a 5 s poller picks up anything left over.
  * - Failures retry with exponential backoff until max_attempts, then stay as failed rows.
+ * - Payloads hold secrets and personal data (invite and reset links, answers in notification
+ *   emails and webhooks). Once a job is done or failed for good its payload is replaced by
+ *   `redactPayload(...)`, so a dump or backup of `jobs` yields no usable link or answer. Nothing
+ *   reads a finished job's payload (webhook Resend uses webhook_deliveries).
  */
 
 export interface Job<P = unknown> {
@@ -36,6 +40,24 @@ const POLL_MS = 5000
 const LOCK_SECONDS = 120
 
 const handlers = new Map<string, JobHandler>()
+
+/** Non-sensitive ids a finished job keeps, to tell what it was for. Everything else is dropped. */
+const KEEP_KEYS = ['formId', 'responseId'] as const
+
+/**
+ * What a done or permanently failed job keeps of its payload: `{ redacted: true }` plus the
+ * form and response ids, when present. Same as the SQL in failAbandonedJobs and 0007_privacy.sql.
+ */
+export function redactPayload(payload: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = { redacted: true }
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    for (const key of KEEP_KEYS) {
+      const v = (payload as Record<string, unknown>)[key]
+      if (typeof v === 'string' && v.length <= 64) out[key] = v
+    }
+  }
+  return out
+}
 
 export function registerJob<P>(kind: string, handler: JobHandler<P>): void {
   handlers.set(kind, handler as JobHandler)
@@ -141,7 +163,10 @@ async function run(row: JobRow): Promise<void> {
   try {
     if (!handler) throw new Error(`No handler registered for job kind "${row.kind}"`)
     await handler(row.payload, job)
-    await sql`UPDATE jobs SET done_at = now(), locked_until = NULL, last_error = NULL WHERE id = ${row.id}`
+    await sql`
+      UPDATE jobs SET done_at = now(), locked_until = NULL, last_error = NULL, payload = ${sql.json(redactPayload(row.payload) as never)}
+      WHERE id = ${row.id}
+    `
   } catch (err) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 2000)
     const final = row.attempts >= row.max_attempts
@@ -152,6 +177,7 @@ async function run(row: JobRow): Promise<void> {
         locked_until = NULL,
         last_error = ${message},
         failed_at = ${final ? sql`now()` : null},
+        payload = ${final ? sql`${sql.json(redactPayload(row.payload) as never)}` : sql`payload`},
         run_at = ${final ? sql`run_at` : sql`now() + make_interval(secs => ${delay})`}
       WHERE id = ${row.id}
     `
@@ -195,7 +221,9 @@ export async function stopJobs(timeoutMs = 10_000): Promise<void> {
 export async function failAbandonedJobs(): Promise<number> {
   const rows = await sql`
     UPDATE jobs SET failed_at = now(), locked_until = NULL,
-      last_error = COALESCE(last_error, 'The worker stopped while running this job')
+      last_error = COALESCE(last_error, 'The worker stopped while running this job'),
+      payload = jsonb_build_object('redacted', true)
+        || jsonb_strip_nulls(jsonb_build_object('formId', payload->'formId', 'responseId', payload->'responseId'))
     WHERE done_at IS NULL AND failed_at IS NULL AND attempts >= max_attempts
       AND locked_until IS NOT NULL AND locked_until < now()
   `

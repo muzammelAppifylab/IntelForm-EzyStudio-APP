@@ -270,10 +270,15 @@ export async function deliverWebhook(formId: string, payload: unknown, opts: Del
   const durationMs = Math.round(performance.now() - started)
   const ok = error === null
 
-  // The response may have been deleted since the job was queued: log the delivery without the link.
+  // The log row is deleted with its response (ON DELETE CASCADE, 0007_privacy.sql). If the
+  // response went away while this was in flight, log the attempt without the link or the
+  // answers, so they don't outlive the response. Test sends carry sample answers only.
   const [row] = await sql<{ id: string }[]>`
+    WITH r AS (SELECT (SELECT id FROM responses WHERE id = ${opts.responseId ?? null}::uuid) AS id)
     INSERT INTO webhook_deliveries (form_id, response_id, url, status_code, duration_ms, response_body, is_test, webhook_id, error, payload)
-    VALUES (${formId}, (SELECT id FROM responses WHERE id = ${opts.responseId ?? null}::uuid), ${url}, ${statusCode}, ${durationMs}, ${captured}, ${!!opts.test}, ${webhookId}, ${error}, ${sql.json(payload as never)})
+    SELECT ${formId}, r.id, ${url}, ${statusCode}, ${durationMs}, ${captured}, ${!!opts.test}, ${webhookId}, ${error},
+      CASE WHEN ${!!opts.test} OR r.id IS NOT NULL THEN ${sql.json(payload as never)}::jsonb END
+    FROM r
     RETURNING id
   `
   return { deliveryId: row.id, webhookId, ok, statusCode, durationMs, error }
@@ -307,12 +312,19 @@ function describeError(err: unknown): string {
   return (e?.message ?? String(err)).slice(0, 300)
 }
 
-/** Sends a logged delivery again: same payload and webhook-id, fresh timestamp and signature. */
+/**
+ * Sends a logged delivery again: same payload and webhook-id, fresh timestamp and signature.
+ * A real delivery whose response was deleted is refused: its answers must not go out again.
+ */
 export async function resendDelivery(deliveryId: string): Promise<DeliveryResult> {
   const [d] = await sql<{ form_id: string; response_id: string | null; payload: unknown; webhook_id: string | null; is_test: boolean; url: string }[]>`
     SELECT form_id, response_id, payload, webhook_id, is_test, url FROM webhook_deliveries WHERE id = ${deliveryId}
   `
   if (!d || d.payload === null) throw notFound('That delivery is no longer in the log')
+  if (!d.is_test) {
+    const [response] = d.response_id ? await sql`SELECT 1 FROM responses WHERE id = ${d.response_id}` : []
+    if (!response) throw new ApiError(410, 'response_deleted', 'That response was deleted, so its webhook can’t be resent')
+  }
   const [form] = await sql<{ settings: unknown }[]>`SELECT settings FROM forms WHERE id = ${d.form_id}`
   const current = form ? readWebhookConfig(form.settings).url : null
   return deliverWebhook(d.form_id, d.payload, {
@@ -329,6 +341,9 @@ export async function queueWebhook(tx: Queryable, formId: string, responseId: st
 }
 
 registerJob<{ formId: string; responseId: string; payload: unknown }>('webhook', async ({ formId, responseId, payload }) => {
+  // Response deleted (by hand or retention) since the job was queued: don't send its answers.
+  const [response] = await sql`SELECT 1 FROM responses WHERE id = ${responseId}::uuid`
+  if (!response) return
   const result = await deliverWebhook(formId, payload, { responseId }).catch((err: unknown) => {
     // Form deleted or webhook switched off since the job was queued: nothing to do.
     if (err instanceof ApiError) return null

@@ -6,7 +6,7 @@ import type { HealthResponse } from '../shared/api'
 import { sql } from './db/client'
 import { appOrigin } from './env'
 import { ApiError, conflict, errorResponse, isUniqueViolation } from './lib/errors'
-import { accessLog, logger, requestIdMiddleware } from './lib/logger'
+import { accessLog, logger, redactPath, requestIdMiddleware } from './lib/logger'
 import { surfaceHeaders } from './middleware/security-headers'
 import { authRoutes } from './routes/auth'
 import { builderRoutes } from './routes/builder'
@@ -103,7 +103,7 @@ app.onError((err, c) => {
     return errorResponse(c, new ApiError(err.status, 'request_rejected', 'This request was rejected'))
   }
   const requestId = c.get('requestId')
-  logger.error({ err, reqId: requestId, method: c.req.method, path: c.req.path }, 'unhandled error')
+  logger.error({ err, reqId: requestId, method: c.req.method, path: redactPath(c.req.path) }, 'unhandled error')
   return errorResponse(c, new ApiError(500, 'server_error', 'Something went wrong on our side. Try again.'), requestId)
 })
 

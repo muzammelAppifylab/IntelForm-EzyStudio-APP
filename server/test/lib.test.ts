@@ -1,9 +1,11 @@
 import './env'
 import { Hono } from 'hono'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { decryptSecret, encryptSecret, hashIp, needsReencrypt } from '../lib/crypto'
 import { CSV_BOM, contentDisposition, csvEscape, csvRow } from '../lib/csv'
 import { clientIp, ipKeyFor, normalizeIp, rateLimitBucket } from '../lib/ip'
+import { redactPayload } from '../lib/jobs'
+import { accessLog, logger, redactPath } from '../lib/logger'
 import { deviceOf } from '../lib/request-meta'
 import { assertSafeUrl, generateWebhookSecret, isPrivateAddress, readWebhookConfig, safeLookup, signWebhook } from '../lib/webhooks'
 import { contentSecurityPolicy, inlineScriptHashes, surfaceFor } from '../middleware/security-headers'
@@ -190,6 +192,45 @@ describe('client IP', () => {
     expect(ipKeyFor('2001:db8:1:2::1')).not.toBe(ipKeyFor('2001:db8:1:3::1'))
     expect(ipKeyFor('203.0.113.9')).toBe(hashIp('203.0.113.9'))
     expect(ipKeyFor('203.0.113.9')).not.toBe(ipKeyFor('203.0.113.10'))
+  })
+})
+
+describe('log redaction', () => {
+  it('cuts invite tokens and upload file names from paths', () => {
+    expect(redactPath('/api/invites/abcDEF_123-xyz')).toBe('/api/invites/[redacted]')
+    expect(redactPath('/api/invites/abcDEF_123-xyz/accept')).toBe('/api/invites/[redacted]/accept')
+    // Invite ids are not secret.
+    expect(redactPath('/api/invites/3f2b8c1e-1d2a-4b5c-9d8e-7f6a5b4c3d2e')).toBe('/api/invites/3f2b8c1e-1d2a-4b5c-9d8e-7f6a5b4c3d2e')
+    expect(redactPath('/api/invites')).toBe('/api/invites')
+    expect(redactPath('/api/uploads/files/intelform/signature/9b1d.png')).toBe('/api/uploads/files/intelform/signature/[redacted]')
+    expect(redactPath('/api/forms/abc/responses')).toBe('/api/forms/abc/responses')
+  })
+
+  it('the access log line for an invite never holds the token', async () => {
+    const token = 'Zx9_live-invite-token-0123456789abcdefghijk'
+    const app = new Hono()
+      .use(accessLog)
+      .get('/api/invites/:token', (c) => c.json({ ok: true }))
+      .post('/api/invites/:token/accept', (c) => c.json({ ok: true }, 201))
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => {})
+    try {
+      await app.request(`/api/invites/${token}`)
+      await app.request(`/api/invites/${token}/accept`, { method: 'POST' })
+      const lines = info.mock.calls.map((call) => JSON.stringify(call))
+      expect(lines).toHaveLength(2)
+      for (const line of lines) expect(line).not.toContain(token)
+      expect(lines[1]).toContain('/api/invites/[redacted]/accept')
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  it('finished job payloads keep only the form and response ids', () => {
+    expect(redactPayload({ to: ['a@example.com'], text: 'https://x/reset/tok' })).toEqual({ redacted: true })
+    expect(redactPayload({ formId: 'f', responseId: 'r', payload: { answers: { q: 'secret' } } })).toEqual({ redacted: true, formId: 'f', responseId: 'r' })
+    expect(redactPayload({ formId: { nested: 'secret' } })).toEqual({ redacted: true })
+    expect(redactPayload(null)).toEqual({ redacted: true })
+    expect(redactPayload(['x'])).toEqual({ redacted: true })
   })
 })
 
