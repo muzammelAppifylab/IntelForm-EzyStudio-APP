@@ -48,7 +48,10 @@ export function Paged({ ctx }: { ctx: LayoutContext }) {
     engine.showErrors(errs, ids)
     const first = ids.find((id) => errs[id])
     if (first) return focusField(pageRef.current, first)
-    if (!isLast) return goTo(p + 1)
+    if (!isLast) {
+      ctx.playStep()
+      return goTo(p + 1)
+    }
     const r = await ctx.submit()
     if (r.ok) return
     const errorId = pages.flat().find((id) => r.errors[id])

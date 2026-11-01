@@ -45,7 +45,7 @@ export const formTheme = z.object({
   /** The preset this theme started from (informational; settings below are the truth). */
   preset: z.string().max(40).nullable().default('intelform'),
   colors: themeColors.default(DEFAULT_COLORS),
-  font: z.enum(THEME_FONTS).default('Inter'),
+  font: z.enum(THEME_FONTS).default('Figtree'),
   /** Font for question text; null = same as `font`. */
   questionFont: z.enum(THEME_FONTS).nullable().default(null),
   fontSize: z.enum(FONT_SIZES).default('m'),

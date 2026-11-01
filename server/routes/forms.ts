@@ -6,6 +6,7 @@ import {
   createFormInput,
   deleteFormInput,
   formPatchInput,
+  FORMS_PAGE_SIZE,
   formsListQuery,
   formsViewInput,
   saveAsTemplateInput,
@@ -14,6 +15,7 @@ import {
   type FormListItem,
   type FormPatchResponse,
   type FormsListResponse,
+  type FormsStrip,
   type FormStatus,
   type FormStatusResponse,
   type FormsView,
@@ -213,60 +215,117 @@ const slugTakenError = () =>
 // List and the weekly strip
 // ---------------------------------------------------------------------------
 
+/**
+ * All-time starts for `f`, from the rollup: raw form_events are purged after 30 days, so
+ * counting them would inflate older forms' completion rates.
+ */
+const startsJoin = sql`CROSS JOIN LATERAL (SELECT COALESCE(sum(starts), 0)::int AS n FROM form_event_counts WHERE form_id = f.id) e`
+
 formsRoutes.get('/', requirePermission('forms.view'), async (c) => {
   const parsed = formsListQuery.safeParse(c.req.query())
   const query = parsed.success ? parsed.data : formsListQuery.parse({})
 
   const search = query.q ? `%${query.q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%` : null
+  // Each ends on id so pages never repeat or skip a form that ties on the sort key.
   const order = {
-    updated: sql`f.updated_at DESC`,
-    created: sql`f.created_at DESC`,
-    title: sql`lower(f.title) ASC, f.created_at DESC`,
-    responses: sql`f.response_count DESC, f.updated_at DESC`,
+    updated: sql`f.updated_at DESC, f.id`,
+    created: sql`f.created_at DESC, f.id`,
+    title: sql`lower(f.title) ASC, f.created_at DESC, f.id`,
+    responses: sql`f.response_count DESC, f.updated_at DESC, f.id`,
   }[query.sort]
 
-  const rows = await sql<(Omit<FormListItem, 'completionRate'> & { starts: number })[]>`
-    SELECT f.id, f.title, f.slug, f.status,
-      COALESCE(f.draft->>'layout', 'all_at_once') AS layout,
-      f.response_count AS "responseCount",
-      COALESCE(e.n, 0)::int AS starts,
-      (f.has_unpublished AND f.published_version_id IS NOT NULL) AS "hasUnpublished",
-      f.created_at AS "createdAt", f.updated_at AS "updatedAt"
-    FROM forms f
-    LEFT JOIN (SELECT form_id, count(*) AS n FROM form_events WHERE type = 'start' GROUP BY form_id) e ON e.form_id = f.id
-    WHERE true
+  const matches = sql`
+    true
       ${query.status !== 'all' ? sql`AND f.status = ${query.status}` : sql``}
       ${search ? sql`AND f.title ILIKE ${search}` : sql``}
-    ORDER BY ${order}
   `
+  // Page the forms first, then count starts and this week's responses for that page only.
+  const [rows, [{ total, matched }]] = await Promise.all([
+    sql<(Omit<FormListItem, 'completionRate'> & { starts: number })[]>`
+      WITH paged AS (
+        SELECT f.id, f.title, f.slug, f.status, f.draft->>'layout' AS layout, f.response_count,
+          f.has_unpublished, f.published_version_id, f.created_at, f.updated_at
+        FROM forms f
+        WHERE ${matches}
+        ORDER BY ${order}
+        LIMIT ${FORMS_PAGE_SIZE} OFFSET ${(query.page - 1) * FORMS_PAGE_SIZE}
+      )
+      SELECT f.id, f.title, f.slug, f.status,
+        COALESCE(f.layout, 'all_at_once') AS layout,
+        f.response_count AS "responseCount",
+        e.n AS starts,
+        w.n AS "newThisWeek",
+        (f.has_unpublished AND f.published_version_id IS NOT NULL) AS "hasUnpublished",
+        f.created_at AS "createdAt", f.updated_at AS "updatedAt"
+      FROM paged f
+      ${startsJoin}
+      CROSS JOIN LATERAL (SELECT count(*)::int AS n FROM responses WHERE form_id = f.id AND submitted_at >= now() - interval '7 days') w
+      ORDER BY ${order}
+    `,
+    sql<{ total: number; matched: number }[]>`
+      SELECT count(*)::int AS total, count(*) FILTER (WHERE ${matches})::int AS matched FROM forms f
+    `,
+  ])
 
   const forms: FormListItem[] = rows.map(({ starts, ...r }) => ({
     ...r,
     completionRate: starts > 0 ? Math.min(1, r.responseCount / starts) : null,
   }))
+  return c.json<FormsListResponse>({ forms, total, matched, page: query.page, pageSize: FORMS_PAGE_SIZE })
+})
 
-  const [[{ total }], [week], mostActive] = await Promise.all([
-    sql<{ total: number }[]>`SELECT count(*)::int AS total FROM forms`,
+/** The weekly strip above the list: workspace-wide, so it ignores search, filter, sort and page. */
+formsRoutes.get('/strip', requirePermission('forms.view'), async (c) => {
+  const [[counts], [week], mostActive, days] = await Promise.all([
+    sql<(FormsStrip['counts'] & { avg_completion: number | null })[]>`
+      SELECT count(*)::int AS "all",
+        count(*) FILTER (WHERE f.status = 'live')::int AS live,
+        count(*) FILTER (WHERE f.status = 'draft')::int AS draft,
+        count(*) FILTER (WHERE f.status = 'closed')::int AS closed,
+        avg(LEAST(1, f.response_count::float / e.n)) FILTER (WHERE e.n > 0) AS avg_completion
+      FROM forms f
+      LEFT JOIN (SELECT form_id, sum(starts) AS n FROM form_event_counts GROUP BY form_id) e ON e.form_id = f.id
+    `,
     sql<{ this_week: number; last_week: number }[]>`
       SELECT
         count(*) FILTER (WHERE submitted_at >= now() - interval '7 days')::int AS this_week,
         count(*) FILTER (WHERE submitted_at < now() - interval '7 days')::int AS last_week
       FROM responses WHERE submitted_at >= now() - interval '14 days'
     `,
-    sql<{ id: string; title: string; count: number }[]>`
-      SELECT f.id, f.title, count(*)::int AS count
-      FROM responses r JOIN forms f ON f.id = r.form_id
-      WHERE r.submitted_at >= now() - interval '7 days'
-      GROUP BY f.id, f.title
-      ORDER BY count DESC, f.title
-      LIMIT 3
+    sql<FormsStrip['mostActive']>`
+      SELECT f.id, f.title, f.status, f.count,
+        CASE WHEN e.n > 0 THEN LEAST(1, f.response_count::float / e.n) END AS "completionRate"
+      FROM (
+        SELECT f.id, f.title, f.status, f.response_count, top.count
+        FROM (SELECT form_id, count(*)::int AS count FROM responses WHERE submitted_at >= now() - interval '7 days' GROUP BY form_id) top
+        JOIN forms f ON f.id = top.form_id
+        ORDER BY top.count DESC, f.title
+        LIMIT 3
+      ) f
+      ${startsJoin}
+      ORDER BY f.count DESC, f.title
     `,
+    // Calendar days in the app's timezone, today last: one pass over the last 8 days.
+    getSetting('general').then(({ timezone }) => sql<FormsStrip['days']>`
+      SELECT to_char(d.day, 'YYYY-MM-DD') AS date, COALESCE(r.n, 0)::int AS count
+      FROM generate_series((now() AT TIME ZONE ${timezone})::date - 6, (now() AT TIME ZONE ${timezone})::date, interval '1 day') AS d(day)
+      LEFT JOIN (
+        SELECT (submitted_at AT TIME ZONE ${timezone})::date AS day, count(*) AS n
+        FROM responses WHERE submitted_at >= now() - interval '8 days'
+        GROUP BY 1
+      ) r ON r.day = d.day::date
+      ORDER BY d.day
+    `),
   ])
 
-  return c.json<FormsListResponse>({
-    forms,
-    total,
-    strip: { responsesThisWeek: week.this_week, responsesLastWeek: week.last_week, mostActive },
+  const { avg_completion, ...statusCounts } = counts
+  return c.json<FormsStrip>({
+    responsesThisWeek: week.this_week,
+    responsesLastWeek: week.last_week,
+    mostActive,
+    days,
+    counts: statusCounts,
+    avgCompletion: avg_completion,
   })
 })
 
@@ -398,7 +457,11 @@ formsRoutes.patch('/:id', requirePermission('forms.edit'), async (c) => {
   const passwordHash = typeof password === 'string' ? await hashPassword(password) : password
 
   const result = await sql.begin(async (tx) => {
-    const row = await loadForm(id, tx, true)
+    // Locks the row; reads only what the patch needs (no draft, theme or webhook secret).
+    const [row] = await tx<Pick<FormRow, 'title' | 'slug' | 'status' | 'settings' | 'revision' | 'updated_by' | 'published_version_id'>[]>`
+      SELECT title, slug, status, settings, revision, updated_by, published_version_id FROM forms WHERE id = ${id} FOR UPDATE
+    `
+    if (!row) throw notFound(GONE)
 
     let overwrittenBy: FormPatchResponse['overwrittenBy'] = null
     const overwrote = expected !== null && expected !== row.revision
@@ -433,22 +496,25 @@ formsRoutes.patch('/:id', requirePermission('forms.edit'), async (c) => {
     }
 
     try {
+      // The draft and theme go over the wire once (as n.*), not once per use. On the right of
+      // SET, f.* is the row before this update.
       const [updated] = await tx<{ revision: number; has_unpublished: boolean; published_version_id: string | null }[]>`
-        UPDATE forms SET
+        UPDATE forms f SET
           title = ${input.title ?? row.title},
           slug = ${slug},
           status = ${status},
-          ${draft !== undefined ? sql`draft = ${json(draft)},` : sql``}
-          ${theme !== undefined ? sql`theme = ${json(theme)},` : sql``}
+          ${draft !== undefined ? sql`draft = n.draft,` : sql``}
+          ${theme !== undefined ? sql`theme = n.theme,` : sql``}
           ${settings !== undefined ? sql`settings = ${json(settings)},` : sql``}
-          has_unpublished = has_unpublished
-            OR ${draft !== undefined ? sql`draft IS DISTINCT FROM ${json(draft)}` : sql`false`}
-            OR ${theme !== undefined ? sql`theme IS DISTINCT FROM ${json(theme)}` : sql`false`},
-          revision = revision + 1,
+          has_unpublished = f.has_unpublished
+            OR ${draft !== undefined ? sql`f.draft IS DISTINCT FROM n.draft` : sql`false`}
+            OR ${theme !== undefined ? sql`f.theme IS DISTINCT FROM n.theme` : sql`false`},
+          revision = f.revision + 1,
           updated_by = ${userId},
           updated_at = now()
-        WHERE id = ${id}
-        RETURNING revision, has_unpublished, published_version_id
+        FROM (SELECT ${draft !== undefined ? json(draft) : null}::jsonb AS draft, ${theme !== undefined ? json(theme) : null}::jsonb AS theme) n
+        WHERE f.id = ${id}
+        RETURNING f.revision, f.has_unpublished, f.published_version_id
       `
       return {
         revision: updated.revision,
@@ -499,7 +565,7 @@ formsRoutes.post('/:id/publish', requirePermission('forms.edit'), async (c) => {
     `
     // A closed form stays closed: publishing a fix must not reopen it by surprise. Reopen does that.
     const status: FormStatus = row.status === 'closed' ? 'closed' : 'live'
-    await tx`
+    const [after] = await tx<{ revision: number; response_count: number }[]>`
       UPDATE forms SET
         published_version_id = ${version.id},
         status = ${status},
@@ -508,8 +574,15 @@ formsRoutes.post('/:id/publish', requirePermission('forms.edit'), async (c) => {
         updated_by = ${userId},
         updated_at = now()
       WHERE id = ${id}
+      RETURNING revision, response_count
     `
-    return { version: version.version, publishedAt: version.published_at.toISOString(), status } satisfies PublishResponse
+    return {
+      version: version.version,
+      publishedAt: version.published_at.toISOString(),
+      status,
+      revision: after.revision,
+      responses: after.response_count,
+    } satisfies PublishResponse
   })
   if ('issues' in result && result.issues) {
     const body: ApiErrorBody & { error: LogicIssueBody } = {
@@ -520,25 +593,36 @@ formsRoutes.post('/:id/publish', requirePermission('forms.edit'), async (c) => {
   return c.json<PublishResponse>(result)
 })
 
+type StatusRow = { status: FormStatus; revision: number; has_unpublished: boolean; published_version_id: string | null; response_count: number; settings: unknown }
+const statusReturning = sql`status, revision, has_unpublished, published_version_id, response_count, settings`
+const statusResponse = (r: StatusRow): FormStatusResponse => ({
+  status: r.status,
+  revision: r.revision,
+  hasUnpublished: r.has_unpublished && r.published_version_id !== null,
+  responses: r.response_count,
+  // Close and reopen need forms.edit, so the full settings are fine to send.
+  settings: clientSettings(readSettings(r.settings), { canEdit: true }),
+})
+
 formsRoutes.post('/:id/close', requirePermission('forms.edit'), async (c) => {
   const id = uuidParam(c, 'id', GONE)
-  const [row] = await sql<{ status: FormStatus }[]>`
+  const [row] = await sql<StatusRow[]>`
     UPDATE forms SET status = 'closed', settings = settings || '{"closed": true}'::jsonb,
       revision = revision + 1, updated_by = ${c.var.user.id}, updated_at = now()
     WHERE id = ${id} AND status IN ('live', 'closed')
-    RETURNING status
+    RETURNING ${statusReturning}
   `
   if (!row) {
     await loadForm(id)
     throw new ApiError(409, 'not_published', 'Publish the form before you close it')
   }
-  return c.json<FormStatusResponse>({ status: row.status })
+  return c.json<FormStatusResponse>(statusResponse(row))
 })
 
 formsRoutes.post('/:id/reopen', requirePermission('forms.edit'), async (c) => {
   const id = uuidParam(c, 'id', GONE)
   // A close date already in the past would close it again at once, so reopening clears it.
-  const [row] = await sql<{ status: FormStatus }[]>`
+  const [row] = await sql<StatusRow[]>`
     UPDATE forms SET status = 'live',
       settings = settings || jsonb_build_object('closed', false)
         || CASE WHEN intelform_try_timestamptz(settings->>'closeAt') <= now()
@@ -547,7 +631,7 @@ formsRoutes.post('/:id/reopen', requirePermission('forms.edit'), async (c) => {
     WHERE id = ${id} AND status IN ('closed', 'live') AND published_version_id IS NOT NULL
       -- COALESCE: with no responseCap key at all the comparison is NULL, which would block the update.
       AND NOT COALESCE(jsonb_typeof(settings->'responseCap') = 'number' AND response_count >= (settings->>'responseCap')::numeric, false)
-    RETURNING status
+    RETURNING ${statusReturning}
   `
   if (!row) {
     const form = await loadForm(id)
@@ -557,7 +641,7 @@ formsRoutes.post('/:id/reopen', requirePermission('forms.edit'), async (c) => {
     }
     throw new ApiError(409, 'not_published', 'Publish the form before you reopen it')
   }
-  return c.json<FormStatusResponse>({ status: row.status })
+  return c.json<FormStatusResponse>(statusResponse(row))
 })
 
 // ---------------------------------------------------------------------------

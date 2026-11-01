@@ -13,6 +13,7 @@ import { SubmitError } from './FormError'
 /** Single-line types where Enter advances (the "press Enter" hint shows on desktop). */
 const ENTER_TYPES: ReadonlySet<FieldType> = new Set(['email', 'name', 'phone', 'short_text', 'number', 'url', 'date', 'country', 'dropdown'])
 const AUTO_ADVANCE_MS = 300
+const IS_MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
 /**
  * One question per screen: large type, question number, OK / Enter to advance, up/down buttons
@@ -65,7 +66,10 @@ export function OneAtATime({ ctx, fixedNav }: { ctx: LayoutContext; fixedNav: bo
       focusField(stepRef.current, id, false)
       return
     }
-    if (!isLast) return go(idx + 1, 'fwd')
+    if (!isLast) {
+      ctx.playStep()
+      return go(idx + 1, 'fwd')
+    }
     const r = await ctx.submit()
     if (!r.ok) {
       const first = steps.find((s) => r.errors[s])
@@ -92,7 +96,7 @@ export function OneAtATime({ ctx, fixedNav }: { ctx: LayoutContext; fixedNav: bo
 
   const hint = ctx.focusInputs
     ? field.type === 'long_text'
-      ? labels.shiftEnter
+      ? formatLabel(labels.longTextEnter, { key: IS_MAC ? '⌘' : 'Ctrl' })
       : ENTER_TYPES.has(field.type) && !(field.type === 'name' && field.props.split)
         ? labels.pressEnter
         : null

@@ -341,12 +341,13 @@ describe('publish', () => {
     expect((await call('editor', 'POST', `/api/forms/${form.id}/reopen`)).body.status).toBe('live')
   })
 
-  it('stores the form language (BCP-47) and rejects anything else', async () => {
+  it('has no language or label settings', async () => {
     const form = await newForm()
-    expect((await call('owner', 'GET', `/api/forms/${form.id}`)).body.settings.language).toBe('en')
-    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { language: 'pt-BR' } })).status).toBe(200)
-    expect((await call('owner', 'GET', `/api/forms/${form.id}`)).body.settings.language).toBe('pt-BR')
-    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { language: '<script>' } })).status).toBe(422)
+    const { settings } = (await call('owner', 'GET', `/api/forms/${form.id}`)).body
+    expect(settings).not.toHaveProperty('language')
+    expect(settings).not.toHaveProperty('labels')
+    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { language: 'de' } })).status).toBe(422)
+    expect((await call('owner', 'PATCH', `/api/forms/${form.id}`, { settings: { labels: { submit: 'Senden' } } })).status).toBe(422)
   })
 })
 
@@ -406,13 +407,12 @@ describe('list', () => {
     await call('owner', 'PATCH', `/api/forms/${zeta.id}`, { draft: { layout: 'all_at_once', fields: [field('f_q0000001', 'short_text', 'Q')] } })
     await call('owner', 'POST', `/api/forms/${zeta.id}/publish`)
     await addResponse(zeta.id)
-    for (const t of ['s1', 's2', 's3', 's4']) {
-      await sql`INSERT INTO form_events (form_id, type, session_token) VALUES (${zeta.id}, 'start', ${t})`
-    }
+    // Starts come from the rollup (raw events are purged after 30 days).
+    await sql`INSERT INTO form_event_counts (form_id, bucket, views, starts) VALUES (${zeta.id}, now() - interval '90 days', 0, 3), (${zeta.id}, now(), 0, 1)`
 
     const search = (await call('viewer', 'GET', '/api/forms?q=zeta')).body
     expect(search.forms).toHaveLength(1)
-    expect(search.forms[0]).toMatchObject({ title: 'Zeta poll', status: 'live', responseCount: 1, completionRate: 0.25, layout: 'all_at_once' })
+    expect(search.forms[0]).toMatchObject({ title: 'Zeta poll', status: 'live', responseCount: 1, completionRate: 0.25, newThisWeek: 1, layout: 'all_at_once' })
     expect(search.total).toBeGreaterThan(1)
 
     // % and _ are literal in search.
@@ -425,9 +425,32 @@ describe('list', () => {
     const titles = byTitle.map((f) => f.title.toLowerCase())
     expect(titles).toEqual([...titles].sort())
 
-    const strip = (await call('owner', 'GET', '/api/forms')).body.strip
+    const strip = (await call('owner', 'GET', '/api/forms/strip')).body
     expect(strip.responsesThisWeek).toBeGreaterThanOrEqual(1)
     expect(strip.mostActive.length).toBeGreaterThan(0)
+    expect(strip.mostActive.find((f: Json) => f.id === zeta.id)).toMatchObject({ status: 'live', completionRate: 0.25 })
+    // Seven calendar days, today last, and today holds the new response.
+    expect(strip.days).toHaveLength(7)
+    expect(strip.days.at(-1).count).toBeGreaterThanOrEqual(1)
+    expect(strip.counts.all).toBe(strip.counts.live + strip.counts.draft + strip.counts.closed)
+    expect(strip.counts.live).toBeGreaterThanOrEqual(1)
+    expect(strip.avgCompletion).toBeGreaterThan(0)
+  })
+
+  it('pages the list without repeating a form', async () => {
+    // 30 forms sharing one updated_at: only the id tiebreaker keeps the pages apart.
+    await sql`
+      INSERT INTO forms (slug, title, draft, updated_at)
+      SELECT 'paged-' || n, 'Paged ' || n, '{}'::jsonb, '2026-01-01T00:00:00Z' FROM generate_series(1, 30) n
+    `
+    const first = (await call('viewer', 'GET', '/api/forms?q=Paged')).body
+    const second = (await call('viewer', 'GET', '/api/forms?q=Paged&page=2')).body
+    expect(first).toMatchObject({ matched: 30, page: 1, pageSize: 24 })
+    expect(first.forms).toHaveLength(24)
+    expect(second.forms).toHaveLength(6)
+    const ids = [...first.forms, ...second.forms].map((f: Json) => f.id)
+    expect(new Set(ids).size).toBe(30)
+    expect((await call('viewer', 'GET', '/api/forms?q=Paged&page=9')).body).toMatchObject({ forms: [], matched: 30 })
   })
 
   it('remembers grid or list per user', async () => {

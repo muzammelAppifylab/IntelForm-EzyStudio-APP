@@ -7,24 +7,22 @@ import { exportAllResponsesZip } from '../lib/data-export'
 import { emailEnabled, sendTestEmail } from '../lib/email'
 import { logger } from '../lib/logger'
 import { rateLimit } from '../lib/rate-limit'
-import { getSetting, readSecret, secretState, secretUpdate, setSetting, settingsChanged, type AppSettings } from '../lib/settings'
+import { getSetting, getSettings, readSecret, secretState, secretUpdate, setSetting, settingsChanged, type AppSettings } from '../lib/settings'
 import { storageStatus, testStorage } from '../lib/uploads'
 import { readBody } from '../lib/validate'
 import { requirePermission, requireUser, type AppEnv } from '../middleware/auth'
 
 /**
- * Owner-only App settings (PRD "App settings"): general, branding, spam, email, storage, data.
+ * Owner-only App settings (PRD "App settings"): general, branding, spam, email, storage, data,
+ * and the public site's search and sharing and legal texts.
  * Secrets are write-only: GET returns `{ set: boolean }` for them, never the value.
  */
 export const settingsRoutes = new Hono<AppEnv>().use(requireUser, requirePermission('settings.manage'))
 
 export async function settingsView(): Promise<AppSettingsView> {
-  const [general, branding, turnstile, email, data] = await Promise.all([
-    getSetting('general'),
-    getSetting('branding'),
-    getSetting('turnstile'),
-    getSetting('email'),
-    getSetting('data'),
+  const [{ general, branding, turnstile, email, data, site, legal }, emailOn] = await Promise.all([
+    getSettings(['general', 'branding', 'turnstile', 'email', 'data', 'site', 'legal']),
+    emailEnabled(),
   ])
   return {
     general,
@@ -43,10 +41,12 @@ export async function settingsView(): Promise<AppSettingsView> {
       resendApiKey: secretState(email.resendApiKey),
       postmarkToken: secretState(email.postmarkToken),
       envOverride: env.EMAIL_DRIVER ?? null,
-      enabled: await emailEnabled(),
+      enabled: emailOn,
     },
     storage: storageStatus(),
     data,
+    site,
+    legal,
   }
 }
 
@@ -78,6 +78,8 @@ settingsRoutes.patch('/', async (c) => {
     if (input.general) await setSetting('general', defined(input.general) as Partial<AppSettings['general']>, tx)
     if (input.branding) await setSetting('branding', defined(input.branding), tx)
     if (input.data) await setSetting('data', defined(input.data), tx)
+    if (input.site) await setSetting('site', defined(input.site), tx)
+    if (input.legal) await setSetting('legal', defined(input.legal), tx)
     if (input.spam) {
       const { turnstileSiteKey, turnstileSecret } = input.spam
       await setSetting('turnstile', defined({ siteKey: turnstileSiteKey === '' ? null : turnstileSiteKey, secret: secretUpdate(turnstileSecret) }), tx)

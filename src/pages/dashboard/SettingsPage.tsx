@@ -9,11 +9,13 @@ import { useCan } from '@/lib/auth'
 import { DataGroup, StorageGroup } from '@/pages/dashboard/settings/DataGroups'
 import { EmailGroup, SpamGroup } from '@/pages/dashboard/settings/DeliveryGroups'
 import { BrandingGroup, GeneralGroup } from '@/pages/dashboard/settings/GeneralGroups'
+import { SiteGroup } from '@/pages/dashboard/settings/SiteGroups'
 import { settingsQuery } from '@/pages/dashboard/settings/queries'
 
 const TABS = [
   { id: 'general', label: 'General', Group: GeneralGroup },
   { id: 'branding', label: 'Branding', Group: BrandingGroup },
+  { id: 'site', label: 'Public site', Group: SiteGroup },
   { id: 'spam', label: 'Spam protection', Group: SpamGroup },
   { id: 'email', label: 'Email', Group: EmailGroup },
   { id: 'storage', label: 'Storage', Group: StorageGroup },
@@ -33,7 +35,7 @@ function OwnerSettings() {
 
   return (
     <div className="grid gap-8">
-      <PageHeader title="Settings" description="App name and branding, spam protection, email, storage and data retention." />
+      <PageHeader title="Settings" description="App name and branding, the public site, spam protection, email, storage and data retention." />
       {settings.isPending ? (
         <div className="grid max-w-3xl gap-4" aria-busy>
           <Skeleton className="h-10 w-full max-w-xl" />

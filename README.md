@@ -42,7 +42,7 @@ Open http://localhost:5173. On an empty database it sends you to `/setup`, where
 | `APP_URL` | Public site URL; required in production. When it is https, cookies are `Secure` with the `__Host-` prefix |
 | `API_PORT` | Server port (default 8787) |
 | `MIGRATE_ON_BOOT` | `1` applies pending migrations at start |
-| `TRUSTED_PROXY_HOPS` | How many proxies sit in front of the app (for the client IP). 0 = use the socket address |
+| `TRUSTED_PROXY_HOPS` | How many proxies sit in front of the app (for the client IP). 0 = use the socket address. **Required behind a proxy or CDN**, or every visitor shares one rate limit |
 | `COUNTRY_HEADER` | A trusted header carrying the visitor's country, e.g. `CF-IPCountry` |
 | `EMAIL_DRIVER` | Development override: `console` prints emails to the log. Otherwise the provider is chosen in App settings (SMTP, Resend or Postmark) |
 | `BUNNY_STORAGE_ZONE`, `BUNNY_STORAGE_KEY`, `BUNNY_STORAGE_REGION`, `BUNNY_CDN_URL` | Image storage (provided by EzyStudio). When unset, uploads go to local disk (`UPLOADS_DIR`, default `./uploads`) |
@@ -50,6 +50,20 @@ Open http://localhost:5173. On an empty database it sends you to `/setup`, where
 | `LOG_LEVEL` | pino log level |
 
 The Turnstile keys, email provider, branding and data retention are set by the Owner in **Settings**, not in env. Secrets are stored encrypted and are never shown again.
+
+## Going live
+
+Required:
+
+- A real `APP_SECRET`, backed up. Stored secrets can't be recovered without it.
+- An https `APP_URL`.
+- `TRUSTED_PROXY_HOPS` set to the number of proxies in front of the app (set by EzyStudio), so rate limits see real visitor IPs. With the default 0 behind a proxy, all visitors share one limit and real people get turned away.
+- An email provider, configured and tested in Settings. Without one there are no password resets or emailed invites.
+- Bunny storage (provided by EzyStudio). Without it, uploads go to local disk and can vanish on a redeploy.
+
+Recommended:
+
+- Turnstile keys in Settings → Spam protection, once forms start getting spam. Without them, forms are still protected by the honeypot and rate limit. Turnstile keys are tied to the site's domain, so each install needs its own from Cloudflare.
 
 ## What's in it
 
@@ -75,7 +89,7 @@ The Turnstile keys, email provider, branding and data retention are set by the O
 - **Public form:**
   - All at once / section by section / one at a time, with full keyboard and screen-reader support.
   - Start and end screens, password gate, closed message.
-  - Turnstile + honeypot + rate limiting.
+  - Honeypot + rate limiting, plus optional Cloudflare Turnstile.
   - One response per browser or per email; response cap.
   - Notifications, confirmation emails and signed webhooks, sent after the reply.
   - `embed.js` for inline and popup embeds.
@@ -84,8 +98,8 @@ The Turnstile keys, email provider, branding and data retention are set by the O
   - Table: search, filters, sort, column preferences, bulk delete.
   - Response drawer with labels as submitted.
   - Streamed CSV export.
-- **Front page:** the forms hub (hero, featured forms, about, contact, SEO), Privacy and Terms, with an editor and live preview.
-- **App settings:** general, branding (accent colour, favicon), spam keys, email provider with a test send, storage test, retention, and a ZIP export of every response.
+- **Public site:** home (the forms hub), About, Forms, Privacy and Terms. The pages and their copy are code in `src/pages/public`: edit them there. Each form's Share tab lists it on the homepage; Settings → Public site holds search indexing, the description, the social image and the Privacy and Terms texts.
+- **App settings:** general, branding (accent colour, favicon), public site (search and sharing, privacy and terms), spam keys, email provider with a test send, storage test, retention, and a ZIP export of every response.
 
 ## Structure
 
@@ -97,7 +111,7 @@ shared/                Code the browser and the server both import
 server/                The API (Hono, Web-standard Request/Response)
   app.ts               Every /api route; the unit that maps onto EzyStudio API routes
   index.ts             Node listener, per-surface security headers, static files, inlined form pages
-  routes/              setup, auth, me, team, invites, settings, uploads, forms, templates, themes, builder, responses, public, public-forms, front-page
+  routes/              setup, auth, me, team, invites, settings, uploads, forms, templates, themes, builder, responses, public, public-forms
   respondent/          Public form loading and the submit pipeline
   responses/           Table, summary SQL, CSV
   lib/                 sessions, rate limits, jobs (outbox) + scheduler, email drivers, uploads, webhooks, crypto, logging

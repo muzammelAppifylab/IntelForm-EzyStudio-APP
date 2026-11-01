@@ -1,4 +1,4 @@
-import { sql } from '../db/client'
+import { sql, type Queryable } from '../db/client'
 import { hashToken } from './crypto'
 import { ApiError } from './errors'
 
@@ -9,19 +9,22 @@ import { ApiError } from './errors'
  *
  * Keys are namespaced by the caller, e.g. `login:ip:<ipHash>`. Never put a raw IP in a key.
  */
-export async function rateLimit(key: string, limit: number, windowSeconds: number, message?: string): Promise<void> {
-  const count = await hit(key, windowSeconds)
+export async function rateLimit(key: string, limit: number, windowSeconds: number, message?: string, db: Queryable = sql): Promise<void> {
+  const count = await hit(key, windowSeconds, db)
   if (count > limit) {
-    const [{ retry }] = await sql<{ retry: number }[]>`
+    const [{ retry }] = await db<{ retry: number }[]>`
       SELECT ceil(extract(epoch FROM (date_bin(make_interval(secs => ${windowSeconds}), now(), 'epoch') + make_interval(secs => ${windowSeconds}) - now())))::int AS retry
     `
     throw tooMany(retry, message)
   }
 }
 
-/** Counts one hit and returns the window's count so far. */
-export async function hit(key: string, windowSeconds: number): Promise<number> {
-  const [row] = await sql<{ count: number }[]>`
+/**
+ * Counts one hit and returns the window's count so far. Inside a transaction pass `db` = tx:
+ * borrowing a second pool connection while holding row locks can starve the pool.
+ */
+export async function hit(key: string, windowSeconds: number, db: Queryable = sql): Promise<number> {
+  const [row] = await db<{ count: number }[]>`
     INSERT INTO rate_limits (key, window_start, window_seconds, count)
     VALUES (${key}, date_bin(make_interval(secs => ${windowSeconds}), now(), 'epoch'), ${windowSeconds}, 1)
     ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limits.count + 1

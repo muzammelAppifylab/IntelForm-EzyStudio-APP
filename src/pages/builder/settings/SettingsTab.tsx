@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { KeyRound } from 'lucide-react'
 import { toast } from 'sonner'
 import type { TeamResponse } from '@shared/api'
-import { formSettingsPatch } from '@shared/form/settings'
+import type { FormStatusResponse } from '@shared/api-forms'
+import { formSettingsPatch, type StepSound } from '@shared/form/settings'
 import { isSafeUrl } from '@shared/form/safe-url'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -16,23 +17,21 @@ import { api, errorMessage } from '@/lib/api'
 import { FieldRow, Note, NumberRow, SelectRow, SwitchRow, TextRow } from '@/builder/controls'
 import { useDraftText } from '@/builder/use-draft-text'
 import { fieldName } from '@/builder/ops'
+import { playStepSound } from '@/respondent/sound'
 import { PipeInput } from '@/builder/pipe/PipeInput'
 import { useBuilder, useBuilderStore } from '@/builder/store'
 import { browserTimeZone, isoToZoned, timeZones, zonedToIso } from '@/builder/tz'
-import { LabelsEditor } from './LabelsEditor'
-import { refreshFromServer, useCapabilities, useSettingsSave } from './hooks'
+import { applyStatus, useCapabilities, useSettingsSave } from './hooks'
 import { SettingsCard } from './shared'
 import { WebhookSection } from './WebhookSection'
 
 const NAV = [
   { id: 'access', label: 'Access and limits' },
   { id: 'after-submit', label: 'After submit' },
+  { id: 'sounds', label: 'Sounds' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'webhook', label: 'Webhook' },
   { id: 'spam', label: 'Spam protection' },
-  { id: 'language', label: 'Language' },
-  { id: 'labels', label: 'System labels' },
-  { id: 'consent', label: 'Consent records' },
 ]
 
 /** Settings tab: every group of PRD "Form settings". Safe defaults; changes save on their own. */
@@ -54,17 +53,10 @@ export function SettingsTab() {
         <div className="grid gap-6">
           <AccessSection />
           <AfterSubmitSection />
+          <SoundsSection />
           <NotificationsSection />
           <WebhookSection />
           <SpamSection />
-          <LanguageSection />
-          <LabelsEditor />
-          <SettingsCard id="consent" title="Consent records">
-            <p className="text-body-sm text-muted-foreground">
-              When a Consent question is answered, the response stores that the box was ticked, the time, the exact checkbox text shown and the form version. Nothing to set
-              up: add a Consent / Terms question on the Build tab.
-            </p>
-          </SettingsCard>
         </div>
       </div>
     </div>
@@ -97,8 +89,7 @@ function AccessSection() {
     setClosing(true)
     try {
       await store.getState().flush()
-      await api(`/api/forms/${store.getState().meta.id}/${v ? 'close' : 'reopen'}`, { method: 'POST' })
-      await refreshFromServer(store)
+      applyStatus(store, await api<FormStatusResponse>(`/api/forms/${store.getState().meta.id}/${v ? 'close' : 'reopen'}`, { method: 'POST' }))
       toast.success(v ? 'Form closed' : 'Form reopened')
     } catch (err) {
       toast.error(errorMessage(err))
@@ -289,17 +280,25 @@ function AfterSubmitSection() {
   const readOnly = useBuilder((s) => s.readOnly)
   const { save, errors } = useSettingsSave()
   const [url, setUrl] = useState(settings.redirectUrl ?? '')
-  const valid = /^https?:\/\//i.test(url.trim()) && isSafeUrl(url.trim())
+  const [touched, setTouched] = useState(false)
+  // The server only accepts "redirect" with a link, so picking it before there is one is held
+  // here and saved as soon as a valid link is typed. Until then respondents still see the end screen.
+  const [picked, setPicked] = useState<'end_screen' | 'redirect' | null>(null)
+  const choice = picked ?? settings.afterSubmit
+  const isValid = (v: string) => /^https?:\/\//i.test(v.trim()) && isSafeUrl(v.trim())
+  const valid = isValid(url)
+  const pending = choice === 'redirect' && settings.afterSubmit !== 'redirect'
 
   return (
     <SettingsCard id="after-submit" title="After submit">
       <RadioGroup
         aria-label="After submit"
-        value={settings.afterSubmit}
+        value={choice}
         onValueChange={(v) => {
+          if (v !== 'end_screen' && v !== 'redirect') return
+          setPicked(v)
           if (v === 'end_screen') void save({ afterSubmit: 'end_screen' })
           else if (valid) void save({ afterSubmit: 'redirect', redirectUrl: url.trim() })
-          else document.getElementById('redirect-url')?.focus()
         }}
         disabled={readOnly}
         className="grid gap-2"
@@ -315,7 +314,7 @@ function AfterSubmitSection() {
             htmlFor={`after-${value}`}
             className={cn(
               'flex cursor-pointer items-start gap-3 rounded-md border border-border p-3 font-normal',
-              settings.afterSubmit === value && 'border-option-selected-border bg-option-selected',
+              choice === value && 'border-option-selected-border bg-option-selected',
             )}
           >
             <RadioGroupItem id={`after-${value}`} value={value} className="mt-0.5" />
@@ -326,28 +325,33 @@ function AfterSubmitSection() {
           </Label>
         ))}
       </RadioGroup>
-      <TextRow
-        id="redirect-url"
-        label="Redirect link"
-        type="url"
-        placeholder="https://example.com/thanks"
-        value={url}
-        disabled={readOnly}
-        description={settings.afterSubmit === 'redirect' ? undefined : 'Enter a link, then choose “Send people to a web page”.'}
-        error={errors.redirectUrl ?? (url && !valid ? 'Enter a full link starting with https://' : null)}
-        onChange={(v) => {
-          setUrl(v)
-          const t = v.trim()
-          if (/^https?:\/\//i.test(t) && isSafeUrl(t)) void save({ redirectUrl: t })
-        }}
-      />
-      <SwitchRow
-        label="Add the answers to the link"
-        description="Appends answers as URL parameters, e.g. ?email=…, for a thank-you page that greets people."
-        checked={settings.redirectAppendAnswers}
-        disabled={readOnly || settings.afterSubmit !== 'redirect'}
-        onCheckedChange={(v) => void save({ redirectAppendAnswers: v })}
-      />
+      {choice === 'redirect' && (
+        <>
+          <TextRow
+            label="Redirect link"
+            type="url"
+            inputMode="url"
+            placeholder="https://example.com/thanks"
+            value={url}
+            disabled={readOnly}
+            autoFocus={picked === 'redirect' && !valid}
+            description={pending ? 'Until you add a link, people still see the end screen.' : undefined}
+            error={errors.redirectUrl ?? (touched && url.trim() && !valid ? 'Enter a full link starting with https://' : null)}
+            onBlur={() => setTouched(true)}
+            onChange={(v) => {
+              setUrl(v)
+              if (isValid(v)) void save({ afterSubmit: 'redirect', redirectUrl: v.trim() })
+            }}
+          />
+          <SwitchRow
+            label="Add the answers to the link"
+            description="Appends answers as URL parameters, e.g. ?email=…, for a thank-you page that greets people."
+            checked={settings.redirectAppendAnswers}
+            disabled={readOnly || pending}
+            onCheckedChange={(v) => void save({ redirectAppendAnswers: v })}
+          />
+        </>
+      )}
     </SettingsCard>
   )
 }
@@ -355,6 +359,38 @@ function AfterSubmitSection() {
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
+
+const SOUND_OPTIONS: readonly { value: StepSound; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'tick', label: 'Tick' },
+  { value: 'chime', label: 'Chime' },
+  { value: 'pop', label: 'Pop' },
+]
+
+function SoundsSection() {
+  const stepSound = useBuilder((s) => s.settings.stepSound)
+  const layout = useBuilder((s) => s.doc.draft.layout)
+  const readOnly = useBuilder((s) => s.readOnly)
+  const { save } = useSettingsSave()
+  return (
+    <SettingsCard id="sounds" title="Sounds" description="A short sound when a respondent answers a question and moves on.">
+      <SelectRow
+        label="Step sound"
+        value={stepSound}
+        options={SOUND_OPTIONS}
+        disabled={readOnly}
+        description="Plays when moving to the next question or section, with a higher note on submit. Works with the One at a time and Section by section layouts; on submit it plays in every layout."
+        onChange={(v) => {
+          void save({ stepSound: v })
+          playStepSound(v)
+        }}
+      />
+      {stepSound !== 'off' && layout === 'all_at_once' && (
+        <Note tone="info">This form uses the All at once layout, so the sound plays only when the form is submitted.</Note>
+      )}
+    </SettingsCard>
+  )
+}
 
 function NotificationsSection() {
   const settings = useBuilder((s) => s.settings)
@@ -448,63 +484,13 @@ function SpamSection() {
         onCheckedChange={(v) => void save({ turnstile: v })}
       />
       {caps.data && !caps.data.turnstileConfigured && (
-        <Note tone={turnstile ? 'warning' : 'info'}>
+        <Note tone="info">
           {turnstile
-            ? 'Turnstile is on, but its keys aren’t set on this site, so bots are not being checked. The Owner adds the keys once in Settings, under Spam protection.'
-            : 'Turnstile keys aren’t set on this site. The Owner adds them once in Settings, under Spam protection.'}
+            ? 'Turnstile is optional and isn’t set up on this site yet. This form uses the honeypot and rate limit until the Owner adds keys in Settings, under Spam protection; then it turns on by itself.'
+            : 'Turnstile is optional and isn’t set up on this site. If forms start getting spam, the Owner can add keys in Settings, under Spam protection.'}
         </Note>
       )}
     </SettingsCard>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Language
-// ---------------------------------------------------------------------------
-
-const COMMON_LANGUAGES = ['en', 'en-GB', 'de', 'fr', 'es', 'it', 'pt', 'pt-BR', 'nl', 'sv', 'da', 'nb', 'fi', 'pl', 'cs', 'tr', 'ar', 'he', 'hi', 'bn', 'ja', 'ko', 'zh-Hans', 'zh-Hant']
-
-function languageName(tag: string): string {
-  try {
-    return new Intl.DisplayNames(['en'], { type: 'language' }).of(tag) ?? tag
-  } catch {
-    return tag
-  }
-}
-
-function LanguageSection() {
-  const language = useBuilder((s) => s.settings.language)
-  const readOnly = useBuilder((s) => s.readOnly)
-  const { save, errors } = useSettingsSave()
-  const [text, setText] = useState(language)
-  const options = COMMON_LANGUAGES.includes(language) ? COMMON_LANGUAGES : [language, ...COMMON_LANGUAGES]
-  return (
-    <SettingsCard id="language" title="Language" description="The language the form is written in. Screen readers use it to pronounce the questions correctly.">
-      <div className="grid grid-cols-2 gap-4">
-        <SelectRow
-          label="Form language"
-          value={language}
-          options={options.map((l) => ({ value: l, label: `${languageName(l)} (${l})` }))}
-          disabled={readOnly}
-          onChange={(v) => {
-            setText(v)
-            void save({ language: v })
-          }}
-        />
-        <TextRow
-          label="Or a language code"
-          description="Any BCP-47 code, e.g. sw or fr-CA."
-          value={text}
-          maxLength={35}
-          disabled={readOnly}
-          error={errors.language}
-          onChange={setText}
-          onBlur={() => {
-            if (text.trim() && text.trim() !== language) void save({ language: text.trim() })
-          }}
-        />
-      </div>
-      <p className="text-caption text-muted-foreground">Translate the buttons and messages below in System labels.</p>
-    </SettingsCard>
-  )
-}

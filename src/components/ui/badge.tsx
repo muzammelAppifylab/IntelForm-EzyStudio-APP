@@ -8,17 +8,17 @@ import { Slot } from "radix-ui"
  * form and response states prefer `StatusBadge` from components/ds, which also names the state.
  */
 const badgeVariants = cva(
-  "focus-ring inline-flex h-6 w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-full border border-transparent px-2.5 text-caption font-medium whitespace-nowrap transition-[color,background-color] duration-(--duration-fast) ease-out [&>svg]:pointer-events-none [&>svg]:size-3",
+  "focus-ring inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-md border border-transparent px-2 text-caption font-medium whitespace-nowrap transition-[color,background-color] duration-(--duration-fast) ease-out [&>svg]:pointer-events-none [&>svg]:size-3",
   {
     variants: {
       variant: {
-        default: "border-2 border-primary-border bg-primary text-primary-foreground [a&]:hover:bg-primary-hover",
+        default: "border-ink-950/15 bg-primary text-primary-foreground [a&]:hover:bg-primary-hover",
         secondary:
           "border-border bg-secondary text-secondary-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         destructive:
           "bg-destructive text-destructive-foreground [a&]:hover:bg-destructive/90",
         outline:
-          "border-2 border-border-ink text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+          "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-link underline-offset-4 [a&]:hover:underline",
         muted: "bg-muted text-muted-foreground",

@@ -4,6 +4,7 @@ import {
   TINTS,
   contrastRatio,
   defaultTheme,
+  fontStack,
   formTheme,
   mixOklab,
   surfaceColor,
@@ -21,15 +22,21 @@ describe('presets', () => {
 
   it('the first preset is the IntelForm design-system default', () => {
     expect(THEME_PRESETS[0].theme.colors).toEqual({
-      background: '#F7F5FF',
-      question: '#1A1825',
-      answer: '#5B3FD9',
-      button: '#5B3FD9',
-      buttonText: '#FFFFFF',
+      background: '#F5F2EA',
+      question: '#211D2A',
+      answer: '#6C48CA',
+      button: '#C9C0FF',
+      buttonText: '#211D2A',
     })
-    expect(THEME_PRESETS[0].theme.font).toBe('Inter')
+    expect(THEME_PRESETS[0].theme.font).toBe('Figtree')
+    expect(THEME_PRESETS[0].theme.questionFont).toBe('Instrument Serif')
     expect(defaultTheme()).toEqual(THEME_PRESETS[0].theme)
     expect(formTheme.parse({})).toEqual({ ...defaultTheme(), questionFont: null })
+  })
+
+  it('sets small questions in the body font when the question font has no bold weight', () => {
+    expect(themeToVars(defaultTheme())['--form-question-sm-font']).toBe(fontStack('Figtree'))
+    expect(themeToVars({ ...defaultTheme(), questionFont: 'Lora' })['--form-question-sm-font']).toBe(fontStack('Lora'))
   })
 
   it.each(THEME_PRESETS.map((p) => [p.id, p] as const))('%s passes WCAG AA', (_id, p) => {
@@ -59,8 +66,15 @@ describe('contrast', () => {
     t.colors.question = '#BBBBBB'
     t.colors.buttonText = '#6A50E0'
     const issues = themeContrastIssues(t)
-    expect(issues.map((i) => i.key)).toEqual(['question', 'buttonText'])
+    // The pale default button is only visible through its 2px edge, which is the (now pale) question colour.
+    expect(issues.map((i) => i.key)).toEqual(['question', 'buttonText', 'button'])
     expect(issues[0].message).toMatch(/needs 4.5:1/)
+  })
+
+  it('counts the button ink edge: a pale fill passes when the question colour has 3:1', () => {
+    const t = defaultTheme()
+    expect(contrastRatio(t.colors.button, t.colors.background)).toBeLessThan(3)
+    expect(themeContrastIssues(t)).toEqual([])
   })
 
   it('checks image backgrounds against the overlay', () => {
@@ -93,7 +107,7 @@ describe('themeToVars', () => {
     const vars = themeToVars(defaultTheme())
     for (const k of [
       '--form-bg', '--form-surface', '--form-question', '--form-answer', '--form-button', '--form-button-foreground',
-      '--form-progress', '--form-font', '--form-question-font', '--form-radius',
+      '--form-progress', '--form-font', '--form-question-font', '--form-question-sm-font', '--form-radius',
       '--background', '--foreground', '--card', '--primary', '--primary-foreground', '--ring',
       '--option-selected-border', '--option-selected', '--option-selected-foreground', '--option', '--option-border',
       '--field', '--input', '--field-placeholder', '--muted-foreground', '--radius',

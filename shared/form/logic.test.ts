@@ -39,7 +39,6 @@ const PRD_EXAMPLE = {
     },
   ],
   endScreen: { title: 'Thanks!', message: 'We got it.', redirectUrl: null },
-  labels: { next: 'Next', submit: 'Submit' },
 }
 
 describe('PRD example', () => {
@@ -117,20 +116,17 @@ describe('visibility', () => {
     expect(validateSubmission(d, hidden, { hidden: 'drop' })).toEqual({ ok: true, answers: { f_nps1: 10, f_em01: 'a@b.co' } })
   })
 
-  it('uses custom required errors and label overrides', () => {
-    const d2 = def(
-      [
-        { id: 'f_req1', type: 'short_text', label: 'A', required: true, requiredError: 'We need this one' },
-        { id: 'f_req2', type: 'email', label: 'B', required: true },
-        { id: 'f_req3', type: 'short_text', label: 'C', props: { minLength: 5 } },
-      ],
-      { labels: { required: 'Obligatoire', minChars: 'Au moins {n} caractères' } },
-    )
+  it('uses custom required errors, else the system labels', () => {
+    const d2 = def([
+      { id: 'f_req1', type: 'short_text', label: 'A', required: true, requiredError: 'We need this one' },
+      { id: 'f_req2', type: 'email', label: 'B', required: true },
+      { id: 'f_req3', type: 'short_text', label: 'C', props: { minLength: 5 } },
+    ])
     expect(validateSubmission(d2, { f_req3: 'abc' })).toEqual({
       ok: false,
-      errors: { f_req1: 'We need this one', f_req2: 'Obligatoire', f_req3: 'Au moins 5 caractères' },
+      errors: { f_req1: 'We need this one', f_req2: 'This question is required', f_req3: 'Enter at least 5 characters' },
     })
-    expect(validatePage(d2, { f_req1: 'x' }, ['f_req1', 'f_req2'])).toEqual({ f_req2: 'Obligatoire' })
+    expect(validatePage(d2, { f_req1: 'x' }, ['f_req1', 'f_req2'])).toEqual({ f_req2: 'This question is required' })
   })
 
   it('drops unknown keys and section breaks, rejects non-objects', () => {
@@ -176,6 +172,20 @@ describe('lint and builder warnings', () => {
       'endScreen:pipe_missing',
     ])
     expect(lintLogic(d).every((i) => i.message.length > 10)).toBe(true)
+  })
+
+  it('asks for the country code when a phone rule matches a whole number', () => {
+    const rule = (op: string, value: string) => ({ action: 'show', match: 'all', conditions: [{ field: 'f_ph01', op, value }] })
+    const phoneDef = def([
+      { id: 'f_ph01', type: 'phone', label: 'Phone' },
+      { id: 'f_ok01', type: 'short_text', label: 'A', logic: rule('is', '+1 (650) 253-0000') },
+      { id: 'f_ok02', type: 'short_text', label: 'B', logic: rule('contains', '650') },
+      { id: 'f_bad1', type: 'short_text', label: 'C', logic: rule('is', '07700 900123') },
+      { id: 'f_bad2', type: 'short_text', label: 'D', logic: rule('is_not', '6502530000') },
+    ])
+    const issues = lintLogic(phoneDef)
+    expect(issues.map((i) => `${i.fieldId}:${i.code}`)).toEqual(['f_bad1:bad_value', 'f_bad2:bad_value'])
+    expect(issues[0].message).toContain('country code')
   })
 
   it('dependentsOf lists rules and pipes', () => {

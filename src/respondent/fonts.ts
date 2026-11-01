@@ -18,6 +18,9 @@ const LOADERS: Record<ThemeFont, () => Promise<unknown>> = {
   'Playfair Display': () => import('@fontsource-variable/playfair-display'),
   Lora: () => import('@fontsource-variable/lora'),
   Fraunces: () => import('@fontsource-variable/fraunces'),
+  // The design system faces are already self-hosted by styles.css (styles/fonts.css).
+  Figtree: () => Promise.resolve(),
+  'Instrument Serif': () => Promise.resolve(),
 }
 
 const loaded = new Set<string>()

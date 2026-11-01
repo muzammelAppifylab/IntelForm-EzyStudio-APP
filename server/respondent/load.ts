@@ -1,7 +1,7 @@
 import type { PublicFormClosed, PublicFormLive, PublicFormLocked, PublicFormResponse } from '../../shared/api-public'
 import { formDefinition, type FormDefinition } from '../../shared/form/definition'
-import { resolveLabels } from '../../shared/form/labels'
-import { LANGUAGE_TAG_RE, formSettings, publicSettings, type FormSettings } from '../../shared/form/settings'
+import { SYSTEM_LABELS } from '../../shared/form/labels'
+import { formSettings, publicSettings, type FormSettings } from '../../shared/form/settings'
 import { defaultTheme, formTheme, type FormTheme } from '../../shared/form/theme'
 import { sql, type Queryable } from '../db/client'
 import { notFound } from '../lib/errors'
@@ -88,6 +88,22 @@ export async function requireForm(slug: string, tx: Queryable = sql): Promise<Lo
   return r.form
 }
 
+/**
+ * Just what isClosed needs, for hot paths like the view/start beacons: no published definition
+ * or theme to read and parse. Same 404s as requireForm (drafts, unknown and old slugs).
+ */
+export async function requireFormMeta(slug: string): Promise<Pick<LoadedForm, 'id' | 'status' | 'responseCount' | 'settings'>> {
+  const clean = slug.toLowerCase()
+  const [row] = /^[a-z0-9][a-z0-9-]{0,80}$/.test(clean)
+    ? await sql<{ id: string; status: LoadedForm['status']; response_count: number; settings: unknown }[]>`
+        SELECT id, status, response_count, settings FROM forms
+        WHERE slug = ${clean} AND published_version_id IS NOT NULL AND status <> 'draft'
+      `
+    : []
+  if (!row) throw notFound('This form doesn’t exist')
+  return { id: row.id, status: row.status, responseCount: row.response_count, settings: formSettings.parse(row.settings) }
+}
+
 /** Closed manually, past its close date, or at its response cap (checked at read time). */
 export function isClosed(form: Pick<LoadedForm, 'status' | 'settings' | 'responseCount'>, now = Date.now()): boolean {
   if (form.status !== 'live') return true
@@ -95,11 +111,6 @@ export function isClosed(form: Pick<LoadedForm, 'status' | 'settings' | 'respons
   if (closeAt && Date.parse(closeAt) <= now) return true
   if (responseCap !== null && form.responseCount >= responseCap) return true
   return false
-}
-
-/** Language for <html lang>: the form's `language` setting (validated on save), else English. */
-function langOf(settings: FormSettings): string {
-  return LANGUAGE_TAG_RE.test(settings.language) ? settings.language : 'en'
 }
 
 /** Turnstile site key when this form uses it and the Owner configured both keys. */
@@ -119,11 +130,9 @@ export async function publicPayload(form: LoadedForm, unlock?: string | null): P
     slug: form.slug,
     title: form.title,
     theme: form.theme,
-    labels: resolveLabels({ ...form.definition.labels, ...form.settings.labels }),
     settings: publicSettings(form.settings),
-    lang: langOf(form.settings),
   }
-  if (isClosed(form)) return { ...base, status: 'closed', message: form.settings.closedMessage || base.labels.closed }
+  if (isClosed(form)) return { ...base, status: 'closed', message: form.settings.closedMessage || SYSTEM_LABELS.closed }
   const hash = form.settings.passwordHash
   if (hash && !checkUnlockToken(unlock, form.id, hash)) return { ...base, status: 'locked' }
   const turnstile = await turnstileFor(form.settings)

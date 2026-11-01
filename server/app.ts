@@ -10,8 +10,8 @@ import { accessLog, logger, redactPath, requestIdMiddleware } from './lib/logger
 import { surfaceHeaders } from './middleware/security-headers'
 import { authRoutes } from './routes/auth'
 import { builderRoutes } from './routes/builder'
+import { contactsRoutes } from './routes/contacts'
 import { formsRoutes } from './routes/forms'
-import { frontPageRoutes } from './routes/front-page'
 import { inviteRoutes } from './routes/invites'
 import { meRoutes } from './routes/me'
 import { publicFormRoutes } from './routes/public-forms'
@@ -38,7 +38,7 @@ const MB = 1024 * 1024
 function maxBodyFor(path: string): number {
   if (path.startsWith('/api/uploads')) return 6 * MB // 5 MB image + multipart overhead
   if (/^\/api\/public\/forms\/[^/]+\/responses/.test(path)) return 3 * MB // signature PNGs inside a submit
-  if (/^\/api\/(forms|builder|themes|templates|front-page)(\/|$)/.test(path)) return 2 * MB // form definitions
+  if (/^\/api\/(forms|builder|themes|templates)(\/|$)/.test(path)) return 2 * MB // form definitions
   return 256 * 1024
 }
 
@@ -85,12 +85,12 @@ app.route('/public', publicRoutes)
 app.route('/public/forms', publicFormRoutes)
 app.route('/forms', formsRoutes)
 app.route('/forms', responsesRoutes)
+app.route('/contacts', contactsRoutes)
 app.route('/templates', templatesRoutes)
 app.route('/themes', themesRoutes)
 app.route('/builder', builderRoutes)
 app.route('/settings', settingsRoutes)
 app.route('/uploads', uploadsRoutes)
-app.route('/front-page', frontPageRoutes)
 
 app.notFound((c) => errorResponse(c, new ApiError(404, 'not_found', 'No such API route')))
 

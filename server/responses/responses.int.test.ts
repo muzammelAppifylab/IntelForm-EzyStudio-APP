@@ -43,7 +43,6 @@ function definition(version: 1 | 2) {
     layout: 'all_at_once',
     startScreen: { enabled: false, title: '', button: 'Start' },
     endScreen: { title: 'Thanks!', message: '' },
-    labels: {},
     fields: [
       { id: Q.name, type: 'name', label: 'Your name', required: false, props: { split: true } },
       { id: Q.email, type: 'email', label: 'Email', required: false, props: {} },

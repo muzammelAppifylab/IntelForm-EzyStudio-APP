@@ -69,5 +69,5 @@ export function isGroupField(field: { type: FieldType; props: unknown }): boolea
 /** Auto-advance (one-at-a-time) after a pointer pick: single choice, yes/no, rating, NPS. */
 export const AUTO_ADVANCE_TYPES: ReadonlySet<FieldType> = new Set(['single_choice', 'yes_no', 'rating', 'nps'])
 
-/** Long text: Shift+Enter is a newline, Cmd/Ctrl+Enter advances. */
+/** Long text: Enter is a newline, Cmd/Ctrl+Enter advances. */
 export const MULTILINE_TYPES: ReadonlySet<FieldType> = new Set(['long_text'])

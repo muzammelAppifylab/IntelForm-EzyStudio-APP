@@ -14,13 +14,10 @@ describe('injectForm', () => {
       slug: 's',
       title: 'Hi </script><script>alert(1)</script>',
       theme: {},
-      labels: {},
-      lang: 'de',
       message: 'closed',
       settings: { seoTitle: '', seoDescription: 'A "quoted" <b>form</b>', ogImage: null, noindex: true },
     } as never
     const html = injectForm(SHELL, payload)
-    expect(html).toContain('<html lang="de"')
     expect(html).toContain('<title>Hi &lt;/script&gt;&lt;script&gt;alert(1)&lt;/script&gt;</title>')
     expect(html).toContain('<meta name="robots" content="noindex, nofollow">')
     expect(html).toContain('content="A &quot;quoted&quot; &lt;b&gt;form&lt;/b&gt;"')
@@ -37,8 +34,6 @@ describe('injectForm', () => {
       slug: 's',
       title: tricky,
       theme: {},
-      labels: { submit: tricky },
-      lang: 'en',
       definition: { fields: [{ id: 'f_1', type: 'short_text', label: tricky }] },
       settings: { seoTitle: '', seoDescription: tricky, ogImage: tricky, noindex: false },
     } as never

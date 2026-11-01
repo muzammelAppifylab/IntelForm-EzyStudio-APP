@@ -21,7 +21,6 @@ const PERMISSIONS = {
   'forms.edit': ['owner', 'editor'],
   'responses.view': ['owner', 'editor', 'viewer'],
   'responses.delete': ['owner', 'editor'],
-  'frontPage.edit': ['owner', 'editor'],
   'templates.edit': ['owner', 'editor'],
   'team.view': ['owner', 'editor', 'viewer'],
   'team.manage': ['owner'],

@@ -1,6 +1,6 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { UNLOCK_HEADER, unlockInput, type UnlockResponse } from '../../shared/api-public'
-import { resolveLabels } from '../../shared/form/labels'
+import { SYSTEM_LABELS } from '../../shared/form/labels'
 import { ApiError, notFound } from '../lib/errors'
 import { ipKey } from '../lib/ip'
 import { verifyFormPassword } from '../lib/password'
@@ -72,13 +72,12 @@ publicFormRoutes.post('/:slug/unlock', async (c) => {
   await rateLimit(`unlock:${ipKey(c)}:${form.id}`, 10, 60, 'Too many tries. Wait a minute and try again.')
   const { password } = await readBody(c, unlockInput)
   const hash = form.settings.passwordHash
-  const labels = resolveLabels({ ...form.definition.labels, ...form.settings.labels })
   // Every attempt takes a slot before the check (parallel guesses can't overshoot); a correct
   // password gives it back, so only failures count.
   const formKey = `unlock-fail:form:${form.id}`
   if (hash) await rateLimit(formKey, UNLOCK_FORM_FAILURE_LIMIT, UNLOCK_FORM_WINDOW, 'This form has had too many wrong passwords. Try again later.')
   if (hash && !(await verifyFormPassword(hash, password))) {
-    throw new ApiError(422, 'validation_failed', labels.wrongPassword, { password: [labels.wrongPassword] })
+    throw new ApiError(422, 'validation_failed', SYSTEM_LABELS.wrongPassword, { password: [SYSTEM_LABELS.wrongPassword] })
   }
   if (hash) await release(formKey, UNLOCK_FORM_WINDOW)
   const token = hash ? unlockToken(form.id, hash) : ''

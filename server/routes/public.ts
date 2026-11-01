@@ -5,7 +5,7 @@ import { ApiError } from '../lib/errors'
 import { clientIp, ipKeyFor } from '../lib/ip'
 import { rateLimit } from '../lib/rate-limit'
 import { getSetting } from '../lib/settings'
-import { loadFrontPage, publicFormCards } from './front-page'
+import { publicFormCards } from '../lib/public-site'
 
 /** Routes respondents and visitors use. No session; everything here is safe to show anyone. */
 export const publicRoutes = new Hono()
@@ -25,35 +25,31 @@ publicRoutes.get('/app', async (c) => {
   return c.json<PublicAppInfo>({ appName, logoUrl, emailEnabled: email, faviconUrl, accentColor, defaultMode, dateFormat })
 })
 
-/** Front page content plus the featured Live forms, or `{ enabled: false }`. */
+/** What every public site page needs: app name, logo, listed forms, search and legal flags. */
 publicRoutes.get('/home', async (c) => {
   // Edits and closed forms must show at once; the browser revalidates every visit.
   c.header('Cache-Control', 'no-cache')
   await limitVisitor(c)
-  const { content, featuredOrder } = await loadFrontPage()
-  if (!content.enabled) return c.json<PublicHome>({ enabled: false })
-  const [{ appName, logoUrl }, forms] = await Promise.all([getSetting('general'), publicFormCards(featuredOrder)])
+  const [{ appName, logoUrl }, site, legal, forms] = await Promise.all([getSetting('general'), getSetting('site'), getSetting('legal'), publicFormCards()])
   return c.json<PublicHome>({
-    enabled: true,
     appName,
     logoUrl,
-    hero: content.hero,
-    about: content.about.enabled && (content.about.title || content.about.text) ? content.about : null,
-    contact: content.contact.enabled && (content.contact.email || content.contact.phone || content.contact.address) ? content.contact : null,
-    seo: content.seo,
-    themeId: content.themeId,
     forms,
-    hasPrivacy: !!content.privacy,
-    hasTerms: !!content.terms,
+    description: site.description,
+    ogImage: site.ogImage,
+    contactEmail: site.contactEmail,
+    indexing: site.indexing,
+    hasPrivacy: !!legal.privacy,
+    hasTerms: !!legal.terms,
   })
 })
 
-/** Privacy policy and terms texts (plain text). */
+/** Privacy policy and terms texts (plain text, Settings → Public site). */
 publicRoutes.get('/legal/:kind', async (c) => {
   const kind = c.req.param('kind') as LegalKind
   if (!LEGAL_KINDS.includes(kind)) throw new ApiError(404, 'not_found', 'No such page')
   c.header('Cache-Control', 'no-cache')
   await limitVisitor(c)
-  const [{ content }, { appName }] = await Promise.all([loadFrontPage(), getSetting('general')])
-  return c.json<PublicLegal>({ kind, title: LEGAL_TITLE[kind], appName, text: content[kind] })
+  const [legal, { appName }] = await Promise.all([getSetting('legal'), getSetting('general')])
+  return c.json<PublicLegal>({ kind, title: LEGAL_TITLE[kind], appName, text: legal[kind] })
 })

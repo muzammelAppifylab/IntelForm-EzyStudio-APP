@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type RefObject } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { AsYouType, getCountries, getCountryCallingCode, parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/min'
 import { clsx } from 'clsx'
@@ -32,7 +32,24 @@ function Flag({ code }: { code: string }) {
   )
 }
 
-export default function PhoneInput({ field, value, onChange, inputId, describedBy, invalid, onAdvance, labels }: FieldRendererProps<'phone'>) {
+export default function PhoneInput({
+  field,
+  value,
+  onChange,
+  inputId,
+  describedBy,
+  invalid,
+  onAdvance,
+  labels,
+  restoreFocus,
+}: FieldRendererProps<'phone'> & { restoreFocus?: RefObject<boolean> }) {
+  // The stand-in tel input had focus when this chunk loaded: take it over.
+  useEffect(() => {
+    if (restoreFocus?.current && (!document.activeElement || document.activeElement === document.body)) {
+      document.getElementById(inputId)?.focus({ preventScroll: true })
+    }
+  }, [restoreFocus, inputId])
+
   const countries = useMemo(
     () =>
       getCountries()

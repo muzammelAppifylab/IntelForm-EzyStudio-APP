@@ -1,6 +1,7 @@
 import type { FormPatchInput, FormPatchResponse } from '@shared/api-forms'
 import type { FormDefinition } from '@shared/form/definition'
 import type { FormTheme } from '@shared/form/theme'
+import type { SendOptions } from './api'
 
 /** What the undo history and autosave track: the title, the draft and the theme. */
 export interface Doc {
@@ -22,7 +23,7 @@ export interface AutosaveDeps {
   /** The current document. */
   read(): Doc
   /** Sends one PATCH with `If-Match: "<revision>"`. Rejects with a SaveError. */
-  send(body: FormPatchInput, revision: number): Promise<FormPatchResponse>
+  send(body: FormPatchInput, revision: number, opts?: SendOptions): Promise<FormPatchResponse>
   onStatus(status: SaveStatus, error?: SaveError): void
   onSaved(res: FormPatchResponse, body: FormPatchInput): void
   debounceMs?: number
@@ -112,11 +113,11 @@ export class AutosaveQueue {
   }
 
   /** Saves now and resolves once nothing is left to save (or a save failed). */
-  async flush(): Promise<void> {
+  async flush(opts?: SendOptions): Promise<void> {
     this.clearTimer()
     for (let i = 0; i < 20 && this.dirty && !this.disposed; i++) {
       this.clearTimer()
-      await this.run()
+      await this.run(opts)
       if (this.failed) return
     }
     if (this.inFlight) await this.inFlight
@@ -147,7 +148,7 @@ export class AutosaveQueue {
     }, ms)
   }
 
-  private run(): Promise<void> {
+  private run(opts?: SendOptions): Promise<void> {
     if (this.inFlight) {
       this.again = true
       return this.inFlight
@@ -163,7 +164,7 @@ export class AutosaveQueue {
     this.deps.onStatus('saving')
     this.inFlight = (async () => {
       try {
-        const res = await this.deps.send(body, this.revision)
+        const res = await this.deps.send(body, this.revision, opts)
         this.revision = res.revision
         if (!extra) this.saved = { ...this.saved, ...pick(sentDoc, body) }
         this.attempt = 0

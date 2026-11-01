@@ -19,7 +19,7 @@ type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 /** Fetches /api/* with the session cookie. Throws ApiRequestError for any non-2xx answer. */
 export async function api<T>(
   path: string,
-  options: { method?: Method; body?: unknown; headers?: Record<string, string>; keepalive?: boolean } = {},
+  options: { method?: Method; body?: unknown; headers?: Record<string, string>; keepalive?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> {
   let res: Response
   try {
@@ -28,9 +28,12 @@ export async function api<T>(
       credentials: 'same-origin',
       headers: { ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.headers },
       keepalive: options.keepalive,
+      signal: options.signal,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     })
-  } catch {
+  } catch (err) {
+    // A superseded query (TanStack aborts it): not an outage.
+    if (options.signal?.aborted) throw err
     throw new ApiRequestError(0, { code: 'offline', message: 'Can’t reach the server. Check your connection and try again.' })
   }
 

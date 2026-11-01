@@ -32,29 +32,28 @@ export function Canvas({ onInsert }: { onInsert(): void }) {
 
   return (
     <div
-      className="min-h-0 overflow-y-auto bg-background"
+      className="h-full min-h-0 overflow-y-auto rounded-lg bg-background"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget || (e.target as HTMLElement).dataset.canvasBlank !== undefined) store.getState().select(null)
       }}
     >
-      <div data-canvas-blank className="mx-auto grid max-w-[46rem] gap-3 px-6 pt-6 pb-24">
-        <p data-canvas-blank className="text-caption text-muted-foreground">
-          {LAYOUT_LABEL[draft.layout]} layout · click a question to edit it, or press / to add one
-        </p>
+      <div data-canvas-blank className="mx-auto grid max-w-[56rem] grid-cols-[minmax(0,1fr)] gap-4 px-6 pt-6 pb-36">
+        <CanvasHeader />
         <ScreenCard
           id="start"
           selected={selection === 'start'}
-          icon={<Play className="size-3.5" aria-hidden />}
+          icon={<Play className="size-4" aria-hidden />}
           kind="Start screen"
           muted={!draft.startScreen.enabled}
           title={draft.startScreen.enabled ? draft.startScreen.title || 'Untitled start screen' : 'Start screen is off'}
           body={draft.startScreen.enabled ? draft.startScreen.description : 'Respondents go straight to the first question. Select to turn it on.'}
+          meta={draft.startScreen.enabled && draft.startScreen.minutes ? `about ${draft.startScreen.minutes} ${draft.startScreen.minutes === 1 ? 'minute' : 'minutes'}` : undefined}
         />
 
         {draft.fields.length === 0 ? (
           <EmptyCanvas readOnly={readOnly} onInsert={onInsert} />
         ) : (
-          <ol className="grid gap-3" aria-label="Questions">
+          <ol className="grid grid-cols-[minmax(0,1fr)] gap-4" aria-label="Questions">
             {draft.fields.map((f, i) => (
               <FieldCard key={f.id} field={f} index={i} number={numbers[i]} count={draft.fields.length} selected={selection === f.id} issues={issuesByField.get(f.id) ?? []} />
             ))}
@@ -73,7 +72,7 @@ export function Canvas({ onInsert }: { onInsert(): void }) {
         <ScreenCard
           id="end"
           selected={selection === 'end'}
-          icon={<Flag className="size-3.5" aria-hidden />}
+          icon={<Flag className="size-4" aria-hidden />}
           kind="End screen"
           title={settingsRedirect ? 'Redirects after submit' : draft.endScreen.title || 'Untitled end screen'}
           body={settingsRedirect ? 'Set in Settings, After submit.' : draft.endScreen.message}
@@ -92,6 +91,7 @@ function ScreenCard({
   title,
   body,
   muted,
+  meta,
   issues = [],
 }: {
   id: 'start' | 'end'
@@ -101,6 +101,8 @@ function ScreenCard({
   title: string
   body?: string
   muted?: boolean
+  /** Extra detail after the title, e.g. "about 1 minute". */
+  meta?: string
   issues?: LogicIssue[]
 }) {
   const store = useBuilderStore()
@@ -119,25 +121,25 @@ function ScreenCard({
         }
       }}
       className={cn(
-        'focus-ring grid cursor-pointer gap-1 rounded-lg border border-border bg-card px-5 py-4 text-left transition-colors hover:border-input',
-        muted && 'border-dashed bg-transparent',
-        selected && 'border-border-ink ring-1 ring-border-ink hover:border-border-ink',
+        'focus-ring grid cursor-pointer gap-2 rounded-lg border border-dashed border-input px-6 py-4 text-left transition-[border-color,background-color] duration-(--duration-fast) ease-out hover:border-muted-foreground',
+        selected && 'border-solid border-border-ink bg-card hover:border-border-ink',
       )}
     >
-      <span className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
-        {icon}
-        {kind}
+      <span className="flex min-w-0 items-center gap-3">
+        <span className="shrink-0 text-foreground">{icon}</span>
+        <span className="shrink-0 text-label font-semibold text-foreground">{kind}</span>
+        <span className={cn('min-w-0 truncate text-body text-muted-foreground', muted && 'italic')}>
+          {muted ? title : <>“<PipedText text={title} />”</>}
+          {meta && ` · ${meta}`}
+        </span>
       </span>
-      <span className={cn('text-label text-foreground', muted && 'text-muted-foreground')}>
-        <PipedText text={title} />
-      </span>
-      {body && (
-        <span className="line-clamp-2 text-body-sm whitespace-pre-wrap text-muted-foreground">
+      {selected && body && (
+        <span className="line-clamp-2 pl-7 text-body-sm whitespace-pre-wrap text-muted-foreground">
           <PipedText text={body} />
         </span>
       )}
       {issues.map((i, n) => (
-        <span key={n} className="w-fit rounded-md bg-warning-subtle px-2 py-1 text-caption text-warning-subtle-foreground">
+        <span key={n} className="ml-7 w-fit rounded-md bg-warning-subtle px-2 py-1 text-caption text-warning-subtle-foreground">
           {i.message}
         </span>
       ))}
@@ -151,7 +153,7 @@ function EmptyCanvas({ readOnly, onInsert }: { readOnly: boolean; onInsert(): vo
     <div
       ref={ref}
       className={cn(
-        'grid place-items-center gap-3 rounded-lg border-2 border-dashed border-input px-6 py-14 text-center',
+        'grid place-items-center gap-3 rounded-lg border border-dashed border-input px-6 py-14 text-center',
         isDropTarget && 'border-border-ink bg-accent',
       )}
     >
@@ -177,11 +179,39 @@ function EmptyCanvas({ readOnly, onInsert }: { readOnly: boolean; onInsert(): vo
 function EndDrop({ onInsert }: { onInsert(): void }) {
   const { ref, isDropTarget } = useDroppable({ id: CANVAS_END, accept: 'palette' })
   return (
-    <div ref={ref} className={cn('grid place-items-center rounded-lg border border-dashed border-transparent py-1 transition-colors', isDropTarget && 'border-border-ink bg-accent py-4')}>
-      <Button variant="ghost" size="sm" onClick={onInsert} className="text-muted-foreground">
-        <Plus aria-hidden />
-        Add question
-      </Button>
+    <div ref={ref}>
+      <button
+        type="button"
+        onClick={onInsert}
+        className={cn(
+          'focus-ring press flex h-16 w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-input text-label text-foreground transition-[border-color,background-color,scale] duration-(--duration-fast) ease-out hover:border-muted-foreground hover:bg-card',
+          isDropTarget && 'border-border-ink bg-option-selected',
+        )}
+      >
+        <Plus className="size-4" aria-hidden />
+        Add a question
+      </button>
+    </div>
+  )
+}
+
+/** The form's name at title size, with its question and rule counts and the layout. */
+function CanvasHeader() {
+  const draft = useBuilder((s) => s.doc.draft)
+  const title = useBuilder((s) => s.doc.title)
+  const { fields, rules } = useMemo(
+    () => ({ fields: draft.fields.filter((f) => f.type !== 'section_break').length, rules: draft.fields.filter((f) => f.logic).length }),
+    [draft],
+  )
+  const n = (count: number, one: string, many: string) => `${count.toLocaleString()} ${count === 1 ? one : many}`
+  return (
+    <div data-canvas-blank className="grid gap-1 pb-2">
+      <h1 data-canvas-blank className="text-heading break-words xl:text-title">
+        {title || 'Untitled form'}
+      </h1>
+      <p data-canvas-blank className="text-body text-muted-foreground" aria-label="Form summary">
+        {n(fields, 'question', 'questions')} · {n(rules, 'logic rule', 'logic rules')} · {LAYOUT_LABEL[draft.layout]}
+      </p>
     </div>
   )
 }

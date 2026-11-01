@@ -2,15 +2,23 @@ import type { ApiErrorBody } from '@shared/api'
 import type { FormPatchInput, FormPatchResponse } from '@shared/api-forms'
 import { ApiRequestError } from '@/lib/api'
 
+export interface SendOptions {
+  /** Let the request finish even if the page unloads (tab hidden or closing). */
+  keepalive?: boolean
+}
+
 /** PATCH /api/forms/:id with the revision it was based on (last save wins; see Agent D's route). */
-export async function patchForm(formId: string, body: FormPatchInput, revision: number): Promise<FormPatchResponse> {
+export async function patchForm(formId: string, body: FormPatchInput, revision: number, opts: SendOptions = {}): Promise<FormPatchResponse> {
   let res: Response
+  const json = JSON.stringify(body)
   try {
     res = await fetch(`/api/forms/${formId}`, {
       method: 'PATCH',
       credentials: 'same-origin',
+      // Keepalive outlives the page, but browsers cap its body at 64 KB.
+      keepalive: !!opts.keepalive && json.length <= 60_000,
       headers: { 'Content-Type': 'application/json', 'If-Match': `"${revision}"` },
-      body: JSON.stringify(body),
+      body: json,
     })
   } catch {
     throw new ApiRequestError(0, { code: 'offline', message: 'Can’t reach the server. Your changes are kept here and saved when you’re back online.' })

@@ -4,6 +4,7 @@ import { extendTailwindMerge } from 'tailwind-merge'
 /** The design system's type classes (src/styles/styles.css). Each sets the whole `font` shorthand. */
 export const TYPE_CLASSES = [
   'hero',
+  'wordmark',
   'title',
   'heading',
   'heading-sm',

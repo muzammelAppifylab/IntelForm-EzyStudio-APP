@@ -193,9 +193,9 @@ function formatFrom(name: string | null, address: string): string {
   return `"${name.replace(/["\\\r\n]/g, '')}" <${address}>`
 }
 
-async function active(): Promise<Active> {
+async function active(db: Queryable = sql): Promise<Active> {
   if (cache && Date.now() - cache.at < TTL_MS) return cache
-  const [cfg, general] = await Promise.all([getSetting('email'), getSetting('general')])
+  const [cfg, general] = await Promise.all([getSetting('email', db), getSetting('general', db)])
   const fallbackFrom = `no-reply@${new URL(env.APP_URL).hostname}`
   const from = formatFrom(cfg.fromName ?? general.appName, cfg.fromAddress ?? fallbackFrom)
   let driver: EmailDriver | null
@@ -214,8 +214,8 @@ async function active(): Promise<Active> {
 }
 
 /** Whether emails go out right now. False hides "Forgot password" and shows copyable invite links. */
-export async function emailEnabled(): Promise<boolean> {
-  return (await active()).driver !== null
+export async function emailEnabled(db: Queryable = sql): Promise<boolean> {
+  return (await active(db)).driver !== null
 }
 
 /** One plain address: no display name, comma, angle bracket, whitespace or line break. */
@@ -256,7 +256,7 @@ export async function sendEmail(message: EmailMessage): Promise<boolean> {
  * is off, so callers can fall back, e.g. to a copyable link.
  */
 export async function queueEmail(tx: Queryable, message: EmailMessage): Promise<boolean> {
-  if (!(await emailEnabled())) return false
+  if (!(await emailEnabled(tx))) return false
   const m = normalize(message)
   if (!m.to.length) return false
   await enqueue(tx, 'email', m, { maxAttempts: 3 })

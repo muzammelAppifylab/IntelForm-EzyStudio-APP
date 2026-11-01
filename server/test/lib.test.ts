@@ -341,7 +341,6 @@ describe('webhook test payload', () => {
       layout: 'all_at_once',
       startScreen: { enabled: false, title: '', button: 'Start' },
       endScreen: { title: 'Thanks', message: '' },
-      labels: {},
       fields: [
         { id: 'f_pick', type: 'single_choice', label: 'Pick one', props: { options: [{ id: 'o_aa', label: 'A' }] } },
         { id: 'f_many', type: 'multiple_choice', label: 'Pick some', props: { options: [{ id: 'o_bb', label: 'B' }] } },

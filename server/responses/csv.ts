@@ -38,11 +38,13 @@ function headerRow(cat: FormCatalog): string {
 export interface CsvOptions {
   /** Called between chunks; return true to stop (client went away). */
   aborted?: () => boolean
+  /** The form's catalog, when the caller has loaded it already. */
+  catalog?: FormCatalog
 }
 
 /** CSV text chunks for a form, BOM first. */
 export async function* formCsvChunks(formId: string, query: ResponsesCsvQuery, opts: CsvOptions = {}): AsyncGenerator<string> {
-  const cat = await loadCatalog(formId)
+  const cat = opts.catalog ?? (await loadCatalog(formId))
   const tz = await safeTz(query.tz)
   const where = query.ids.length
     ? sql`form_id = ${formId} AND id = ANY(${sql.array(query.ids)}::uuid[])`

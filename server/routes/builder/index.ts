@@ -28,6 +28,13 @@ export const builderRoutes = new Hono<AppEnv>().use(requireUser)
 
 const GONE = 'That form no longer exists'
 
+/** Throws a 404 unless the form exists. */
+async function assertForm(id: string) {
+  const [row] = await sql`SELECT 1 FROM forms WHERE id = ${id}`
+  if (!row) throw notFound(GONE)
+}
+
+/** Everything the test send needs, draft included: only that route pays for it. */
 async function formRow(id: string) {
   const [row] = await sql<
     {
@@ -67,7 +74,13 @@ builderRoutes.get('/capabilities', requirePermission('forms.view'), async (c) =>
 builderRoutes.post('/forms/:id/presence', requirePermission('forms.view'), async (c) => {
   const id = uuidParam(c, 'id', GONE)
   const { tabId } = await readBody(c, presenceInput)
-  const row = await formRow(id)
+  // Polled every 20 s per open builder tab: read only the save marker, never the draft.
+  const [row] = await sql<{ revision: number; updated_by: string | null; updated_by_name: string | null }[]>`
+    SELECT f.revision, f.updated_by, u.name AS updated_by_name
+    FROM forms f LEFT JOIN users u ON u.id = f.updated_by
+    WHERE f.id = ${id}
+  `
+  if (!row) throw notFound(GONE)
   const user = c.var.user
   // Viewers can't edit, so they never trigger the "someone else is editing" banner for others.
   if (user.role !== 'viewer') touchPresence(id, tabId, user)
@@ -89,14 +102,15 @@ builderRoutes.delete('/forms/:id/presence/:tabId', requirePermission('forms.view
 // ---------------------------------------------------------------------------
 
 builderRoutes.get('/forms/:id/webhook', requirePermission('forms.edit'), async (c) => {
-  const row = await formRow(uuidParam(c, 'id', GONE))
-  return c.json<WebhookInfo>({ hasSecret: !!row.webhook_secret })
+  const [row] = await sql<{ has_secret: boolean }[]>`SELECT webhook_secret IS NOT NULL AS has_secret FROM forms WHERE id = ${uuidParam(c, 'id', GONE)}`
+  if (!row) throw notFound(GONE)
+  return c.json<WebhookInfo>({ hasSecret: row.has_secret })
 })
 
 /** Generates or regenerates the signing secret. The only time it is shown. */
 builderRoutes.post('/forms/:id/webhook/secret', requirePermission('forms.edit'), async (c) => {
   const id = uuidParam(c, 'id', GONE)
-  await formRow(id)
+  await assertForm(id)
   const secret = await rotateWebhookSecret(id)
   return c.json<WebhookSecretResponse>({ secret })
 })
@@ -118,7 +132,7 @@ builderRoutes.post('/forms/:id/webhook/test', requirePermission('forms.edit'), a
 
 builderRoutes.get('/forms/:id/webhook/deliveries', requirePermission('forms.edit'), async (c) => {
   const id = uuidParam(c, 'id', GONE)
-  await formRow(id)
+  await assertForm(id)
   const rows = await sql<Omit<WebhookDelivery, 'ok'>[]>`
     SELECT id, created_at AS "createdAt", url, status_code AS "statusCode", duration_ms AS "durationMs",
       response_body AS "responseBody", error, is_test AS "isTest", response_id AS "responseId"

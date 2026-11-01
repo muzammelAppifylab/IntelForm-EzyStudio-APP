@@ -32,7 +32,6 @@ const DEF = {
   layout: 'all_at_once',
   startScreen: { enabled: false, title: '', button: 'Start' },
   endScreen: { title: 'Thanks, {f_name.first|friend}!', message: '' },
-  labels: {},
   fields: [
     { id: 'f_name', type: 'name', label: 'Your name', required: true, props: { split: true } },
     { id: 'f_email', type: 'email', label: 'Email', required: true },
@@ -84,13 +83,14 @@ afterAll(async () => {
 })
 
 describe('GET /api/public/forms/:slug', () => {
-  it('returns the published definition, labels and public settings only', async () => {
+  it('returns the published definition and public settings only', async () => {
     const form = await makeForm({ passwordHash: null, notifyRecipients: [] })
     const res = await ctx.client().get(`/api/public/forms/${form.slug}`)
     expect(res.status).toBe(200)
     expect(res.body.status).toBe('live')
     expect(res.body.definition.fields).toHaveLength(7)
-    expect(res.body.labels.submit).toBe('Submit')
+    expect(res.body).not.toHaveProperty('labels')
+    expect(res.body).not.toHaveProperty('lang')
     expect(res.body.renderToken).toMatch(/^\d+\./)
     expect(res.body.settings).not.toHaveProperty('passwordHash')
     expect(res.body.settings).not.toHaveProperty('webhook')
@@ -254,9 +254,20 @@ describe('POST /api/public/forms/:slug/responses', () => {
       expect(r.body.error.fields.f_email[0]).toMatch(/already responded/)
     }
     expect((await send('grace.h@example.com')).status).toBe(200)
-    // Stored as typed (trimmed, lowercased), not as the dedupe key.
-    const rows = await sql<{ e: string }[]>`SELECT answers->>'f_email' AS e FROM responses WHERE form_id = ${form.id} ORDER BY submitted_at`
-    expect(rows.map((r) => r.e)).toEqual(['grace+first@example.com', 'grace.h@example.com'])
+    // Stored as typed (trimmed, lowercased); the dedupe key goes in email_key.
+    const rows = await sql<{ e: string; k: string }[]>`SELECT answers->>'f_email' AS e, email_key AS k FROM responses WHERE form_id = ${form.id} ORDER BY submitted_at`
+    expect(rows.map((r) => [r.e, r.k])).toEqual([['grace+first@example.com', 'grace@example.com'], ['grace.h@example.com', 'grace.h@example.com']])
+  })
+
+  it('rejects an address whose email_key is already stored, whatever the answer says', async () => {
+    const form = await makeForm({ onePerEmail: true, onePerEmailFieldId: 'f_email' })
+    // As the 0010 backfill leaves an older response: the key is all the check reads.
+    await sql`INSERT INTO responses (form_id, form_version_id, answers, email_key) VALUES (${form.id}, ${form.versionId}, ${sql.json({ f_email: 'x@example.com' })}, 'lin@example.com')`
+    const r = await ctx.client().post(`/api/public/forms/${form.slug}/responses`, body(form, good({ f_email: 'Lin+news@example.com' })))
+    expect(r.status).toBe(422)
+    expect(r.body.error.fields.f_email).toEqual([r.body.error.message])
+    expect(r.body.error.message).toMatch(/already responded/)
+    expect(await count(form.id)).toBe(1)
   })
 
   it('rejects a one-per-email submit without an email answer', async () => {
@@ -584,12 +595,5 @@ describe('security follow-ups', () => {
     expect((await ctx.client().post(`/api/public/forms/${open.slug}/unlock`, { password: 'anything' })).status).toBe(200)
     const [none] = await sql`SELECT 1 FROM rate_limits WHERE key = ${`unlock-fail:form:${open.id}`}`
     expect(none).toBeUndefined()
-  })
-
-  it('exposes the form language', async () => {
-    const form = await makeForm({ language: 'de' })
-    const res = await ctx.client().get(`/api/public/forms/${form.slug}`)
-    expect(res.body.lang).toBe('de')
-    expect(res.body.settings.language).toBe('de')
   })
 })

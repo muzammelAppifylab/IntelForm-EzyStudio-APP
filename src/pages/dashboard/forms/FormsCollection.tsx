@@ -8,11 +8,13 @@ import {
   MoreHorizontal,
   PencilLine,
   PenSquare,
+  Rows3,
   Save,
   Trash2,
 } from 'lucide-react'
 import { Link } from 'react-router'
 import type { FormListItem } from '@shared/api-forms'
+import { LAYOUT_LABEL } from '@shared/form/definition'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -24,7 +26,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useCan } from '@/lib/auth'
 import { FormStatusBadge, LayoutIcon, UnpublishedBadge } from './bits'
-import { formatCount, formatRate } from './format'
+import { formatCount, formatRate, LAYOUT_ICON } from './format'
 import type { FormDialog } from './dialogs'
 import { builderPath, responsesPath, useFormActions } from './queries'
 
@@ -92,48 +94,64 @@ function Badges({ form }: { form: FormListItem }) {
 
 export function FormsGrid({ forms, onDialog }: { forms: FormListItem[]; onDialog: OnDialog }) {
   return (
-    <ul className="grid gap-4 @xl:grid-cols-2 @4xl:grid-cols-3" aria-label="Forms">
-      {forms.map((form) => (
-        <li key={form.id} className="group relative flex flex-col gap-4 rounded-lg border bg-card p-5 transition-colors hover:border-input">
-          <div className="flex items-start gap-3">
-            <LayoutIcon layout={form.layout} />
-            <div className="grid min-w-0 flex-1 gap-1.5">
-              <h3 className="line-clamp-2 text-subheading break-words">
-                {/* The title link covers the card; the menu sits above it. */}
-                <Link to={builderPath(form.id)} className="focus-ring rounded-sm after:absolute after:inset-0 after:rounded-lg after:content-['']">
-                  {form.title}
-                </Link>
-              </h3>
+    <ul className="grid gap-4 @xl:grid-cols-2 @5xl:grid-cols-3" aria-label="Forms">
+      {forms.map((form, i) => {
+        const Layout = LAYOUT_ICON[form.layout] ?? Rows3
+        const empty = form.status === 'draft' && form.responseCount === 0
+        return (
+          <li
+            key={form.id}
+            style={{ '--i': i } as React.CSSProperties}
+            className="stagger group relative flex flex-col rounded-lg border border-border bg-card p-4 transition-[border-color] duration-(--duration-fast) ease-out focus-within:border-ring hover:border-paper-400 hover:bg-card"
+          >
+            <div className="flex items-start justify-between gap-3">
               <Badges form={form} />
+              {/* Above the title link's card-wide overlay, which comes later in the DOM. */}
+              <div className="relative z-10 -mt-1 -mr-1.5">
+                <FormActionsMenu form={form} onDialog={onDialog} />
+              </div>
             </div>
-            <div className="relative -mt-1 -mr-2">
-              <FormActionsMenu form={form} onDialog={onDialog} />
+            <h3 className="mt-3 line-clamp-2 text-subheading break-words">
+              {/* The title link covers the card; the menu sits above it. */}
+              <Link to={builderPath(form.id)} className="focus-ring rounded-sm after:absolute after:inset-0 after:rounded-lg after:content-['']">
+                {form.title}
+              </Link>
+            </h3>
+            <p className="mt-1 mb-5 inline-flex items-center gap-1.5 text-caption text-muted-foreground">
+              <Layout className="size-4 shrink-0" aria-hidden />
+              <span className="sr-only">Layout: </span>
+              {LAYOUT_LABEL[form.layout] ?? 'All at once'}
+            </p>
+            <dl className="mt-auto grid grid-cols-2 gap-4 border-t border-border pt-4">
+              <div className="grid gap-0.5">
+                <dt className="order-last text-caption text-muted-foreground">Responses</dt>
+                <dd className="text-heading-sm tabular-nums">{empty ? '—' : formatCount(form.responseCount)}</dd>
+              </div>
+              <div className="grid gap-0.5">
+                <dt className="order-last text-caption text-muted-foreground">Completion</dt>
+                <dd className="text-heading-sm tabular-nums">{formatRate(form.completionRate)}</dd>
+              </div>
+            </dl>
+            <div className="mt-3 flex min-h-5 items-center justify-between gap-3">
+              <p className="text-caption text-muted-foreground">
+                Edited <time dateTime={form.updatedAt} title={fullDate(form.updatedAt)}>{updatedAgo(form.updatedAt)}</time>
+              </p>
+              {form.newThisWeek > 0 && (
+                <span className="rounded-md bg-info-subtle px-2 py-0.5 text-caption font-semibold tabular-nums text-info-subtle-foreground">
+                  +{formatCount(form.newThisWeek)} new
+                </span>
+              )}
             </div>
-          </div>
-          <div className="mt-auto grid gap-4">
-          <dl className="grid grid-cols-2 gap-3 border-t pt-4">
-            <div className="grid gap-0.5">
-              <dt className="text-caption text-muted-foreground">Responses</dt>
-              <dd className="text-subheading tabular-nums">{formatCount(form.responseCount)}</dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="text-caption text-muted-foreground">Completion</dt>
-              <dd className="text-subheading tabular-nums">{formatRate(form.completionRate)}</dd>
-            </div>
-          </dl>
-          <p className="text-caption text-muted-foreground">
-            Updated <time dateTime={form.updatedAt} title={fullDate(form.updatedAt)}>{updatedAgo(form.updatedAt)}</time>
-          </p>
-          </div>
-        </li>
-      ))}
+          </li>
+        )
+      })}
     </ul>
   )
 }
 
 export function FormsTable({ forms, onDialog }: { forms: FormListItem[]; onDialog: OnDialog }) {
   return (
-    <section className="overflow-hidden rounded-lg border bg-card" aria-label="Forms">
+    <section className="overflow-hidden rounded-lg border border-border bg-card" aria-label="Forms">
       <Table>
         <TableHeader className="bg-muted">
           <TableRow>

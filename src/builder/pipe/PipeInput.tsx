@@ -14,7 +14,10 @@ export interface PipeInputProps {
   multiline?: boolean
   placeholder?: string
   readOnly?: boolean
-  /** "input" looks like a text box (settings panel); "inline" is bare text on the canvas. */
+  /**
+   * "input" looks like a text box (settings panel). "inline" is text on the canvas that turns into
+   * a field on hover and focus; its padding sits in a negative margin so the text stays aligned.
+   */
   variant?: 'input' | 'inline'
   className?: string
   onFocus?(): void
@@ -24,7 +27,8 @@ export interface PipeInputProps {
 const FRAME = {
   input:
     'w-full cursor-text rounded-md border border-input bg-field px-3 py-2 text-body transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30',
-  inline: 'w-full cursor-text rounded-sm focus-within:outline-2 focus-within:outline-offset-4 focus-within:outline-ring',
+  inline:
+    '-mx-2 w-[calc(100%+1rem)] cursor-text rounded-md px-2 py-1 transition-[background-color,box-shadow] duration-(--duration-fast) ease-out hover:bg-accent focus-within:bg-field focus-within:ring-2 focus-within:ring-ring hover:focus-within:bg-field',
 }
 
 /** Text box with @ answer piping. Shows a plain input while the editor chunk loads. */

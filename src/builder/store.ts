@@ -7,6 +7,7 @@ import type { FormDefinition, FormField } from '@shared/form/definition'
 import type { FieldType } from '@shared/form/field-types'
 import type { ClientFormSettings, FormSettingsPatch } from '@shared/form/settings'
 import { AutosaveQueue, type Doc, type SaveError, type SaveStatus } from './autosave'
+import type { SendOptions } from './api'
 import { dependentsOf } from '@shared/form/logic'
 import { changeType, createField, duplicateField, indexOfField, insertField, moveField, removeField, type FieldDefaults } from './ops'
 
@@ -89,7 +90,7 @@ export interface BuilderActions {
 export type BuilderStore = StoreApi<BuilderState & BuilderActions> & { queue: AutosaveQueue }
 
 export interface StoreDeps {
-  send(body: FormPatchInput, revision: number): Promise<FormPatchResponse>
+  send(body: FormPatchInput, revision: number, opts?: SendOptions): Promise<FormPatchResponse>
   me: { id: string }
   readOnly: boolean
   /** App settings defaults for new fields, read when a field is added. */

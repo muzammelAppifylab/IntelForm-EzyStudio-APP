@@ -8,6 +8,7 @@ import type {
   FormListItem,
   FormsListQuery,
   FormsListResponse,
+  FormsStrip,
   FormStatusResponse,
   FormsView,
   FormsViewResponse,
@@ -24,13 +25,22 @@ export function formsListQuery(params: FormsListQuery) {
   if (params.q) search.set('q', params.q)
   if (params.status !== 'all') search.set('status', params.status)
   if (params.sort !== 'updated') search.set('sort', params.sort)
+  if (params.page > 1) search.set('page', String(params.page))
   const qs = search.toString()
   return queryOptions({
     queryKey: [...formsKey, 'list', params],
-    queryFn: () => api<FormsListResponse>(`/api/forms${qs ? `?${qs}` : ''}`),
+    // The signal cancels a request a newer search or page has replaced.
+    queryFn: ({ signal }) => api<FormsListResponse>(`/api/forms${qs ? `?${qs}` : ''}`, { signal }),
     placeholderData: keepPreviousData,
   })
 }
+
+/** Workspace-wide numbers above the list; they don't change with search, filter or page. */
+export const formsStripQuery = queryOptions({
+  queryKey: [...formsKey, 'strip'],
+  queryFn: () => api<FormsStrip>('/api/forms/strip'),
+  staleTime: 60_000,
+})
 
 export const templatesQuery = queryOptions({
   queryKey: ['templates'],
@@ -49,7 +59,8 @@ export function useCreateForm() {
   return useMutation({
     mutationFn: (input: CreateFormInput) => api<CreatedForm>('/api/forms', { method: 'POST', body: input }),
     onSuccess: (form) => {
-      queryClient.invalidateQueries({ queryKey: formsKey })
+      // We leave the list right away: refresh it when it's next shown.
+      void queryClient.invalidateQueries({ queryKey: formsKey, refetchType: 'none' })
       toast.success('Form created')
       navigate(builderPath(form.id))
     },

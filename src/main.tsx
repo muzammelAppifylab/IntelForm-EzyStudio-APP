@@ -9,7 +9,7 @@ import { ThemeProvider } from '@/lib/theme'
 import { router } from './router'
 import './index.css'
 
-// The server's front page SEO tags are for crawlers; the pages render their own (HomePage.tsx).
+// The server's home page SEO tags are for crawlers; the pages render their own (HomePage.tsx).
 document.head.querySelectorAll('[data-ssr]').forEach((el) => el.remove())
 
 const queryClient = new QueryClient({

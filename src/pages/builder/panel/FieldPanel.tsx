@@ -11,7 +11,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Copy, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FIELD_ICONS } from '@/form-types/icons'
 import { FIELD_SETTINGS } from '@/form-types/settings'
@@ -34,12 +37,52 @@ export function FieldPanel({ id }: { id: string }) {
   const Settings = FIELD_SETTINGS[field.type] as FieldSettingsComponent
   const update = (recipe: (f: FormField) => void, key?: string, label?: string) => store.getState().updateField(id, recipe as never, key, label)
 
+  const number = draft.fields.slice(0, index + 1).filter((f) => f.type !== 'section_break').length
+  const TRIGGER = 'h-full flex-1 rounded-md text-label group-data-[variant=default]/tabs-list:data-[state=active]:bg-card group-data-[variant=default]/tabs-list:data-[state=active]:text-foreground'
+
   return (
-    <>
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <TypeSwitcher field={field} readOnly={readOnly} />
+    <Tabs defaultValue="settings" className="flex min-h-0 flex-1 flex-col gap-0">
+      <div className="grid gap-5 border-b border-border px-5 pt-6 pb-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="grid min-w-0 gap-1">
+            <p className="text-overline text-muted-foreground">{isSection ? 'Section break' : `Question ${number}`}</p>
+            <h2 className="truncate text-heading-sm">{isSection ? 'Section' : meta.label}</h2>
+          </div>
+          {!readOnly && (
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button variant="ghost" size="icon-sm" aria-label="Duplicate this question" onClick={() => store.getState().duplicate(id)}>
+                <Copy aria-hidden />
+              </Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Delete this question" className="text-destructive hover:text-destructive" onClick={() => store.getState().requestDelete(id)}>
+                <Trash2 aria-hidden />
+              </Button>
+            </div>
+          )}
+        </div>
+        <TabsList className="h-9 w-full rounded-lg p-0.5">
+          <TabsTrigger value="settings" className={TRIGGER}>
+            Settings
+          </TabsTrigger>
+          <TabsTrigger value="logic" className={TRIGGER}>
+            Logic
+            {field.logic && (
+              <>
+                <span className="size-1.5 rounded-full bg-current" aria-hidden />
+                <span className="sr-only">(has a rule)</span>
+              </>
+            )}
+          </TabsTrigger>
+        </TabsList>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <TabsContent value="logic" className="min-h-0 flex-1 overflow-y-auto">
+        <PanelSection title={isSection ? 'Show or hide this page' : 'Show or hide this question'}>
+          <LogicEditor field={field} index={index} />
+        </PanelSection>
+      </TabsContent>
+      <TabsContent value="settings" className="min-h-0 flex-1 overflow-y-auto">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-4">
+          <TypeSwitcher field={field} readOnly={readOnly} />
+        </div>
         <PanelSection title={isSection ? 'Page' : 'Question'}>
           <div className="grid gap-1.5">
             <Label className="text-label" onClick={(e) => (e.currentTarget.nextElementSibling?.querySelector('[contenteditable]') as HTMLElement | null)?.focus()}>
@@ -148,11 +191,8 @@ export function FieldPanel({ id }: { id: string }) {
           />
         </PanelSection>
 
-        <PanelSection title={isSection ? 'Show or hide this page' : 'Show or hide this question'}>
-          <LogicEditor field={field} index={index} />
-        </PanelSection>
-      </div>
-    </>
+      </TabsContent>
+    </Tabs>
   )
 }
 

@@ -19,7 +19,7 @@ import { ApiError, notFound } from '../lib/errors'
 import { logger } from '../lib/logger'
 import { readBody, uuidParam } from '../lib/validate'
 import { requirePermission, requireUser, type AppEnv } from '../middleware/auth'
-import { GONE } from '../responses/catalog'
+import { GONE, loadCatalog } from '../responses/catalog'
 import { csvFilename, exportFormCsv, formCsvChunks } from '../responses/csv'
 import { safeTz, todayIn } from '../responses/query'
 import { formSummary } from '../responses/summary'
@@ -95,10 +95,11 @@ responsesRoutes.get('/:id/responses', requirePermission('responses.view'), async
 responsesRoutes.get('/:id/responses.csv', requirePermission('responses.view'), async (c) => {
   const formId = uuidParam(c, 'id', GONE)
   const q = readQuery(c, responsesCsvQuery, [...FILTER_KEYS, 'ids'])
-  const form = await assertForm(formId)
+  // Loaded before streaming so a missing form is a 404, and handed to the export so it reads the form once.
+  const catalog = await loadCatalog(formId)
   const tz = await safeTz(q.tz)
   c.header('Content-Type', 'text/csv; charset=utf-8')
-  c.header('Content-Disposition', contentDisposition(csvFilename(form, todayIn(tz))))
+  c.header('Content-Disposition', contentDisposition(csvFilename(catalog.form, todayIn(tz))))
   c.header('Cache-Control', 'no-store')
   return stream(
     c,
@@ -107,7 +108,7 @@ responsesRoutes.get('/:id/responses.csv', requirePermission('responses.view'), a
       s.onAbort(() => {
         aborted = true
       })
-      for await (const chunk of formCsvChunks(formId, q, { aborted: () => aborted })) {
+      for await (const chunk of formCsvChunks(formId, q, { aborted: () => aborted, catalog })) {
         if (aborted) break
         // write() resolves once the reader has taken the chunk: real backpressure.
         await s.write(chunk)

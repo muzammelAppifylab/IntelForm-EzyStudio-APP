@@ -31,7 +31,7 @@ Several agents build IntelForm at the same time in this one working tree. These 
 | E | Respondent | `src/respondent/**`, `form.html`, `src/form-types/renderers.tsx`, `src/form-types/*/Renderer.tsx`, `server/routes/public-forms.ts`, `server/respondent/**`, `public/embed.js`, `shared/api-public.ts`, `src/pages/public/PublicFormPage.tsx`, `e2e/respondent.spec.ts` | `0006_respondent.sql` | 5185 / 8795 |
 | F | Builder | `src/pages/builder/**` **except** `src/pages/builder/responses/**`, `src/builder/**`, `src/form-types/settings.tsx`, `src/form-types/*/{Settings,ConditionValue}.tsx`, `server/routes/themes.ts`, `server/routes/builder/**`, `shared/api-builder.ts`, `e2e/builder.spec.ts` | `0007_builder.sql` | 5186 / 8796 |
 | G | Responses | `src/pages/builder/responses/**`, `src/form-types/summaries.tsx`, `src/form-types/*/SummaryCard.tsx`, `server/routes/responses.ts`, `server/responses/**`, `shared/api-responses.ts`, `e2e/responses.spec.ts` | `0004_responses.sql` | 5187 / 8797 |
-| H | Front page and settings UI | `server/routes/front-page.ts`, `server/routes/public.ts`, `shared/api-front.ts`, `src/pages/public/{HomePage,LegalPage}.tsx`, `src/pages/public/home/**`, `src/pages/dashboard/{FrontPageEditorPage,SettingsPage,ProfilePage}.tsx`, `src/pages/dashboard/settings/**`, `src/pages/dashboard/front-page/**`, `e2e/front-page.spec.ts` | `0005_front_page.sql` | 5188 / 8798 |
+| H | Public site and settings UI | `server/lib/public-site.ts`, `server/routes/public.ts`, `shared/api-front.ts`, `src/pages/public/{HomePage,AboutPage,AllFormsPage,LegalPage}.tsx`, `src/pages/public/home/**`, `src/pages/dashboard/{SettingsPage,ProfilePage}.tsx`, `src/pages/dashboard/settings/**`, `e2e/public-site.spec.ts` | `0005_front_page.sql` | 5188 / 8798 |
 
 **Wave 3:** these agents take over areas whose original owners (A, B, C, D, H) have finished.
 
@@ -65,7 +65,7 @@ Keep these export names stable. Add to them freely; don't rename them.
 - `csv.ts`: per-type answer → CSV cell(s), using the registry.
 
 **Forms management (D)**
-- `shared/form/settings.ts`: `formSettings` (zod), `FormSettings`, `defaultFormSettings()`, covering every PRD "Form settings" group (access and limits, after submit, notifications, webhook, spam, system labels).
+- `shared/form/settings.ts`: `formSettings` (zod), `FormSettings`, `defaultFormSettings()`, covering every PRD "Form settings" group (access and limits, after submit, notifications, webhook, spam). Forms have no language setting or label overrides: respondent text is the fixed English `SYSTEM_LABELS` in `shared/form/labels.ts`.
 - `shared/form/templates/`: `BUILTIN_TEMPLATES`.
 
 **Platform (C): `server/lib/`**

@@ -28,8 +28,9 @@ export interface CatalogEntry {
 }
 
 export interface FormCatalog {
-  form: { id: string; title: string; slug: string; publishedVersionId: string | null }
-  /** Answer fields (no section breaks), current first, then deleted. */
+  /** responseCount is forms.response_count as read with the catalog. */
+  form: { id: string; title: string; slug: string; publishedVersionId: string | null; responseCount: number }
+  /** Answer fields (no section breaks), current first, then deleted. Shared through the cache: read only. */
   entries: CatalogEntry[]
   byId: Map<string, CatalogEntry>
 }
@@ -57,16 +58,58 @@ function withOptions(f: FormField, options: Opt[]): FormField {
   return { ...f, props: { ...(f.props as object), options } } as FormField
 }
 
+type FormRow = { id: string; title: string; slug: string; published_version_id: string | null; response_count: number }
+type VersionRow = { id: string; version: number; fields: unknown }
+type Built = Pick<FormCatalog, 'entries' | 'byId'>
+
+/**
+ * Built catalogs by form, tagged with the published version they were built from. Versions are
+ * append-only and publishing moves published_version_id to the newest, so (form, published
+ * version) fixes the version list: a hit skips reading (and detoasting) every definition.
+ * Per process; the oldest entry is dropped past CATALOG_CACHE_SIZE.
+ */
+const CATALOG_CACHE_SIZE = 200
+const cache = new Map<string, { versionId: string | null; built: Built }>()
+
+function remember(formId: string, versionId: string | null, built: Built) {
+  cache.delete(formId)
+  cache.set(formId, { versionId, built })
+  if (cache.size > CATALOG_CACHE_SIZE) cache.delete(cache.keys().next().value!)
+}
+
+const loadVersions = (formId: string) => sql<VersionRow[]>`
+  SELECT id, version, definition->'fields' AS fields FROM form_versions WHERE form_id = ${formId} ORDER BY version DESC
+`
+
 /** Loads the form and its catalog; 404 when the form is gone. */
 export async function loadCatalog(formId: string): Promise<FormCatalog> {
-  const [form] = await sql<{ id: string; title: string; slug: string; published_version_id: string | null }[]>`
-    SELECT id, title, slug, published_version_id FROM forms WHERE id = ${formId}
-  `
-  if (!form) throw notFound(GONE)
-  const versions = await sql<{ id: string; version: number; fields: unknown }[]>`
-    SELECT id, version, definition->'fields' AS fields FROM form_versions WHERE form_id = ${formId} ORDER BY version DESC
-  `
-  const published = versions.find((v) => v.id === form.published_version_id) ?? null
+  const cached = cache.get(formId)
+  // Cold: read the form and its versions together. Warm: the form row decides whether the cache holds.
+  const [[form], prefetched] = await Promise.all([
+    sql<FormRow[]>`SELECT id, title, slug, published_version_id, response_count FROM forms WHERE id = ${formId}`,
+    cached ? null : loadVersions(formId),
+  ])
+  if (!form) {
+    cache.delete(formId)
+    throw notFound(GONE)
+  }
+  let built = cached?.versionId === form.published_version_id ? cached.built : null
+  if (!built) {
+    let versions = prefetched ?? (await loadVersions(formId))
+    // The two reads are separate snapshots: a publish in between leaves them out of step, so read again.
+    const consistent = (v: VersionRow[]) => (v[0]?.id ?? null) === form.published_version_id
+    if (!consistent(versions) && prefetched) versions = await loadVersions(formId)
+    built = buildCatalog(versions, form.published_version_id)
+    if (consistent(versions)) remember(formId, form.published_version_id, built)
+  }
+  return {
+    form: { id: form.id, title: form.title, slug: form.slug, publishedVersionId: form.published_version_id, responseCount: form.response_count },
+    ...built,
+  }
+}
+
+function buildCatalog(versions: VersionRow[], publishedVersionId: string | null): Built {
+  const published = versions.find((v) => v.id === publishedVersionId) ?? null
   const parseList = (raw: unknown): FormField[] =>
     (Array.isArray(raw) ? raw : []).map(parseField).filter((f): f is FormField => !!f && f.type !== 'section_break')
 
@@ -126,9 +169,5 @@ export async function loadCatalog(formId: string): Promise<FormCatalog> {
     return { meta, display, plain }
   })
 
-  return {
-    form: { id: form.id, title: form.title, slug: form.slug, publishedVersionId: form.published_version_id },
-    entries,
-    byId: new Map(entries.map((e) => [e.meta.id, e])),
-  }
+  return { entries, byId: new Map(entries.map((e) => [e.meta.id, e])) }
 }

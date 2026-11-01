@@ -73,7 +73,7 @@ test('build a form: add, reorder, logic, piping, undo, autosave, theme, publish,
   await expect(card(page, 'What is your name?')).toHaveCount(1)
 
   // 2. Drag from the palette onto the canvas (the drop zone under the last question).
-  await drag(page, page.getByRole('button', { name: 'Add Email' }), page.getByRole('button', { name: 'Add question' }))
+  await drag(page, page.getByRole('button', { name: 'Add Email' }), page.getByRole('button', { name: 'Add a question' }))
   await expect(cards(page)).toHaveCount(2)
   await expect(page.getByRole('textbox', { name: 'Question label' })).toBeFocused()
   await page.keyboard.type('Your email')
@@ -104,6 +104,7 @@ test('build a form: add, reorder, logic, piping, undo, autosave, theme, publish,
   // 5. Logic rule on the email question: shown when the name is not empty.
   await card(page, 'Your email').click()
   const settings = page.getByRole('complementary', { name: 'Settings' })
+  await settings.getByRole('tab', { name: 'Logic' }).click()
   await settings.getByRole('button', { name: 'Add a rule' }).click()
   await settings.getByRole('combobox', { name: 'Comparison for condition 1' }).click()
   await page.getByRole('option', { name: 'is not empty' }).click()
@@ -155,7 +156,8 @@ test('build a form: add, reorder, logic, piping, undo, autosave, theme, publish,
   await page.getByRole('button', { name: 'Publish', exact: true }).click()
   await expect(page.getByText('Published. Your form is live.')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Published' })).toBeDisabled()
-  await expect(page.locator('header [data-status="live"]')).toBeVisible()
+  // A published form shows no status badge in the builder header (only drafts show "Draft").
+  await expect(page.locator('header [data-status]')).toHaveCount(0)
 
   // 11. Share: copy the link.
   await page.getByRole('link', { name: 'Share' }).click()

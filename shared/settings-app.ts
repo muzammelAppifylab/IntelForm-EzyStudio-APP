@@ -63,7 +63,7 @@ export function isUploadedFileUrl(v: string, cdnBase: UploadCdnBase = uploadCdnB
 }
 
 /**
- * A team-supplied image shown in the dashboard (avatar, logo, favicon, front page images):
+ * A team-supplied image shown in the dashboard (avatar, logo, favicon, social preview image):
  * only files uploaded to this app. The dashboard CSP (img-src) allows the same sources.
  */
 export const imageUrl = z
@@ -143,12 +143,38 @@ export const dataSettingsInput = z.object({
   retentionDays: z.coerce.number().int().min(1, 'Use at least 1 day').max(3650, 'Use 3650 days or fewer').nullable().optional(),
 })
 
+/** Search and sharing for the public site (its pages and copy are code, in src/pages/public). */
+export const siteSettingsInput = z.object({
+  /** Let search engines index the public site. Off by default. Forms keep their own setting. */
+  indexing: z.boolean().optional(),
+  description: z.string().trim().max(300, 'Use 300 characters or fewer').optional(),
+  ogImage: imageUrl.nullable().optional(),
+  /** Shown on the public site so visitors can reach you. Empty = hidden. */
+  contactEmail: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254)
+    .refine((v) => v === '' || z.email().safeParse(v).success, 'Enter an email address like name@example.com')
+    .optional(),
+})
+
+const legalText = z.string().trim().max(50_000, 'Keep it under 50,000 characters')
+
+/** Privacy policy and Terms, plain text. Empty = the page and its footer link are hidden. */
+export const legalSettingsInput = z.object({
+  privacy: legalText.optional(),
+  terms: legalText.optional(),
+})
+
 export const appSettingsPatch = z.object({
   general: generalSettingsInput.optional(),
   branding: brandingSettingsInput.optional(),
   spam: spamSettingsInput.optional(),
   email: emailSettingsInput.optional(),
   data: dataSettingsInput.optional(),
+  site: siteSettingsInput.optional(),
+  legal: legalSettingsInput.optional(),
 })
 export type AppSettingsPatch = z.infer<typeof appSettingsPatch>
 
@@ -192,6 +218,8 @@ export interface AppSettingsView {
     publicBaseUrl: string
   }
   data: { retentionDays: number | null }
+  site: { indexing: boolean; description: string; ogImage: string | null; contactEmail: string }
+  legal: { privacy: string; terms: string }
 }
 
 /** Result of a "Test" button (Turnstile keys, email, storage). */

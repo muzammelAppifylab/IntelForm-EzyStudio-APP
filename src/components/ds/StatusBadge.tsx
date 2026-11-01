@@ -2,8 +2,8 @@ import { cn } from '@/components/ui/cn'
 import { STATUS_LABEL, type Status } from './status'
 
 const STATUS_CLASS: Record<Status, string> = {
-  live: 'bg-pine text-pine-foreground',
-  draft: 'bg-background text-foreground ring-2 ring-border-ink ring-inset',
+  live: 'bg-success-subtle text-success-subtle-foreground',
+  draft: 'bg-card text-foreground ring-1 ring-border ring-inset',
   closed: 'bg-muted text-muted-foreground',
   unpublished: 'bg-warning-subtle text-warning-subtle-foreground',
   new: 'bg-info-subtle text-info-subtle-foreground',
@@ -17,7 +17,7 @@ export interface StatusBadgeProps {
 }
 
 /**
- * Pill naming a form's or response's state: 24px, `radius-full`, `caption` 500. Live = pine fill, Draft = paper with a 2px ink edge, Closed = muted.
+ * Pill naming a form's or response's state: 20px, `radius-md`, `caption` 500. Live = soft pine tint, Draft = paper with a hairline, Closed = muted.
  * The Live dot carries a slow ping ring (hidden under reduced motion).
  */
 export function StatusBadge({ status, label, className }: StatusBadgeProps) {
@@ -25,7 +25,7 @@ export function StatusBadge({ status, label, className }: StatusBadgeProps) {
     <span
       data-status={status}
       className={cn(
-        'inline-flex h-6 w-fit shrink-0 items-center gap-1.5 rounded-full px-2.5 text-caption font-medium whitespace-nowrap',
+        'inline-flex h-5 w-fit shrink-0 items-center gap-1.5 rounded-md px-2 text-caption font-medium whitespace-nowrap',
         STATUS_CLASS[status],
         className,
       )}

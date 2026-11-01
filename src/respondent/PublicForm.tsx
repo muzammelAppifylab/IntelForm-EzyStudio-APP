@@ -64,10 +64,9 @@ export function PublicForm({ slug: initialSlug, initial, search }: { slug: strin
     }
   }, [slug, data])
 
-  // <html lang> and the tab title.
+  // The tab title.
   useEffect(() => {
-    if (!data || !('lang' in data)) return
-    document.documentElement.lang = data.lang
+    if (!data || !('title' in data)) return
     document.title = data.settings.seoTitle || data.title
   }, [data])
 
@@ -107,7 +106,7 @@ export function PublicForm({ slug: initialSlug, initial, search }: { slug: strin
         <div role="main" className="flex flex-1 flex-col">
           <PasswordGate
             title={data.title}
-            labels={data.labels}
+            labels={SYSTEM_LABELS}
             center={center}
             onUnlock={async (password) => {
               try {
@@ -116,7 +115,7 @@ export function PublicForm({ slug: initialSlug, initial, search }: { slug: strin
                 setData(r.form)
                 return null
               } catch (err) {
-                return err instanceof PublicApiError ? (err.fields.password?.[0] ?? err.message) : data.labels.submitError
+                return err instanceof PublicApiError ? (err.fields.password?.[0] ?? err.message) : SYSTEM_LABELS.submitError
               }
             }}
           />
@@ -159,7 +158,7 @@ function LiveForm({
   onLocked: () => void
   onOutdated: (answers: Record<string, unknown>) => void
 }) {
-  const labels = form.labels
+  const labels = SYSTEM_LABELS
   const turnstile = useRef<TurnstileHandle>(null)
   const renderToken = form.renderToken
   const already = form.settings.onePerBrowser ? storedBrowserToken(form.id) : null
@@ -240,8 +239,8 @@ function LiveForm({
     <FormRenderer
       definition={form.definition}
       theme={form.theme}
-      labels={form.settings.labels}
       mode="live"
+      stepSound={form.settings.stepSound}
       title={form.title}
       embed={opts.embed}
       hideTitle={opts.hideTitle}
@@ -255,7 +254,7 @@ function LiveForm({
           <Honeypot />
           {form.turnstileSiteKey && (
             <Suspense fallback={null}>
-              <TurnstileWidget ref={turnstile} siteKey={form.turnstileSiteKey} lang={form.lang} />
+              <TurnstileWidget ref={turnstile} siteKey={form.turnstileSiteKey} />
             </Suspense>
           )}
         </>

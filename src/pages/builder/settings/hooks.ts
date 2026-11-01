@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { BUILDER_API, type BuilderCapabilities } from '@shared/api-builder'
-import type { FormDetail } from '@shared/api-forms'
+import type { FormStatusResponse } from '@shared/api-forms'
 import type { FormSettingsPatch } from '@shared/form/settings'
 import { api, errorMessage } from '@/lib/api'
 import { useBuilderStore } from '@/builder/store'
@@ -42,10 +42,9 @@ export function useSettingsSave() {
   return { save, errors }
 }
 
-/** After close/reopen/publish: pick up the server's revision so autosave isn't seen as a conflict. */
-export async function refreshFromServer(store: ReturnType<typeof useBuilderStore>) {
-  const detail = await api<FormDetail>(`/api/forms/${store.getState().meta.id}`)
-  store.queue.rebase(detail.revision)
-  store.setState({ settings: detail.settings })
-  store.getState().setMeta({ status: detail.status, hasUnpublished: detail.hasUnpublished, responses: detail.counts.responses })
+/** After close/reopen: take the server's revision so autosave isn't seen as a conflict. */
+export function applyStatus(store: ReturnType<typeof useBuilderStore>, res: FormStatusResponse) {
+  store.queue.rebase(res.revision)
+  store.setState({ settings: res.settings })
+  store.getState().setMeta({ status: res.status, hasUnpublished: res.hasUnpublished, responses: res.responses })
 }

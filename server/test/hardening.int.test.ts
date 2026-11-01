@@ -349,9 +349,8 @@ describe('malformed stored close dates', () => {
     expect(res.body.status).toBe('live')
   })
 
-  it('the public front page does not 500', async () => {
+  it('the public home page does not 500', async () => {
     await insertForm(ctx.sql, { settings: { showOnFrontPage: true, closeAt: '2026-99-99' } })
-    expect((await owner.patch('/api/front-page', { enabled: true })).status).toBe(200)
     const res = await ctx.client().get('/api/public/home')
     expect(res.status, res.text).toBe(200)
   })
@@ -362,7 +361,7 @@ describe('malformed stored close dates', () => {
 // ---------------------------------------------------------------------------
 
 describe('roles', () => {
-  it('Viewers can upload an avatar but nothing else, and never write forms, templates or the front page', async () => {
+  it('Viewers can upload an avatar but nothing else, and never write forms or templates', async () => {
     expect((await upload(viewer, 'avatar', PNG, 'me.png')).status).toBe(201)
     expect((await upload(viewer, 'logo', PNG, 'x.png')).status).toBe(403)
     const form = await insertForm(ctx.sql)
@@ -370,7 +369,6 @@ describe('roles', () => {
     expect((await viewer.post(`/api/forms/${form.id}/duplicate`)).status).toBe(403)
     expect((await viewer.post(`/api/forms/${form.id}/publish`)).status).toBe(403)
     expect((await viewer.post(`/api/forms/${form.id}/close`)).status).toBe(403)
-    expect((await viewer.patch(`/api/front-page`, { enabled: false })).status).toBe(403)
     const saved = await editor.post(`/api/forms/${form.id}/save-as-template`, { name: 'Saved' })
     expect(saved.status).toBe(201)
     expect((await viewer.patch(`/api/templates/${saved.body.id}`, { name: 'Mine' })).status).toBe(403)

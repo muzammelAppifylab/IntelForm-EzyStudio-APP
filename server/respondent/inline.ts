@@ -21,7 +21,6 @@ export function injectForm(shell: string, payload: PublicFormResponse | null): s
     const s = payload.settings
     const title = s.seoTitle || payload.title
     // Replacer functions, never replacement strings: creator text may contain `$&`, `$'`…
-    html = html.replace(/<html lang="[^"]*"/, () => `<html lang="${esc(payload.lang)}"`)
     html = html.replace(/<title>[^<]*<\/title>/, () => `<title>${esc(title)}</title>`)
     if (s.seoDescription) head.push(`<meta name="description" content="${esc(s.seoDescription)}">`)
     if (s.noindex) head.push('<meta name="robots" content="noindex, nofollow">')

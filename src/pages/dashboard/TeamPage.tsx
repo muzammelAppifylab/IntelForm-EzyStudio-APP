@@ -8,6 +8,7 @@ import { inviteInput, password as passwordSchema, type InviteInput } from '@shar
 import { ROLE_LABEL, type InvitableRole } from '@shared/roles'
 import { Field, FormError } from '@/components/common/Field'
 import { PageHeader } from '@/components/common/PageHeader'
+import { Pagination } from '@/components/common/Pagination'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -29,6 +30,7 @@ import { useFormErrors } from '@/lib/form-errors'
 import { initials } from '@/lib/utils'
 
 const teamQuery = { queryKey: ['team'], queryFn: () => api<TeamResponse>('/api/team') }
+const MEMBERS_PAGE_SIZE = 50
 
 type Dialogs =
   | { kind: 'invite' }
@@ -42,6 +44,11 @@ export default function TeamPage() {
   const canManage = useCan('team.manage')
   const team = useQuery(teamQuery)
   const [dialog, setDialog] = useState<Dialogs>(null)
+  const [page, setPage] = useState(1)
+  const members = team.data?.members ?? []
+  // Removing the last member on a page steps back a page.
+  const shownPage = Math.min(page, Math.max(1, Math.ceil(members.length / MEMBERS_PAGE_SIZE)))
+  const shown = members.slice((shownPage - 1) * MEMBERS_PAGE_SIZE, shownPage * MEMBERS_PAGE_SIZE)
 
   return (
     <>
@@ -76,12 +83,15 @@ export default function TeamPage() {
                 </TableCell>
               </TableRow>
             )}
-            {team.data?.members.map((m) => (
+            {shown.map((m) => (
               <MemberRow key={m.id} member={m} canManage={canManage} onAction={setDialog} />
             ))}
           </TableBody>
         </Table>
       </section>
+      {members.length > MEMBERS_PAGE_SIZE && (
+        <Pagination page={shownPage} pageSize={MEMBERS_PAGE_SIZE} total={members.length} noun="members" onPage={setPage} />
+      )}
 
       {canManage && team.data && team.data.invites.length > 0 && <PendingInvites invites={team.data.invites} onResend={(created) => setDialog({ kind: 'link', created })} />}
 

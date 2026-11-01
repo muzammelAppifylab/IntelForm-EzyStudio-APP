@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormDefinition, FormField } from '@shared/form/definition'
-import { errorMessage, resolveLabels, type Labels } from '@shared/form/labels'
+import { SYSTEM_LABELS, errorMessage, type Labels } from '@shared/form/labels'
 import { computeVisibility, interpolate, pruneAnswers, validateField, type Answers } from '@shared/form/logic'
 import type { ChangeMeta } from './types'
 
@@ -31,8 +31,8 @@ export interface Engine {
 const CONTEXT = { dayTolerance: 0 }
 
 /** `initialAnswers`: answers to start from (read on mount only), e.g. kept across a reload of a republished form. */
-export function useFormEngine(def: FormDefinition, labelOverrides?: Record<string, string>, initialAnswers?: Answers | null): Engine {
-  const labels = useMemo(() => resolveLabels({ ...def.labels, ...labelOverrides }), [def.labels, labelOverrides])
+export function useFormEngine(def: FormDefinition, initialAnswers?: Answers | null): Engine {
+  const labels = SYSTEM_LABELS
   const [answers, setAnswers] = useState<Answers>(() => initialAnswers ?? {})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const answersRef = useRef<Answers>(initialAnswers ?? {})

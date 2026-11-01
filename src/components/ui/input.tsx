@@ -8,7 +8,7 @@ import { FIELD, INPUT_EXTRA } from "@/components/ds/tokens"
  * when `aria-invalid`. Used by Input, Textarea and SelectTrigger. The fragments live in ds/tokens so
  * the public form (which joins classes without tailwind-merge) can build the same look.
  */
-const fieldClasses = `${FIELD} rounded-md text-base`
+const fieldClasses = `${FIELD} rounded-md text-base md:text-body`
 
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (

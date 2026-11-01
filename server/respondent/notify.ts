@@ -73,9 +73,10 @@ export function withoutLinks(v: unknown): unknown {
 }
 
 /** True while this form is under its hourly confirmation cap; over it, the email is skipped. */
-async function confirmationAllowed(formId: string): Promise<boolean> {
+async function confirmationAllowed(tx: TransactionSql, formId: string): Promise<boolean> {
   try {
-    await rateLimit(`confirm:${formId}`, CONFIRM_EMAIL_LIMIT, 3600)
+    // On tx: the submit holds the form's row lock, so a second pool connection could starve the pool.
+    await rateLimit(`confirm:${formId}`, CONFIRM_EMAIL_LIMIT, 3600, undefined, tx)
     return true
   } catch (err) {
     if (err instanceof ApiError && err.status === 429) {
@@ -136,7 +137,7 @@ export async function queueResponseJobs(tx: TransactionSql, form: LoadedForm, de
 
   if (s.confirmationEmail && s.confirmationEmailFieldId) {
     const to = r.answers[s.confirmationEmailFieldId]
-    if (typeof to === 'string' && EMAIL_RE.test(to) && (await confirmationAllowed(form.id))) {
+    if (typeof to === 'string' && EMAIL_RE.test(to) && (await confirmationAllowed(tx, form.id))) {
       const piped = withoutLinks(r.answers) as Record<string, unknown>
       await queueEmail(tx, {
         to,

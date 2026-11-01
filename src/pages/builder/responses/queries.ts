@@ -177,10 +177,16 @@ export function useDeleteResponses(formId: string) {
       ids.length === 1
         ? api<BulkDeleteResponse>(`/api/forms/${formId}/responses/${ids[0]}`, { method: 'DELETE' })
         : api<BulkDeleteResponse>(`/api/forms/${formId}/responses/bulk-delete`, { method: 'POST', body: { ids } }),
-    onSuccess: ({ deleted }) => {
+    onSuccess: ({ deleted }, ids) => {
       toast.success(deleted === 1 ? 'Response deleted' : `${deleted} responses deleted`)
-      void qc.invalidateQueries({ queryKey: responsesKey(formId) })
-      void qc.invalidateQueries({ queryKey: ['forms'] })
+      // Drop the deleted ones first so an open drawer doesn't refetch a 404.
+      for (const id of ids) qc.removeQueries({ queryKey: [...responsesKey(formId), 'detail', id] })
+      // List, summary and the neighbours' prev/next links changed; column prefs did not.
+      void qc.invalidateQueries({ queryKey: responsesKey(formId), predicate: (q) => q.queryKey[2] !== 'prefs' })
+      // Response counts on the Forms list and Contacts: refresh when next shown. The open builder's
+      // form detail is left alone (its store was built at mount and never reads it again).
+      void qc.invalidateQueries({ queryKey: ['forms', 'list'], refetchType: 'none' })
+      void qc.invalidateQueries({ queryKey: ['contacts'], refetchType: 'none' })
     },
     onError: (err) => toast.error(errorMessage(err)),
   })

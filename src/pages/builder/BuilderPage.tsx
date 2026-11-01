@@ -10,7 +10,7 @@ import { api, ApiRequestError, errorMessage } from '@/lib/api'
 import { appInfoQuery, useCan, useMe } from '@/lib/auth'
 import { patchForm } from '@/builder/api'
 import { useSaveOnLeave, usePresence } from '@/builder/lifecycle'
-import { BuilderContext, createBuilderStore, type BuilderStore } from '@/builder/store'
+import { BuilderContext, createBuilderStore, useBuilder, type BuilderStore } from '@/builder/store'
 import { Banners } from './Banners'
 import { BuilderHeader } from './BuilderHeader'
 import { TABS, type TabId } from './tabs'
@@ -43,13 +43,17 @@ export default function BuilderPage() {
     queryKey: formQueryKey(formId),
     queryFn: () => api<FormDetail>(`/api/forms/${formId}`),
     staleTime: Infinity,
+    // The store copies the draft once at mount and autosave never writes back here, so a cached
+    // copy would reopen an old draft and revision and overwrite newer saves: fetch on every mount.
+    gcTime: 0,
     refetchOnWindowFocus: false,
     retry: (n, err) => !(err instanceof ApiRequestError && err.status < 500) && n < 2,
   })
 
   if (!active) return <Navigate to={`/dashboard/forms/${formId}/build`} replace />
   if (query.isPending) return <FullPageSpinner />
-  if (query.isError) {
+  // A failed background refetch keeps the data: only a failed first load replaces the builder.
+  if (query.isError && !query.data) {
     const gone = query.error instanceof ApiRequestError && query.error.status === 404
     return (
       <main className="grid min-h-svh place-items-center bg-background p-6">
@@ -67,7 +71,7 @@ export default function BuilderPage() {
       </main>
     )
   }
-  return <Builder key={formId} detail={query.data} tab={active.id} />
+  return <Builder key={formId} detail={query.data!} tab={active.id} />
 }
 
 function Builder({ detail, tab }: { detail: FormDetail; tab: TabId }) {
@@ -77,7 +81,7 @@ function Builder({ detail, tab }: { detail: FormDetail; tab: TabId }) {
   useQuery(appInfoQuery)
   const [store] = useState<BuilderStore>(() =>
     createBuilderStore(detail, {
-      send: (body, revision) => patchForm(detail.id, body, revision),
+      send: (body, revision, opts) => patchForm(detail.id, body, revision, opts),
       me: { id: me.id },
       readOnly: !canEdit,
       fieldDefaults: () => ({ dateFormat: queryClient.getQueryData(appInfoQuery.queryKey)?.dateFormat }),
@@ -96,12 +100,12 @@ function Builder({ detail, tab }: { detail: FormDetail; tab: TabId }) {
 
   return (
     <BuilderContext.Provider value={store}>
-      <div className="grid h-svh grid-rows-[auto_auto_1fr] bg-background text-foreground">
+      <div data-shell="builder" className="grid h-svh grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_1fr] bg-background text-foreground">
         <meta name="robots" content="noindex" />
-        <title>{`${label} · ${store.getState().doc.title} · Form builder`}</title>
+        <DocTitle label={label} />
         <BuilderHeader tab={tab} />
         <Banners />
-        <main className="min-h-0">
+        <main key={tab} className="min-h-0 animate-fade-in">
           {!wide && tab !== 'responses' ? (
             <SmallScreen formId={detail.id} />
           ) : tab === 'build' ? (
@@ -141,4 +145,10 @@ function SmallScreen({ formId }: { formId: string }) {
       </EmptyState>
     </div>
   )
+}
+
+/** Browser tab title; follows the form's title as it is renamed. */
+function DocTitle({ label }: { label: string }) {
+  const title = useBuilder((s) => s.doc.title)
+  return <title>{`${label} · ${title} · Form builder`}</title>
 }

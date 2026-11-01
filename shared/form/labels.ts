@@ -1,10 +1,9 @@
 /**
- * System labels: every piece of fixed respondent-facing text. Editable per form
- * (definition.labels, PRD "Form settings → System labels") so non-English forms read naturally.
- * Placeholders: {n}, {total}.
+ * System labels: every piece of fixed respondent-facing text, in English. Forms have no
+ * language setting or label overrides. Placeholders: {n}, {total}.
  *
- * Validation errors from the field-type registry are label keys (see `errorMessage`), so a
- * translated form also gets translated errors on both the client and the server.
+ * Validation errors from the field-type registry are label keys (see `errorMessage`), so the
+ * client and the server show the same message.
  */
 export const SYSTEM_LABELS = {
   // Navigation
@@ -15,7 +14,8 @@ export const SYSTEM_LABELS = {
   submitting: 'Submitting…',
   ok: 'OK',
   pressEnter: 'press Enter ↵',
-  shiftEnter: 'Shift + Enter for a new line',
+  /** Long text in one-at-a-time: Enter adds a line, {key} + Enter moves on ({key} is ⌘ or Ctrl). */
+  longTextEnter: '{key} + Enter ↵ to continue',
   previousQuestion: 'Previous question',
   nextQuestion: 'Next question',
   step: 'Step {n} of {total}',
@@ -117,19 +117,6 @@ export const SYSTEM_LABELS = {
 
 export type LabelKey = keyof typeof SYSTEM_LABELS
 export type Labels = Record<LabelKey, string>
-
-export const LABEL_KEYS = Object.keys(SYSTEM_LABELS) as LabelKey[]
-
-/** Defaults merged with a form's overrides. Unknown keys and blank overrides are ignored. */
-export function resolveLabels(overrides?: Record<string, string> | null): Labels {
-  const out: Labels = { ...SYSTEM_LABELS }
-  if (!overrides) return out
-  for (const key of LABEL_KEYS) {
-    const v = overrides[key]
-    if (typeof v === 'string' && v.trim() !== '') out[key] = v
-  }
-  return out
-}
 
 /** Fill {n}, {total} and any other {name} placeholder. */
 export function formatLabel(template: string, params: Record<string, string | number> = {}): string {

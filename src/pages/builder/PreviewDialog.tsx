@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Monitor, RotateCcw, Smartphone } from 'lucide-react'
 import { LAYOUT_LABEL } from '@shared/form/definition'
 import { Button } from '@/components/ui/button'
@@ -15,8 +15,7 @@ export type Device = 'desktop' | 'mobile'
 export function FormPreview({ device, resetKey = 0, className }: { device: Device; resetKey?: number; className?: string }) {
   const draft = useBuilder((s) => s.doc.draft)
   const theme = useBuilder((s) => s.doc.theme)
-  const formLabels = useBuilder((s) => s.settings.labels)
-  const labels = useMemo(() => ({ ...draft.labels, ...formLabels }), [draft.labels, formLabels])
+  const stepSound = useBuilder((s) => s.settings.stepSound)
   useEffect(() => {
     void loadThemeFont(theme.font)
     void loadThemeFont(theme.questionFont)
@@ -30,7 +29,7 @@ export function FormPreview({ device, resetKey = 0, className }: { device: Devic
       )}
       data-device={device}
     >
-      <FormRenderer key={resetKey} definition={draft} theme={theme} labels={labels} mode="preview" device={device} />
+      <FormRenderer key={resetKey} definition={draft} theme={theme} mode="preview" device={device} stepSound={stepSound} />
     </div>
   )
 }

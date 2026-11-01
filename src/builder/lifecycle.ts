@@ -71,8 +71,10 @@ export function usePresence(store: BuilderStore, formId: string, meId: string) {
 }
 
 /**
- * Last-chance saving: a keepalive PATCH on pagehide (and when the tab is hidden), and the
- * browser's "leave site?" prompt only while there are unsaved changes.
+ * Last-chance saving: when the tab is hidden, the queue saves at once with a keepalive request
+ * (it survives a tab close, and the queue still records the new revision, so nothing is sent
+ * twice); on pagehide a bare keepalive PATCH covers anything left. The browser's "leave site?"
+ * prompt shows only while there are unsaved changes.
  */
 export function useSaveOnLeave(store: BuilderStore, formId: string) {
   useEffect(() => {
@@ -84,7 +86,9 @@ export function useSaveOnLeave(store: BuilderStore, formId: string) {
       keepalivePatch(formId, body, q.revision)
     }
     const onHide = () => {
-      if (document.visibilityState === 'hidden') flush()
+      if (document.visibilityState === 'hidden' && !store.getState().readOnly && store.queue.dirty) {
+        void store.queue.flush({ keepalive: true })
+      }
     }
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (store.queue.dirty && !store.getState().readOnly) {

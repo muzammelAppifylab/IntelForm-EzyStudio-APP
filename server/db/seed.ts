@@ -59,9 +59,16 @@ let seeding: Promise<unknown> | null = null
  * Makes sure the built-ins exist (seeds them when any is missing). One indexed count per
  * call, so routes that need templates can call it freely; boot calls seedBuiltinTemplates.
  */
+/** Built-ins can't be deleted through the API, so once they're all there we stop checking. */
+let seeded = false
+
 export async function ensureBuiltinTemplates(): Promise<void> {
+  if (seeded) return
   const [{ n }] = await pool<{ n: number }[]>`SELECT count(*)::int AS n FROM templates WHERE is_builtin`
-  if (n >= BUILTIN_TEMPLATES.length) return
+  if (n >= BUILTIN_TEMPLATES.length) {
+    seeded = true
+    return
+  }
   seeding ??= seedBuiltinTemplates().finally(() => {
     seeding = null
   })

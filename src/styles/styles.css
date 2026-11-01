@@ -116,6 +116,8 @@
     --typeface-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
     --text-hero: 400 6rem/5.75rem var(--typeface-display);  /* 96/92 Front page hero headline only. */
     --text-hero-tracking: -0.02em;
+    --text-wordmark: 400 clamp(4.5rem, 14vw, 12rem)/0.85 var(--typeface-display);  /* fluid 72-192 Front page footer wordmark only. */
+    --text-wordmark-tracking: -0.03em;
     --text-title: 400 3.5rem/3.5rem var(--typeface-display);  /* 56/56 Public page titles and front page sections. */
     --text-title-tracking: -0.015em;
     --text-heading: 400 2.5rem/2.75rem var(--typeface-display);  /* 40/44 Dashboard and builder page titles. */
@@ -290,7 +292,7 @@
     --form-bg: var(--background); --form-surface: var(--card); --form-question: var(--foreground);
     --form-answer: var(--foreground); --form-button: var(--primary); --form-button-foreground: var(--primary-foreground);
     --form-button-border: var(--primary-border); --form-progress: var(--progress);
-    --form-font: var(--typeface-sans); --form-question-font: var(--typeface-display); --form-radius: 12px;
+    --form-font: var(--typeface-sans); --form-question-font: var(--typeface-display); --form-question-sm-font: var(--typeface-sans); --form-radius: 12px;
     background: var(--form-bg); color: var(--form-question); font-family: var(--form-font);
   }
   @keyframes question-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
@@ -463,7 +465,11 @@
 }
 
 @layer base {
-  * { border-color: var(--border); }
+  * { border-color: var(--border); scrollbar-width: thin; scrollbar-color: var(--input) transparent; }
+  /* Dashboard: reserve the scrollbar track so short pages (no scroll) and long pages line up. */
+  html:has([data-shell="dashboard"]) { scrollbar-gutter: stable; }
+  /* Tailwind v4 resets buttons to the default cursor; utilities (cursor-grab, cursor-not-allowed) still win. */
+  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
   body { background-color: var(--background); color: var(--foreground); font: var(--text-body); -webkit-font-smoothing: antialiased; }
   :focus-visible { outline: var(--ring-width) solid var(--ring); outline-offset: var(--ring-offset); }
   ::selection { background: var(--palette-periwinkle-200); color: var(--palette-ink-950); }
@@ -472,6 +478,7 @@
 
 @layer components {
   .text-hero { font: var(--text-hero); letter-spacing: var(--text-hero-tracking); text-wrap: balance; }
+  .text-wordmark { font: var(--text-wordmark); letter-spacing: var(--text-wordmark-tracking); text-wrap: balance; }
   .text-title { font: var(--text-title); letter-spacing: var(--text-title-tracking); text-wrap: balance; }
   .text-heading { font: var(--text-heading); letter-spacing: var(--text-heading-tracking); text-wrap: balance; }
   .text-heading-sm { font: var(--text-heading-sm); letter-spacing: var(--text-heading-sm-tracking); text-wrap: balance; }

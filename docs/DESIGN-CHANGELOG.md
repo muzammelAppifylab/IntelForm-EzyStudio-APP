@@ -4,6 +4,23 @@ The rulebook is [DESIGN.md](DESIGN.md). Tokens live in `src/styles/styles.css` (
 
 Versioning: a major version changes the look (palette, type, shape); a minor version adds tokens, components or states without changing existing values; a patch fixes a bug in a component or a doc.
 
+## Unreleased (next minor)
+
+**Added**
+- `text-wordmark` (fluid 72-192px Instrument Serif 400, 0.85 line height, -0.03em): the app name set large at the foot of the public front page. Front page footer only, one per page.
+- Front page layout notes: a sticky menu whose active item uses the selected state, and a dark footer band built from the page theme's own `foreground` and `background`, so it follows every front page preset.
+- Dashboard and builder chrome: a floating top bar (`rounded-full`, 2px `border-ink`, `card`) holding the brand, the page's primary action and the account menu, capped at the content row's width; the workspace nav and builder panes are `card` panels with `rounded-xl`.
+- Segmented controls in toolbars (status filter, builder tabs, view and layout switches, Settings/Logic): a `muted` track whose active pill is `card` with a 2px `border-ink` edge. The periwinkle selected state stays for the active sidebar item, selected options and the selected question's icon.
+- Forms overview: the responses `chamber` with a 7-day bar chart (`primary` bars, today in `highlight` as the screen's one live signal).
+- Scrollbars: thin everywhere, an `input`-coloured thumb on a transparent track (base layer), so scrolling panels such as the collapsed field rail don't carry the browser's wide grey bar.
+- Figtree and Instrument Serif in the form theme font list (both already self-hosted by `styles/fonts.css`, so they load nothing extra).
+
+**Changed**
+- The default "IntelForm" form and front page preset is now paper & ink. It was still the v1 look (Inter and Space Grotesk on lilac, violet button). Colours: background `#F5F2EA` (paper-50), text `#211D2A` (ink-950), answer `#6C48CA` (periwinkle-600, used for selection, focus and progress), button `#C9C0FF` (periwinkle-200) with `#211D2A` text and its 2px ink edge. Fonts: Figtree for text, Instrument Serif for questions and headings. Forms already created keep the theme they saved.
+- Small (all-at-once) form questions use the body font when the question font is Instrument Serif. The serif has only weight 400, so the 600 question style was faux-bolded into a smeared, cramped title. One-at-a-time questions and front page headings keep the serif (new `--form-question-sm-font`, set by `themeToVars`).
+- The builder's Design tab uses the same chrome as Build: the settings column and the live preview are `card` panes with a 1px border and `rounded-xl`, set apart by a 16px gap, instead of full-height panels split by a hairline.
+- The theme contrast check for the button now counts its 2px edge (the question colour) as well as its fill, since every button draws that edge. A pale fill like periwinkle-200 passes when the edge has 3:1 against the background.
+
 ## 2.1 (stable), 20 Oct 2026
 
 The first stable release. From here, changes to existing token values or component looks need a new version and an entry here.

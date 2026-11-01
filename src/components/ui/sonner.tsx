@@ -36,7 +36,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           toast: "font-sans! text-body-sm! shadow-pop! gap-2.5!",
           title: "text-label!",
           description: "text-body-sm! text-muted-foreground!",
-          actionButton: "rounded-md! border-2! border-primary-border! bg-primary! text-primary-foreground! text-label!",
+          actionButton: "rounded-md! border! border-ink-950/15! bg-primary! text-primary-foreground! text-label!",
           cancelButton: "rounded-md! bg-secondary! text-secondary-foreground! text-label!",
           closeButton: "border-border! bg-popover! text-muted-foreground!",
         },

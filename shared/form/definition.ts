@@ -117,8 +117,6 @@ export const formDefinition = z
     startScreen: startScreen,
     fields: z.array(field).max(500),
     endScreen: endScreen,
-    /** Per-form overrides of system labels (Start, Next, Back, Submit, errors…). See labels.ts. */
-    labels: z.record(z.string(), z.string().max(500)).default({}),
   })
   .superRefine((def, ctx) => {
     const seen = new Set<string>()
@@ -143,7 +141,6 @@ export function blankDefinition(): FormDefinition {
     startScreen: { enabled: false, title: '', button: 'Start' },
     fields: [],
     endScreen: { title: 'Thanks!', message: 'Your response has been recorded.', redirectUrl: null },
-    labels: {},
   }
 }
 

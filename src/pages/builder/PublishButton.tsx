@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
-import type { FormDetail, PublishResponse } from '@shared/api-forms'
+import type { PublishResponse } from '@shared/api-forms'
 import { lintLogic, type LogicIssue } from '@shared/form/logic'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { api, ApiRequestError, errorMessage } from '@/lib/api'
+import { ApiRequestError, errorMessage } from '@/lib/api'
 import { useBuilder, useBuilderStore } from '@/builder/store'
 import { fieldName } from '@/builder/ops'
 
@@ -47,7 +47,7 @@ async function postPublish(id: string): Promise<PublishResponse> {
  * Publish: the integrity check runs here first (lintLogic, the same check the server repeats
  * and enforces with a 422), then pending edits are saved and the draft becomes a new version.
  */
-export function PublishButton() {
+export function PublishButton({ className }: { className?: string }) {
   const store = useBuilderStore()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -76,15 +76,14 @@ export function PublishButton() {
       if (store.queue.dirty) throw new Error(store.getState().save.error?.message ?? 'Your latest changes couldn’t be saved, so nothing was published. Try again.')
       const wasLive = store.getState().meta.publishedVersion !== null
       const res = await postPublish(store.getState().meta.id)
-      // Publishing moves the revision on; read it so the next autosave isn't seen as a conflict.
-      const detail = await api<FormDetail>(`/api/forms/${store.getState().meta.id}`)
-      store.queue.rebase(detail.revision)
+      // Publishing moves the revision on; rebase so the next autosave isn't seen as a conflict.
+      store.queue.rebase(res.revision)
       store.getState().setMeta({
         status: res.status,
         publishedVersion: res.version,
         publishedAt: res.publishedAt,
         hasUnpublished: false,
-        responses: detail.counts.responses,
+        responses: res.responses,
       })
       void queryClient.invalidateQueries({ queryKey: ['forms'], refetchType: 'none' })
       toast.success(wasLive ? 'Changes published' : res.status === 'closed' ? 'Published. The form is still closed.' : 'Published. Your form is live.')
@@ -116,7 +115,7 @@ export function PublishButton() {
 
   return (
     <>
-      <Button onClick={publish} disabled={busy || upToDate}>
+      <Button onClick={publish} disabled={busy || upToDate} className={className}>
         {busy ? <Spinner /> : <Rocket aria-hidden />}
         {upToDate ? 'Published' : status === 'draft' ? 'Publish' : 'Publish changes'}
       </Button>

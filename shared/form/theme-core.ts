@@ -20,10 +20,14 @@ export const THEME_FONTS = [
   'Playfair Display',
   'Lora',
   'Fraunces',
+  'Figtree',
+  'Instrument Serif',
 ] as const
 export type ThemeFont = (typeof THEME_FONTS)[number]
 
-const SERIF: readonly ThemeFont[] = ['Playfair Display', 'Lora', 'Fraunces']
+const SERIF: readonly ThemeFont[] = ['Playfair Display', 'Lora', 'Fraunces', 'Instrument Serif']
+/** Display faces with only a 400 weight. The 600 small question style would faux-bold them. */
+const SINGLE_WEIGHT: readonly ThemeFont[] = ['Instrument Serif']
 
 /** CSS font stack for a theme font (self-hosted @fontsource-variable family names). */
 export function fontStack(font: ThemeFont): string {
@@ -33,6 +37,8 @@ export function fontStack(font: ThemeFont): string {
 
 /** npm package that holds the font, for the lazy CSS import in the renderer. */
 export function fontPackage(font: ThemeFont): string {
+  // Instrument Serif has no variable build: it ships as the static @fontsource package.
+  if (font === 'Instrument Serif') return '@fontsource/instrument-serif'
   return `@fontsource-variable/${font.toLowerCase().replace(/\s+/g, '-')}`
 }
 
@@ -40,13 +46,17 @@ export const FONT_SIZES = ['s', 'm', 'l'] as const
 export const BUTTON_RADII = ['square', 'rounded', 'pill'] as const
 export const ALIGNMENTS = ['left', 'center'] as const
 
-/** The IntelForm preset colours, also the schema default. */
+/**
+ * The IntelForm preset colours, also the schema default: design system v2.1 "paper & ink".
+ * Oat paper (paper-50), ink text (ink-950), periwinkle-600 for selection and focus, and the
+ * periwinkle-200 button with ink text (its 2px ink edge is the question colour).
+ */
 export const DEFAULT_COLORS = {
-  background: '#F7F5FF',
-  question: '#1A1825',
-  answer: '#5B3FD9',
-  button: '#5B3FD9',
-  buttonText: '#FFFFFF',
+  background: '#F5F2EA',
+  question: '#211D2A',
+  answer: '#6C48CA',
+  button: '#C9C0FF',
+  buttonText: '#211D2A',
 }
 
 export interface ThemePreset {
@@ -85,7 +95,7 @@ function preset(
 
 /** 8 built-in presets: 4 light, then 4 dark. The first is the IntelForm default. */
 export const THEME_PRESETS: readonly ThemePreset[] = [
-  preset('intelform', 'IntelForm', 'light', DEFAULT_COLORS, 'Inter', { questionFont: 'Space Grotesk' }),
+  preset('intelform', 'IntelForm', 'light', DEFAULT_COLORS, 'Figtree', { questionFont: 'Instrument Serif' }),
   preset(
     'linen',
     'Linen',
@@ -266,6 +276,8 @@ export function themeToVars(theme: FormTheme): Record<string, string> {
   const surface = dark ? mix(bg, TINTS.surfaceDark, '#FFFFFF') : mix(bg, TINTS.surfaceLight, '#FFFFFF')
   const font = fontStack(theme.font)
   const questionFont = fontStack(theme.questionFont ?? theme.font)
+  // Small (all-at-once) questions are 600; a single-weight display face falls back to the body font there.
+  const smallQuestionFont = theme.questionFont && SINGLE_WEIGHT.includes(theme.questionFont) ? font : questionFont
   const image = theme.background.type === 'image' ? theme.background : null
   const fg = (pct: number) => mix(q, pct, bg)
   return {
@@ -280,6 +292,7 @@ export function themeToVars(theme: FormTheme): Record<string, string> {
     '--form-progress': a,
     '--form-font': font,
     '--form-question-font': questionFont,
+    '--form-question-sm-font': smallQuestionFont,
     '--form-radius': BUTTON_RADIUS[theme.buttonRadius],
     '--form-font-scale': FONT_SCALE[theme.fontSize],
     '--form-align': theme.alignment,
@@ -347,15 +360,17 @@ export function themeContrastIssues(theme: FormTheme): ContrastIssue[] {
       ? mixOklab('#000000', theme.background.overlay, c.background)
       : c.background
   const imageNote = theme.background.type === 'image' ? ' (checked against the background colour under the overlay)' : ''
-  const checks: [ContrastIssue['key'], string, string, number, string][] = [
-    ['question', c.question, bg, 4.5, 'Question text is hard to read on the background'],
-    ['buttonText', c.buttonText, c.button, 4.5, 'Button text is hard to read on the button'],
-    ['answer', c.answer, bg, 3, 'The answer colour is hard to see on the background'],
-    ['button', c.button, bg, 3, 'The button is hard to see on the background'],
+  // Buttons always draw a 2px edge in the question colour (--primary-border / --form-button-border),
+  // so a pale fill such as the default periwinkle is still visible when that edge has 3:1.
+  const buttonRatio = Math.max(contrastRatio(c.button, bg), contrastRatio(c.question, bg))
+  const checks: [ContrastIssue['key'], number, number, string][] = [
+    ['question', contrastRatio(c.question, bg), 4.5, 'Question text is hard to read on the background'],
+    ['buttonText', contrastRatio(c.buttonText, c.button), 4.5, 'Button text is hard to read on the button'],
+    ['answer', contrastRatio(c.answer, bg), 3, 'The answer colour is hard to see on the background'],
+    ['button', buttonRatio, 3, 'The button is hard to see on the background'],
   ]
   const out: ContrastIssue[] = []
-  for (const [key, fg, back, required, text] of checks) {
-    const ratio = contrastRatio(fg, back)
+  for (const [key, ratio, required, text] of checks) {
     if (ratio < required) {
       const r = Math.floor(ratio * 10) / 10
       out.push({ key, ratio, required, message: `${text}${imageNote}: ${r}:1, needs ${required}:1. Pick a lighter or darker colour.` })

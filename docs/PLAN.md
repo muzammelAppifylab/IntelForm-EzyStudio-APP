@@ -49,7 +49,7 @@ Our own plan, built from the research in `docs/research/` (not the research pack
 | E: Respondent | `/f/:slug` with its own entry; all 21 renderers; 3 layouts with focus management, keyboard rules, auto-advance rules, error summary, progress; start/end screens with piping; password gate; closed message; funnel events; the submit route with the full spam pipeline and validation; signature upload; jobs for notifications and webhooks; `embed.js` inline + popup |
 | F: Builder | Builder shell and header (save state, counts, preview, publish, presence banner); Build tab (palette, `/` insert, canvas with dnd and inline editing, settings panel per type, logic editor with sentence chips, piping chips, warnings); Design tab (presets, colours, fonts, background, logo, contrast warnings, saved themes); Settings tab; Share tab (link, slug, SEO, embeds, QR, front page toggle); undo/redo; shortcuts |
 | G: Responses | Summary (top cards, time series, per-question cards, NPS, funnel, per-question time); table (columns, search, filters, sort, pagination, bulk delete); drawer with labels as submitted; streamed CSV; SQL aggregates meeting 10k responses in under 2 s |
-| H: Front page and settings UI | Front page editor + public home (hero, featured forms, about, contact, SEO), privacy/terms; App settings UI for every group; profile avatar |
+| H: Public site and settings UI | Public site in code (home, about, forms, privacy/terms); App settings UI for every group, including Public site (search and sharing, legal texts); profile avatar |
 
 **Integration (lead):** router and shared wiring, seeding on boot, full typecheck, lint, tests, build, e2e across areas, a Lighthouse pass on `/f/*`, README update.
 

@@ -27,11 +27,15 @@ export type FormsView = (typeof FORMS_VIEWS)[number]
 // Requests
 // ---------------------------------------------------------------------------
 
+/** Forms per page on the Forms list: fills whole rows of the 2- and 3-column grid. */
+export const FORMS_PAGE_SIZE = 24
+
 /** GET /api/forms query string. */
 export const formsListQuery = z.object({
   q: z.string().trim().max(200).optional(),
   status: z.enum([...FORM_STATUSES, 'all']).default('all'),
   sort: z.enum(FORM_SORTS).default('updated'),
+  page: z.coerce.number().int().min(1).max(100_000).default(1),
 })
 export type FormsListQuery = z.infer<typeof formsListQuery>
 
@@ -104,24 +108,37 @@ export interface FormListItem {
   completionRate: number | null
   /** Published at least once and the draft or theme changed since. */
   hasUnpublished: boolean
+  /** Responses in the last 7 days. */
+  newThisWeek: number
   createdAt: string
   updatedAt: string
 }
 
+/** GET /api/forms/strip. */
 export interface FormsStrip {
   /** Responses across all forms in the last 7 days. */
   responsesThisWeek: number
   /** The 7 days before that, for the trend. */
   responsesLastWeek: number
   /** Up to 3 forms with the most responses in the last 7 days. */
-  mostActive: { id: string; title: string; count: number }[]
+  mostActive: { id: string; title: string; count: number; status: FormStatus; completionRate: number | null }[]
+  /** Responses per calendar day in the app's timezone: 7 entries, oldest first, the last is today. */
+  days: { date: string; count: number }[]
+  /** Forms per status, ignoring search and filter. */
+  counts: Record<'all' | FormStatus, number>
+  /** Mean completion rate of the forms anyone has started, or null when none has been. */
+  avgCompletion: number | null
 }
 
 export interface FormsListResponse {
+  /** One page of the forms matching the search and filter. */
   forms: FormListItem[]
   /** Forms that exist at all, ignoring search and filter (tells "no results" from "no forms"). */
   total: number
-  strip: FormsStrip
+  /** Forms matching the search and filter, across every page. */
+  matched: number
+  page: number
+  pageSize: number
 }
 
 export interface CreatedForm {
@@ -164,6 +181,9 @@ export interface PublishResponse {
   version: number
   publishedAt: string
   status: FormStatus
+  /** The form's revision after publishing, so the next autosave isn't seen as a conflict. */
+  revision: number
+  responses: number
 }
 
 export interface LogicIssueBody {
@@ -171,8 +191,13 @@ export interface LogicIssueBody {
   issues: unknown[]
 }
 
+/** POST /api/forms/:id/close and /reopen: everything the builder refreshes afterwards. */
 export interface FormStatusResponse {
   status: FormStatus
+  revision: number
+  hasUnpublished: boolean
+  responses: number
+  settings: ClientFormSettings
 }
 
 export interface TemplateSummary {

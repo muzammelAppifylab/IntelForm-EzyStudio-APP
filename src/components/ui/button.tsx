@@ -5,8 +5,8 @@ import { Slot } from "radix-ui"
 
 /**
  * IntelForm Button spec (v2.1): one primary per view; primary and secondary carry the 2px ink edge
- * (`border-primary-border`); Figtree 500 14px (`text-label`); sizes sm 32px, default 40px (dashboard),
- * lg 48px (respondent forms); radius-md (12px); label never wraps; focus is the 2px ring + 2px offset.
+ * (`border-primary-border`); Inter 500 13px (`text-label`); sizes sm 32px, default 40px (dashboard),
+ * lg 48px (respondent forms); radius-md (8px); label never wraps; focus is the 2px ring + 2px offset.
  * Hover steps the fill over 120ms; `press` sinks it to 97% while held.
  */
 const buttonVariants = cva(
@@ -14,10 +14,10 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "border-2 border-primary-border bg-primary text-primary-foreground hover:bg-primary-hover",
+        default: "border border-ink-950/15 bg-primary text-primary-foreground hover:bg-primary-hover dark:border-transparent",
         destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        outline: "border-2 border-primary-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
-        secondary: "border-2 border-primary-border bg-secondary text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+        outline: "border border-paper-300 bg-secondary dark:border-border text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
+        secondary: "border border-paper-300 bg-secondary dark:border-border text-secondary-foreground hover:bg-accent hover:text-accent-foreground",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-link underline underline-offset-4 hover:decoration-2",
       },

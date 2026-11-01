@@ -33,7 +33,6 @@ const DEF = {
   layout: 'all_at_once',
   startScreen: { enabled: false, title: '', button: 'Start' },
   endScreen: { title: 'Thanks', message: '' },
-  labels: {},
   fields: [{ id: 'f_email', type: 'email', label: 'Email' }, ...SIGN_FIELDS.map((id) => ({ id, type: 'signature', label: 'Sign' }))],
 }
 

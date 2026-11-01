@@ -9,6 +9,7 @@ import type {
 import { RESPONSES_PAGE_SIZE } from '../../shared/api-responses'
 import type { FormDefinition, FormField } from '../../shared/form/definition'
 import { interpolate } from '../../shared/form/logic'
+import type { TransactionSql } from 'postgres'
 import { sql } from '../db/client'
 import { notFound } from '../lib/errors'
 import { removeSignatureUrls } from '../lib/uploads'
@@ -48,13 +49,15 @@ export async function listResponses(formId: string, q: ResponsesListQuery): Prom
   const where = whereFragment(cat, q, tz)
   const sort = sortSpec(cat, q.sort, q.dir)
   const offset = (q.page - 1) * RESPONSES_PAGE_SIZE
-  const [rows, [{ total }], [{ form_total }]] = await Promise.all([
+  // forms.response_count is the form total; only a filtered page needs its own count.
+  const filtered = !!(q.from || q.to || q.q || q.has || q.filter.length)
+  const formTotal = cat.form.responseCount
+  const [rows, total] = await Promise.all([
     sql<DbRow[]>`
       SELECT id, submitted_at, duration_ms, device, browser, country, answers FROM responses
       WHERE ${where} ORDER BY ${orderFragment(sort)} LIMIT ${RESPONSES_PAGE_SIZE} OFFSET ${offset}
     `,
-    sql<{ total: number }[]>`SELECT count(*)::int AS total FROM responses WHERE ${where}`,
-    sql<{ form_total: number }[]>`SELECT count(*)::int AS form_total FROM responses WHERE form_id = ${formId}`,
+    filtered ? sql<{ total: number }[]>`SELECT count(*)::int AS total FROM responses WHERE ${where}`.then(([r]) => r.total) : formTotal,
   ])
   return {
     fields: cat.entries.map((e) => e.meta),
@@ -70,7 +73,7 @@ export async function listResponses(formId: string, q: ResponsesListQuery): Prom
       }),
     ),
     total,
-    formTotal: form_total,
+    formTotal,
     page: q.page,
     pageSize: RESPONSES_PAGE_SIZE,
   }
@@ -136,24 +139,34 @@ export async function deleteResponses(formId: string, ids: string[]): Promise<nu
     // Lock the form row so concurrent deletes and submits serialise on the counter.
     const [form] = await tx`SELECT id FROM forms WHERE id = ${formId} FOR UPDATE`
     if (!form) throw notFound('That form no longer exists')
-    const deleted = await tx<{ sig_urls: string[] }[]>`
-      DELETE FROM responses WHERE form_id = ${formId} AND id = ANY(${sql.array(ids)}::uuid[])
-      RETURNING ARRAY(
-        SELECT v->>'url' FROM jsonb_each(answers) e(k, v)
-        WHERE jsonb_typeof(v) = 'object' AND v->>'url' LIKE '%/intelform/signatures/%'
-      ) AS sig_urls
-    `
-    for (const r of deleted) urls.push(...r.sig_urls)
-    if (deleted.count > 0) {
-      await tx`
-        UPDATE forms SET
-          response_count = (SELECT count(*)::int FROM responses WHERE form_id = ${formId}),
-          last_response_at = (SELECT max(submitted_at) FROM responses WHERE form_id = ${formId})
-        WHERE id = ${formId}
-      `
-    }
-    return deleted.count
+    return deleteLockedResponses(tx, formId, ids, urls)
   })
   await removeSignatureUrls(urls)
   return count
+}
+
+/**
+ * The delete itself, inside the caller's transaction, which must already hold the form's row
+ * lock. Signature URLs are pushed to `urls` for the caller to remove after commit.
+ */
+export async function deleteLockedResponses(tx: TransactionSql, formId: string, ids: string[], urls: string[]): Promise<number> {
+  const deleted = await tx<{ sig_urls: string[] }[]>`
+    DELETE FROM responses WHERE form_id = ${formId} AND id = ANY(${sql.array(ids)}::uuid[])
+    RETURNING ARRAY(
+      SELECT v->>'url' FROM jsonb_each(answers) e(k, v)
+      WHERE jsonb_typeof(v) = 'object' AND v->>'url' LIKE '%/intelform/signatures/%'
+    ) AS sig_urls
+  `
+  for (const r of deleted) urls.push(...r.sig_urls)
+  if (deleted.count > 0) {
+    // Exact under the row lock (submits take it too), without counting every response of a
+    // big form. max() reads one entry of the (form_id, submitted_at) index.
+    await tx`
+      UPDATE forms SET
+        response_count = GREATEST(0, response_count - ${deleted.count}),
+        last_response_at = (SELECT max(submitted_at) FROM responses WHERE form_id = ${formId})
+      WHERE id = ${formId}
+    `
+  }
+  return deleted.count
 }

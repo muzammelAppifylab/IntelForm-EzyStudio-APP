@@ -15,7 +15,7 @@ import { logger } from './lib/logger'
 import { startScheduler, stopScheduler } from './lib/scheduler'
 import { decodeUploadPath, readLocalFile } from './lib/uploads'
 import { renderFormPage } from './respondent/inline'
-import { renderHomePage } from './routes/front-page'
+import { renderHomePage, siteIndexable } from './lib/public-site'
 import { publicPageRateLimit } from './routes/public-forms'
 import { inlineScriptHashes, surfaceFor, surfaceHeaders } from './middleware/security-headers'
 
@@ -79,18 +79,19 @@ server.get('/uploads/*', async (c) => {
 
 if (isProduction && appShell) {
   const shell = appShell
-  // Only the front page, legal pages and forms may be indexed (forms decide per form later).
-  const indexable = (path: string) => path === '/' || path === '/privacy' || path === '/terms' || path.startsWith('/f/')
+  // Only the public site and forms may be indexed: the site per Settings → Public site, forms per form.
+  const SITE_PAGES = new Set(['/about', '/forms', '/privacy', '/terms'])
+  const indexable = async (path: string) => path.startsWith('/f/') || (SITE_PAGES.has(path) && (await siteIndexable().catch(() => false)))
 
-  const sendShell = (c: Context) => {
-    if (!indexable(c.req.path)) c.header('X-Robots-Tag', 'noindex')
+  const sendShell = async (c: Context) => {
+    if (!(await indexable(c.req.path))) c.header('X-Robots-Tag', 'noindex')
     // The HTML names the current hashed bundles: always revalidate it (A6).
     c.header('Cache-Control', 'no-cache')
     const s = surfaceFor(c.req.path) === 'form' && formShell ? formShell : shell
     return c.html(s.html)
   }
 
-  // The front page: its SEO tags in the HTML itself, for crawlers and link previews.
+  // The home page: its search and sharing tags in the HTML itself, for crawlers and link previews.
   server.get('/', async (c) => {
     const page = await renderHomePage(shell.html, env.APP_URL).catch(() => null)
     if (!page) return sendShell(c)

@@ -5,7 +5,10 @@ import { fieldName } from '@/builder/ops'
 import { useBuilder, useBuilderStore } from '@/builder/store'
 import { FIELD_KEYWORDS } from '@/builder/palette-search'
 
-/** The `/` menu: search every question type and insert it below the selected question. */
+/**
+ * The `/` menu: search every question type and insert it below the selected question. Wide, with
+ * each group as a two-column grid of icon tiles (like the Build palette), so most types fit unscrolled.
+ */
 export function InsertMenu({ open, onOpenChange }: { open: boolean; onOpenChange(o: boolean): void }) {
   const store = useBuilderStore()
   const selection = useBuilder((s) => s.selection)
@@ -14,24 +17,27 @@ export function InsertMenu({ open, onOpenChange }: { open: boolean; onOpenChange
   const where = selected ? `below “${fieldName(draft, selected)}”` : selection === 'start' ? 'at the top' : 'at the end'
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange} title="Add a question" description={`Adds the question ${where}.`}>
-      <CommandInput placeholder={`Add a question ${where}…`} aria-label="Search question types" />
-      <CommandList>
+    <CommandDialog open={open} onOpenChange={onOpenChange} title="Add a question" description={`Adds the question ${where}.`} className="sm:max-w-2xl">
+      <CommandInput placeholder={`Add a question ${where}…`} aria-label="Search question types" className="text-body" />
+      <CommandList className="max-h-[min(30rem,65svh)] p-2">
         <CommandEmpty>No question type matches.</CommandEmpty>
         {FIELD_GROUPS.map((g) => (
-          <CommandGroup key={g} heading={FIELD_GROUP_LABEL[g]}>
+          <CommandGroup key={g} heading={FIELD_GROUP_LABEL[g]} className="[&_[cmdk-group-items]]:grid [&_[cmdk-group-items]]:grid-cols-1 [&_[cmdk-group-items]]:gap-1 sm:[&_[cmdk-group-items]]:grid-cols-2">
             {FIELD_TYPES.filter((t) => FIELD_TYPE_META[t].group === g).map((t) => {
               const Icon = FIELD_ICONS[t]
               return (
                 <CommandItem
                   key={t}
+                  className="cursor-pointer gap-3 rounded-md py-2!"
                   value={`${FIELD_TYPE_META[t].label} ${FIELD_KEYWORDS[t] ?? ''}`}
                   onSelect={() => {
                     onOpenChange(false)
                     store.getState().insertBelowSelection(t)
                   }}
                 >
-                  <Icon aria-hidden />
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-foreground">
+                    <Icon className="size-4!" aria-hidden />
+                  </span>
                   {FIELD_TYPE_META[t].label}
                 </CommandItem>
               )

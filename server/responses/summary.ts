@@ -19,7 +19,7 @@ import { addDays, rangeFragment, safeTz, todayIn } from './query'
 
 /**
  * GET /api/forms/:id/summary: the SQL from docs/research/05-data-analytics.md "Summary queries",
- * run in parallel on the pool. Labels, "(deleted option)" and percentages are added here.
+ * run on the pool four at a time. Labels, "(deleted option)" and percentages are added here.
  */
 
 const COUNTED = new Set<FieldType>(['single_choice', 'dropdown', 'multiple_choice', 'picture_choice', 'yes_no', 'country', 'rating', 'nps'])
@@ -28,6 +28,8 @@ const LATEST = new Set<FieldType>(['email', 'name', 'phone', 'address', 'short_t
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v))
+/** Runs `a`, then `b`: one lane of queries on one connection at a time. */
+const inTurn = async <A, B>(a: () => Promise<A>, b: () => Promise<B>): Promise<[A, B]> => [await a(), await b()]
 
 export async function formSummary(formId: string, q: SummaryQuery): Promise<SummaryResponse> {
   const cat = await loadCatalog(formId)
@@ -57,19 +59,20 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
     .filter((e) => ['single_choice', 'multiple_choice'].includes(e.meta.type) && e.meta.options?.some((o) => o.id === OTHER_OPTION_ID))
     .map((e) => e.meta.id)
 
-  const [top, series, choices, answered, numbers, latest, others, funnel, ttc, [{ form_total }]] = await Promise.all([
-    sql<{ responses: number; avg_ms: string | null; median_ms: number | null }[]>`
-      SELECT count(*)::int AS responses, avg(duration_ms) FILTER (WHERE duration_ms < 86400000) AS avg_ms,
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS median_ms
-      FROM responses WHERE form_id = ${formId} AND ${range}
-    `,
-    sql<{ day: string; n: number }[]>`
-      SELECT to_char(d, 'YYYY-MM-DD') AS day, coalesce(c.n, 0)::int AS n
-      FROM generate_series(${from}::date, ${to}::date, interval '1 day') d
-      LEFT JOIN (SELECT (submitted_at AT TIME ZONE ${tz})::date AS day, count(*) n
-                 FROM responses WHERE form_id = ${formId} AND ${range} GROUP BY 1) c ON c.day = d::date
-      ORDER BY d
-    `,
+  // Lanes run their queries in turn, side by side: one summary holds at most four pool connections.
+  const topQ = () => sql<{ responses: number; avg_ms: string | null; median_ms: number | null }[]>`
+    SELECT count(*)::int AS responses, avg(duration_ms) FILTER (WHERE duration_ms < 86400000) AS avg_ms,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS median_ms
+    FROM responses WHERE form_id = ${formId} AND ${range}
+  `
+  const seriesQ = () => sql<{ day: string; n: number }[]>`
+    SELECT to_char(d, 'YYYY-MM-DD') AS day, coalesce(c.n, 0)::int AS n
+    FROM generate_series(${from}::date, ${to}::date, interval '1 day') d
+    LEFT JOIN (SELECT (submitted_at AT TIME ZONE ${tz})::date AS day, count(*) n
+               FROM responses WHERE form_id = ${formId} AND ${range} GROUP BY 1) c ON c.day = d::date
+    ORDER BY d
+  `
+  const choicesQ = async () =>
     countedIds.length
       ? sql<{ field_id: string; option_id: string | null; n: number }[]>`
           SELECT f.id AS field_id, c->>'option' AS option_id, count(*)::int AS n
@@ -79,11 +82,12 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
              ELSE jsonb_build_array(jsonb_build_object('option', r.answers->f.id)) END) c
           WHERE r.form_id = ${formId} AND ${range} AND r.answers ? f.id GROUP BY 1, 2
         `
-      : [],
-    sql<{ field_id: string; answered: number }[]>`
-      SELECT k AS field_id, count(*)::int AS answered FROM responses r CROSS JOIN LATERAL jsonb_object_keys(r.answers) k
-      WHERE r.form_id = ${formId} AND ${range} GROUP BY 1
-    `,
+      : []
+  const answeredQ = () => sql<{ field_id: string; answered: number }[]>`
+    SELECT k AS field_id, count(*)::int AS answered FROM responses r CROSS JOIN LATERAL jsonb_object_keys(r.answers) k
+    WHERE r.form_id = ${formId} AND ${range} GROUP BY 1
+  `
+  const numbersQ = async () =>
     numericIds.length
       ? sql<{ field_id: string; n: number; avg: string | null; min: string | null; max: string | null; median: number | null }[]>`
           SELECT e.key AS field_id, count(*)::int AS n, avg(e.value::numeric) AS avg, min(e.value::numeric) AS min,
@@ -93,7 +97,8 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
             AND jsonb_typeof(e.value) = 'number'
           GROUP BY 1
         `
-      : [],
+      : []
+  const latestQ = async () =>
     latestIds.length
       ? sql<{ field_id: string; id: string; submitted_at: Date; val: unknown }[]>`
           SELECT f.id AS field_id, t.* FROM unnest(${sql.array(latestIds)}::text[]) f(id) CROSS JOIN LATERAL (
@@ -101,7 +106,8 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
             WHERE form_id = ${formId} AND ${range} AND answers ? f.id
             ORDER BY submitted_at DESC, id DESC LIMIT 10) t
         `
-      : [],
+      : []
+  const othersQ = async () =>
     otherIds.length
       ? sql<{ field_id: string; id: string; submitted_at: Date; val: unknown }[]>`
           SELECT f.id AS field_id, t.* FROM unnest(${sql.array(otherIds)}::text[]) f(id) CROSS JOIN LATERAL (
@@ -111,20 +117,24 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
                 OR answers @> jsonb_build_object(f.id, jsonb_build_array(jsonb_build_object('option', ${OTHER_OPTION_ID}::text))))
             ORDER BY submitted_at DESC, id DESC LIMIT 10) t
         `
-      : [],
-    sql<{ views: number; starts: number }[]>`
-      SELECT coalesce(sum(views), 0)::int AS views, coalesce(sum(starts), 0)::int AS starts FROM form_event_counts
-      WHERE form_id = ${formId} AND bucket >= (${from}::date::timestamp AT TIME ZONE ${tz})
-        AND bucket < ((${to}::date + 1)::timestamp AT TIME ZONE ${tz})
-    `,
-    sql<{ field_id: string; median: number }[]>`
-      SELECT e.key AS field_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY e.value::numeric) AS median
-      FROM responses r CROSS JOIN LATERAL jsonb_each(r.ttc) e
-      WHERE r.form_id = ${formId} AND ${range} AND r.ttc IS NOT NULL AND jsonb_typeof(r.ttc) = 'object'
-        AND jsonb_typeof(e.value) = 'number'
-      GROUP BY 1
-    `,
-    sql<{ form_total: number }[]>`SELECT count(*)::int AS form_total FROM responses WHERE form_id = ${formId}`,
+      : []
+  const funnelQ = () => sql<{ views: number; starts: number }[]>`
+    SELECT coalesce(sum(views), 0)::int AS views, coalesce(sum(starts), 0)::int AS starts FROM form_event_counts
+    WHERE form_id = ${formId} AND bucket >= (${from}::date::timestamp AT TIME ZONE ${tz})
+      AND bucket < ((${to}::date + 1)::timestamp AT TIME ZONE ${tz})
+  `
+  const ttcQ = () => sql<{ field_id: string; median: number }[]>`
+    SELECT e.key AS field_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY e.value::numeric) AS median
+    FROM responses r CROSS JOIN LATERAL jsonb_each(r.ttc) e
+    WHERE r.form_id = ${formId} AND ${range} AND r.ttc IS NOT NULL AND jsonb_typeof(r.ttc) = 'object'
+      AND jsonb_typeof(e.value) = 'number'
+    GROUP BY 1
+  `
+  const [[choices, latest], [answered, others], [numbers, series], [ttc, [top, funnel]]] = await Promise.all([
+    inTurn(choicesQ, latestQ),
+    inTurn(answeredQ, othersQ),
+    inTurn(numbersQ, seriesQ),
+    inTurn(ttcQ, () => inTurn(topQ, funnelQ)),
   ])
 
   const answeredBy = new Map(answered.map((r) => [r.field_id, r.answered]))
@@ -176,7 +186,7 @@ export async function formSummary(formId: string, q: SummaryQuery): Promise<Summ
     },
     series: series.map((r) => ({ day: r.day, count: r.n })),
     questions,
-    formTotal: form_total,
+    formTotal: cat.form.responseCount,
   }
 }
 

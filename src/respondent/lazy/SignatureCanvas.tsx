@@ -107,6 +107,8 @@ export default function SignatureCanvas({ value, onChange, labels, inputId, inva
       {mode === 'type' && (
         <TextInput
           id={inputId}
+          // Mounts only when the respondent switches to typing, so focus follows their choice.
+          autoFocus
           autoComplete="name"
           aria-label={labels.typeToSign}
           aria-describedby={describedBy}

@@ -33,15 +33,14 @@ const timeZone = z
 
 const fieldRef = z.string().min(1).max(40)
 
-/** A BCP-47 language tag (`en`, `de`, `pt-BR`, `zh-Hant-TW`), as used for `<html lang>`. */
-export const LANGUAGE_TAG_RE = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/
-const languageTag = z.string().trim().max(35).regex(LANGUAGE_TAG_RE, 'Use a language code such as en, de or pt-BR')
-
 export const SPAM_RATE_LIMIT_PER_MINUTE = 10
 export const DEFAULT_CLOSED_MESSAGE = 'This form is no longer accepting responses.'
 
 export const AFTER_SUBMIT = ['end_screen', 'redirect'] as const
 export type AfterSubmit = (typeof AFTER_SUBMIT)[number]
+
+export const STEP_SOUNDS = ['off', 'tick', 'chime', 'pop'] as const
+export type StepSound = (typeof STEP_SOUNDS)[number]
 
 export const webhookHeader = z.object({
   key: z
@@ -86,6 +85,10 @@ const shape = {
   /** Append answers to the redirect URL as query parameters. */
   redirectAppendAnswers: z.boolean(),
 
+  // Sounds (one at a time and section by section layouts)
+  /** Short sound when a respondent moves to the next question or section, and on submit. */
+  stepSound: z.enum(STEP_SOUNDS),
+
   // Notifications (need the email provider)
   notifyOnResponse: z.boolean(),
   /** Team member user ids. Empty means the Owner. */
@@ -100,12 +103,6 @@ const shape = {
 
   // Spam (honeypot and the rate limit are always on)
   turnstile: z.boolean(),
-
-  // Text
-  /** The form's language (BCP-47): `<html lang>` on the public page, so screen readers pronounce it right. */
-  language: languageTag,
-  /** System label overrides (Start, Next, Back, Submit, errors…), keyed like SYSTEM_LABELS. */
-  labels: z.record(z.string().max(60), z.string().max(300)),
 
   // SEO and social preview
   seoTitle: z.string().trim().max(120),
@@ -135,6 +132,7 @@ export function defaultFormSettings(): FormSettings {
     afterSubmit: 'end_screen',
     redirectUrl: null,
     redirectAppendAnswers: false,
+    stepSound: 'off',
     notifyOnResponse: false,
     notifyRecipients: [],
     confirmationEmail: false,
@@ -143,8 +141,6 @@ export function defaultFormSettings(): FormSettings {
     confirmationBody: 'We received your response. Thanks for taking the time.',
     webhook: { enabled: false, url: null, headers: [] },
     turnstile: true,
-    language: 'en',
-    labels: {},
     seoTitle: '',
     seoDescription: '',
     ogImage: null,
@@ -218,8 +214,7 @@ export interface PublicFormSettings {
   redirectUrl: string | null
   redirectAppendAnswers: boolean
   turnstile: boolean
-  language: string
-  labels: Record<string, string>
+  stepSound: StepSound
   seoTitle: string
   seoDescription: string
   ogImage: string | null
@@ -235,8 +230,7 @@ export function publicSettings(settings: FormSettings): PublicFormSettings {
     redirectUrl: settings.afterSubmit === 'redirect' ? settings.redirectUrl : null,
     redirectAppendAnswers: settings.redirectAppendAnswers,
     turnstile: settings.turnstile,
-    language: settings.language,
-    labels: settings.labels,
+    stepSound: settings.stepSound,
     seoTitle: settings.seoTitle,
     seoDescription: settings.seoDescription,
     ogImage: settings.ogImage,

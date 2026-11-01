@@ -1,9 +1,10 @@
 import { OTHER_OPTION_ID, VALUELESS_OPS, type Condition, type LogicRule } from './base'
 import type { FormDefinition, FormField } from './definition'
 import { FIELD_TYPE_META } from './field-types'
-import { errorMessage, resolveLabels, type Labels } from './labels'
+import { SYSTEM_LABELS, errorMessage, type Labels } from './labels'
 import { isIsoDate, isTime } from './types/basic'
 import type { AnswerContext } from './types/common'
+import { isE164 } from './types/contact'
 import { coreRegistry } from './types/registry'
 
 /**
@@ -103,8 +104,6 @@ export function pruneAnswers(def: Def, answers: Answers): Answers {
 }
 
 export interface ValidateOptions {
-  /** Extra label overrides on top of definition.labels. */
-  labels?: Record<string, string>
   /** Validators, today, server time and form version for the answer schemas. */
   context?: AnswerContext
   /** What to do with a non-empty answer to a hidden field. Default 'reject' (PRD). */
@@ -145,7 +144,7 @@ export function validatePage(
   fieldIds: readonly string[],
   opts: Omit<ValidateOptions, 'hidden'> = {},
 ): Record<string, string> {
-  const labels = resolveLabels({ ...def.labels, ...opts.labels })
+  const labels = SYSTEM_LABELS
   const vis = computeVisibility(def, answers)
   const errors: Record<string, string> = {}
   for (const id of fieldIds) {
@@ -164,7 +163,7 @@ export function validatePage(
  * a body that is not an object).
  */
 export function validateSubmission(def: FormDefinition, raw: unknown, opts: ValidateOptions = {}): ValidationResult {
-  const labels = resolveLabels({ ...def.labels, ...opts.labels })
+  const labels = SYSTEM_LABELS
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return { ok: false, errors: { _form: labels.invalid } }
   }
@@ -270,6 +269,10 @@ export function lintLogic(def: FormDefinition): LogicIssue[] {
           break
         case 'time':
           if (!isTime(v)) bad('a time')
+          break
+        case 'phone':
+          // Answers keep their country code, so an exact match needs one too.
+          if ((c.op === 'is' || c.op === 'is_not') && !isE164(v)) bad('a full number with its country code, like +1 650 253 0000')
           break
         case 'single_choice':
         case 'multiple_choice':

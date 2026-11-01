@@ -20,9 +20,10 @@ const LAYOUT_HELP: Record<Layout, string> = {
 export function FormPanel({ focus }: { focus: 'start' | 'end' | null }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-label text-foreground">{focus === 'start' ? 'Start screen' : focus === 'end' ? 'End screen' : 'Form'}</h2>
-        <p className="text-caption text-muted-foreground">
+      <div className="grid gap-1 border-b border-border px-5 pt-6 pb-5">
+        <p className="text-overline text-muted-foreground">{focus ? 'Screen' : 'Form'}</p>
+        <h2 className="text-heading-sm">{focus === 'start' ? 'Start screen' : focus === 'end' ? 'End screen' : 'Form settings'}</h2>
+        <p className="text-body-sm text-muted-foreground">
           {focus ? 'Shown in every layout.' : 'Select a question on the canvas to edit it.'}
         </p>
       </div>

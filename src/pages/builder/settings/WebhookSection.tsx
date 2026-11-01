@@ -63,13 +63,15 @@ export function WebhookSection() {
 
   const info = useQuery({ queryKey: ['webhook', formId, 'info'], queryFn: () => api<WebhookInfo>(base), enabled: !readOnly })
   const log = useQuery({ queryKey: ['webhook', formId, 'log'], queryFn: () => api<WebhookDeliveriesResponse>(`${base}/deliveries`), enabled: !readOnly })
-  const refreshLog = () => queryClient.invalidateQueries({ queryKey: ['webhook', formId] })
+  const refreshLog = () => queryClient.invalidateQueries({ queryKey: ['webhook', formId, 'log'] })
+  // A rotate always sets the secret; a test creates one the first time.
+  const refreshInfo = () => queryClient.setQueryData<WebhookInfo>(['webhook', formId, 'info'], { hasSecret: true })
 
   const rotate = useMutation({
     mutationFn: () => api<WebhookSecretResponse>(`${base}/secret`, { method: 'POST' }),
     onSuccess: (r) => {
       setSecret(r.secret)
-      void refreshLog()
+      refreshInfo()
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -78,6 +80,7 @@ export function WebhookSection() {
     onSuccess: (r) => {
       if (r.ok) toast.success(`Test sent: the endpoint answered ${r.statusCode} in ${r.durationMs} ms`)
       else toast.error(`Test failed: ${r.error ?? `status ${r.statusCode}`}`)
+      refreshInfo()
       void refreshLog()
     },
     onError: (e) => toast.error(errorMessage(e)),

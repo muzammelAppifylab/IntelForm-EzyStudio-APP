@@ -5,7 +5,6 @@ import { formSlug } from '@shared/api-forms'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/components/ui/cn'
 import { FieldRow, Note, SegmentRow, SwitchRow, TextRow } from '@/builder/controls'
 import { useDraftText } from '@/builder/use-draft-text'
 import { ImageUpload } from '@/builder/ImageUpload'
@@ -24,7 +23,7 @@ async function copy(text: string, done: string) {
   }
 }
 
-/** Share tab (PRD "Sharing and publishing"): link, slug, SEO, embeds, QR code, front page. */
+/** Share tab (PRD "Sharing and publishing"): link, slug, SEO, embeds, QR code, homepage listing. */
 export function ShareTab() {
   return (
     <div className="h-full overflow-y-auto">
@@ -344,12 +343,12 @@ function FrontPageSection() {
   const { save, errors } = useSettingsSave()
   const description = useDraftText(settings.frontPageDescription, (v) => void save({ frontPageDescription: v }))
   return (
-    <SettingsCard id="front-page" title="Front page" description="Your site’s public front page lists the forms you choose. Only live forms appear.">
+    <SettingsCard id="front-page" title="Homepage" description="Your public site lists the forms you choose, by title. Only live forms appear.">
       <SwitchRow
-        label="Show on the front page"
+        label="Show on the homepage"
         checked={settings.showOnFrontPage}
         disabled={readOnly}
-        onCheckedChange={(v) => void save({ showOnFrontPage: v }, v ? 'Added to the front page' : 'Removed from the front page')}
+        onCheckedChange={(v) => void save({ showOnFrontPage: v }, v ? 'Added to the homepage' : 'Removed from the homepage')}
       />
       {settings.showOnFrontPage && status !== 'live' && <Note>It appears once the form is live.</Note>}
       <TextRow
@@ -361,7 +360,6 @@ function FrontPageSection() {
         error={errors.frontPageDescription}
         {...description}
       />
-      <p className={cn('text-caption text-muted-foreground')}>The order of forms on the front page is set in the Front page editor.</p>
     </SettingsCard>
   )
 }

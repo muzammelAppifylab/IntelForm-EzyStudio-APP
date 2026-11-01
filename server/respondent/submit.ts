@@ -3,12 +3,12 @@ import type { Context } from 'hono'
 import * as z from 'zod'
 import { submitInput, type SubmitInput, type SubmitResponse } from '../../shared/api-public'
 import { formDefinition, type FormDefinition } from '../../shared/form/definition'
-import { resolveLabels, type Labels } from '../../shared/form/labels'
+import { SYSTEM_LABELS, type Labels } from '../../shared/form/labels'
 import { computeVisibility, emailDedupeKey, validateSubmission } from '../../shared/form/logic'
 import { formSettings } from '../../shared/form/settings'
 import { isSignatureDataUrl, signatureBytes } from '../../shared/form/types/registry'
-import { sql, type Queryable } from '../db/client'
-import { ApiError } from '../lib/errors'
+import { sql } from '../db/client'
+import { ApiError, isUniqueViolation } from '../lib/errors'
 import { clientIp, ipKey } from '../lib/ip'
 import { logger } from '../lib/logger'
 import { rateLimit } from '../lib/rate-limit'
@@ -35,7 +35,7 @@ import './validators'
  *  6. Turnstile (when on and configured)
  *  7. one per browser
  *  8. cheap pre-checks (still live, cap, one per email), then signature uploads (PNG only)
- *  9. one transaction: one-per-email advisory lock + check, counter and cap, insert, jobs
+ *  9. one transaction: counter and cap, insert (the unique email_key catches a repeat), jobs
  * 10. reply { ok, redirectUrl? }
  */
 
@@ -166,16 +166,9 @@ function onePerEmailKey(form: LoadedForm, def: FormDefinition, answers: Record<s
   throw new ApiError(422, 'validation_failed', labels.cannotAccept)
 }
 
-/**
- * Responses on this form whose one-per-email answer has the same dedupe key. The SQL mirrors
- * emailDedupeKey (shared/form/logic.ts): lowercase, trimmed, `+tag` dropped from the local part.
- */
-const emailTaken = (q: Queryable, formId: string, fieldId: string, key: string) => q`
-  SELECT 1 FROM responses
-  WHERE form_id = ${formId}
-    AND regexp_replace(lower(btrim(answers->>${fieldId})), ${'^([^@+]+)[+][^@]*@'}, ${'\\1@'}) = ${key}
-  LIMIT 1
-`
+function emailTakenError(fieldId: string, labels: Labels): ApiError {
+  return new ApiError(422, 'validation_failed', labels.alreadyResponded, { [fieldId]: [labels.alreadyResponded] })
+}
 
 /** Still live and under the cap, and (one per email) not a known address. Not locked: step 9 is exact. */
 async function preCheck(form: LoadedForm, emailKey: string | null, labels: Labels): Promise<void> {
@@ -187,8 +180,8 @@ async function preCheck(form: LoadedForm, emailKey: string | null, labels: Label
   if (isClosed({ status: row.status, responseCount: row.response_count, settings: fresh })) throw closedError(form, labels)
   const fieldId = form.settings.onePerEmailFieldId
   if (emailKey && fieldId) {
-    const [dupe] = await emailTaken(sql, form.id, fieldId, emailKey)
-    if (dupe) throw new ApiError(422, 'validation_failed', labels.alreadyResponded, { [fieldId]: [labels.alreadyResponded] })
+    const [dupe] = await sql`SELECT 1 FROM responses WHERE form_id = ${form.id} AND email_key = ${emailKey} LIMIT 1`
+    if (dupe) throw emailTakenError(fieldId, labels)
   }
 }
 
@@ -199,7 +192,7 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
 
   // 2. Form state
   const form = await requireForm(slug)
-  const labels = resolveLabels({ ...form.definition.labels, ...form.settings.labels })
+  const labels = SYSTEM_LABELS
   if (isClosed(form)) throw closedError(form, labels)
   const hash = form.settings.passwordHash
   if (hash && !checkUnlockToken(input.unlockToken, form.id, hash)) {
@@ -223,7 +216,7 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
   const version = await versionFor(form, input.formVersionId)
   const def = version.definition
   const now = new Date()
-  const result = validateSubmission(def, input.answers, { labels: form.settings.labels, context: { now, formVersion: version.version }, hidden: 'reject' })
+  const result = validateSubmission(def, input.answers, { context: { now, formVersion: version.version }, hidden: 'reject' })
   if (!result.ok) throw new ApiError(422, 'validation_failed', labels.errorSummary, fieldErrors(result.errors))
   const answers = result.answers
   const emailKey = onePerEmailKey(form, def, answers, labels)
@@ -251,14 +244,6 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
   const search = buildSearchText(def.fields, answers)
 
   await sql.begin(async (tx) => {
-    const fieldId = form.settings.onePerEmailFieldId
-    if (emailKey && fieldId) {
-      // Serialises submits for this address on this form, so two at once can't both pass.
-      await tx`SELECT pg_advisory_xact_lock(hashtext(${form.id + '|' + emailKey}))`
-      const [dupe] = await emailTaken(tx, form.id, fieldId, emailKey)
-      if (dupe) throw new ApiError(422, 'validation_failed', labels.alreadyResponded, { [fieldId]: [labels.alreadyResponded] })
-    }
-
     // The counter update locks the form row: the cap check below is exact.
     const [counted] = await tx<{ response_count: number; settings: unknown }[]>`
       UPDATE forms SET response_count = response_count + 1, last_response_at = now()
@@ -271,9 +256,9 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
     if (fresh.responseCap !== null && counted.response_count > fresh.responseCap) throw closedError(form, labels)
 
     const [row] = await tx<{ id: string; submitted_at: Date }[]>`
-      INSERT INTO responses (form_id, form_version_id, answers, started_at, duration_ms, ttc, ip_hash, country, device, browser, browser_token, search_text)
+      INSERT INTO responses (form_id, form_version_id, answers, started_at, duration_ms, ttc, ip_hash, country, device, browser, browser_token, search_text, email_key)
       VALUES (${form.id}, ${input.formVersionId}, ${tx.json(answers as never)}, ${startedAt}, ${durationMs}, ${ttc ? tx.json(ttc) : null},
-              ${meta.ipHash}, ${meta.country}, ${meta.device}, ${meta.browser}, ${browserHash}, ${search})
+              ${meta.ipHash}, ${meta.country}, ${meta.device}, ${meta.browser}, ${browserHash}, ${search}, ${emailKey})
       RETURNING id, submitted_at
     `
     if (fresh.responseCap !== null && counted.response_count >= fresh.responseCap) {
@@ -288,6 +273,11 @@ export async function handleSubmit(c: Context, slug: string): Promise<SubmitResp
     })
   }).catch(async (err: unknown) => {
     await removeStoredFiles(stored)
+    // responses_email_key: a submit with the same address committed since the pre-check.
+    const fieldId = form.settings.onePerEmailFieldId
+    if (emailKey && fieldId && isUniqueViolation(err) && (err as { constraint_name?: string }).constraint_name === 'responses_email_key') {
+      throw emailTakenError(fieldId, labels)
+    }
     throw err
   })
 

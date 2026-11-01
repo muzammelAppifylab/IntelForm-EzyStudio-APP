@@ -25,7 +25,9 @@ export interface AppSettings {
     postmarkToken: string | null
   }
   data: { retentionDays: number | null }
-  front_page: { enabled: boolean }
+  /** Search and sharing for the public site. */
+  site: { indexing: boolean; description: string; ogImage: string | null; contactEmail: string }
+  legal: { privacy: string; terms: string }
 }
 
 const DEFAULTS: AppSettings = {
@@ -46,7 +48,8 @@ const DEFAULTS: AppSettings = {
     postmarkToken: null,
   },
   data: { retentionDays: null },
-  front_page: { enabled: false },
+  site: { indexing: false, description: '', ogImage: null, contactEmail: '' },
+  legal: { privacy: '', terms: '' },
 }
 
 /** Fields that hold encrypted secrets, per key. */
@@ -60,6 +63,13 @@ const listeners = new Set<Listener>()
 /** Called after every setSetting, e.g. to drop a cached email transport. */
 export function onSettingChange(fn: Listener): void {
   listeners.add(fn)
+}
+
+/** Several keys in one query (one pool connection), defaults filled in. */
+export async function getSettings<K extends keyof AppSettings>(keys: readonly K[], tx: Queryable = sql): Promise<Pick<AppSettings, K>> {
+  const rows = await tx<{ key: K; value: object }[]>`SELECT key, value FROM app_settings WHERE key = ANY(${keys as unknown as string[]}::text[])`
+  const stored = new Map(rows.map((r) => [r.key, r.value]))
+  return Object.fromEntries(keys.map((k) => [k, { ...DEFAULTS[k], ...stored.get(k) }])) as Pick<AppSettings, K>
 }
 
 export async function getSetting<K extends keyof AppSettings>(key: K, tx: Queryable = sql): Promise<AppSettings[K]> {

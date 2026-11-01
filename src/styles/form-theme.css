@@ -24,7 +24,7 @@
 
 .form-theme {
   --text-question-xl: 400 calc(2.5rem * var(--form-font-scale, 1)) / calc(2.75rem * var(--form-font-scale, 1)) var(--form-question-font);
-  --text-question: 600 calc(1.125rem * var(--form-font-scale, 1)) / calc(1.625rem * var(--form-font-scale, 1)) var(--form-question-font);
+  --text-question: 600 calc(1.125rem * var(--form-font-scale, 1)) / calc(1.625rem * var(--form-font-scale, 1)) var(--form-question-sm-font, var(--form-question-font));
   --text-answer: 400 calc(1rem * var(--form-font-scale, 1)) / calc(1.5rem * var(--form-font-scale, 1)) var(--form-font);
   --text-body: 400 calc(1rem * var(--form-font-scale, 1)) / calc(1.5rem * var(--form-font-scale, 1)) var(--form-font);
   --text-body-sm: 400 calc(0.875rem * var(--form-font-scale, 1)) / calc(1.25rem * var(--form-font-scale, 1)) var(--form-font);

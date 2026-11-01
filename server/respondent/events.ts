@@ -4,7 +4,7 @@ import { sql } from '../db/client'
 import { ApiError } from '../lib/errors'
 import { ipKey } from '../lib/ip'
 import { rateLimit } from '../lib/rate-limit'
-import { isClosed, requireForm } from './load'
+import { isClosed, requireFormMeta } from './load'
 
 /**
  * Funnel events (view, start) from sendBeacon. One per type per session token: the insert
@@ -29,7 +29,7 @@ export async function handleEvent(c: Context, slug: string): Promise<void> {
   // key), then per IP and form once the form is known: never a key per attacker-chosen slug.
   const ip = ipKey(c)
   await rateLimit(`events:ip:${ip}`, EVENTS_IP_RATE_LIMIT, 60)
-  const form = await requireForm(slug)
+  const form = await requireFormMeta(slug)
   await rateLimit(`events:${ip}:${form.id}`, EVENTS_RATE_LIMIT, 60)
   if (isClosed(form)) return
   const { type, session } = parsed.data

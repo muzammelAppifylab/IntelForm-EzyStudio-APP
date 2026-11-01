@@ -10,15 +10,17 @@ const page = (load: () => Promise<{ default: React.ComponentType }>): Pick<Route
 })
 
 /**
- * Four areas, one app (PRD sitemap): public front page, public forms, login and setup, and
+ * Four areas, one app (PRD sitemap): public site, public forms, login and setup, and
  * the private dashboard.
  */
 export const router = createBrowserRouter([
   {
     errorElement: <RouteError />,
     children: [
-      // Public front page (the creator's forms hub) and legal pages
+      // Public site (the creator's forms hub): pages and copy are code in pages/public
       { path: '/', ...page(() => import('@/pages/public/HomePage')) },
+      { path: '/forms', ...page(() => import('@/pages/public/AllFormsPage')) },
+      { path: '/about', ...page(() => import('@/pages/public/AboutPage')) },
       { path: '/privacy', ...page(() => import('@/pages/public/LegalPage')) },
       { path: '/terms', ...page(() => import('@/pages/public/LegalPage')) },
 
@@ -51,8 +53,8 @@ export const router = createBrowserRouter([
             ...page(() => import('@/components/layout/DashboardLayout')),
             children: [
               { path: '/dashboard', ...page(() => import('@/pages/dashboard/FormsPage')) },
+              { path: '/dashboard/contacts', ...page(() => import('@/pages/dashboard/ContactsPage')) },
               { path: '/dashboard/templates', ...page(() => import('@/pages/dashboard/TemplatesPage')) },
-              { path: '/dashboard/front-page', ...page(() => import('@/pages/dashboard/FrontPageEditorPage')) },
               { path: '/dashboard/team', ...page(() => import('@/pages/dashboard/TeamPage')) },
               { path: '/dashboard/settings', ...page(() => import('@/pages/dashboard/SettingsPage')) },
               { path: '/dashboard/profile', ...page(() => import('@/pages/dashboard/ProfilePage')) },

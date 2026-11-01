@@ -45,8 +45,8 @@ export function DesignTab() {
   const issues = themeContrastIssues(theme)
 
   return (
-    <div className="grid h-full grid-cols-[360px_minmax(0,1fr)]">
-      <div className="min-h-0 overflow-y-auto border-r border-border bg-card">
+    <div className="grid h-full grid-cols-[360px_minmax(0,1fr)] gap-4 px-3 pt-3 pb-3 sm:px-4 sm:pt-4 sm:pb-4">
+      <div className="min-h-0 overflow-y-auto rounded-lg border border-border bg-card">
         <PanelSection title="Presets" description="Picking one sets every option below. Your logo is kept.">
           <ul className="grid grid-cols-2 gap-2" aria-label="Theme presets">
             {THEME_PRESETS.map((p) => (
@@ -206,7 +206,7 @@ export function DesignTab() {
         <SavedThemes />
       </div>
 
-      <section aria-label="Live preview" className="flex min-h-0 flex-col bg-muted">
+      <section aria-label="Live preview" className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-muted">
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2">
           <p className="text-caption text-muted-foreground">Live preview. Changes save automatically.</p>
           <DeviceToggle value={device} onChange={setDevice} />
@@ -229,11 +229,12 @@ function PresetCard({ preset, active, disabled, onPick }: { preset: ThemePreset;
     <button
       type="button"
       aria-pressed={active}
+      aria-label={`${preset.name}, ${preset.mode === 'dark' ? 'dark' : 'light'} preset`}
       disabled={disabled}
       onClick={onPick}
       className={cn(
         'focus-ring grid w-full gap-1.5 rounded-lg border border-border p-1.5 text-left transition-colors hover:border-input disabled:cursor-not-allowed',
-        active && 'border-border-ink bg-primary ring-1 ring-border-ink',
+        active && 'border-ring bg-accent ring-1 ring-ring',
       )}
     >
       {/* The swatch shows the preset's own colours: theme data, not app chrome. */}

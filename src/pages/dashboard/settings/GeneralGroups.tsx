@@ -67,13 +67,13 @@ export function GeneralGroup({ view }: { view: AppSettingsView }) {
   return (
     <GroupCard
       title="General"
-      description="How the app introduces itself on the login screen, the front page and in emails."
+      description="How the app introduces itself on the login screen, the public site and in emails."
       onSubmit={submit}
       dirty={!same(v, view.general)}
       saving={save.isPending}
       formError={errors._form ?? errors.general}
     >
-      <Field label="App name" description="Shown on the login screen, in the sidebar and in emails." error={errors.appName} required>
+      <Field label="App name" description="Shown on the login screen, in the sidebar, on the public site and in emails." error={errors.appName} required>
         {(p) => <Input {...p} value={v.appName} maxLength={60} onChange={(e) => set('appName', e.target.value)} className="sm:max-w-sm" />}
       </Field>
       <div className="grid gap-5 sm:grid-cols-2">

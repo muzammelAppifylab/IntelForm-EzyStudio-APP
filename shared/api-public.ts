@@ -1,6 +1,5 @@
 import * as z from 'zod'
 import type { FormDefinition } from './form/definition'
-import type { Labels } from './form/labels'
 import type { PublicFormSettings } from './form/settings'
 import type { FormTheme } from './form/theme'
 
@@ -20,11 +19,7 @@ interface PublicFormBase {
   title: string
   /** Published theme (the closed and password screens are themed too). */
   theme: FormTheme
-  /** System labels with the form's overrides (definition.labels, then settings.labels). */
-  labels: Labels
   settings: PublicFormSettings
-  /** BCP 47 language for <html lang>. */
-  lang: string
 }
 
 /** A live form, ready to render and submit. */

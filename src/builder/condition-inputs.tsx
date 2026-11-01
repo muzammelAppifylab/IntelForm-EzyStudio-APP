@@ -9,14 +9,24 @@ import type { ConditionValueProps } from './type-ui'
 
 const box = 'h-(--control-sm) text-body-sm'
 
-export function TextValue({ value, onChange, label, readOnly }: ConditionValueProps) {
+export function TextValue({
+  value,
+  onChange,
+  label,
+  readOnly,
+  placeholder = 'Text',
+  invalid,
+  inputMode,
+}: ConditionValueProps & { placeholder?: string; invalid?: boolean; inputMode?: 'text' | 'tel' }) {
   return (
     <Input
       aria-label={label}
+      aria-invalid={invalid || undefined}
       className={box}
       value={value === undefined ? '' : String(value)}
       onChange={(e) => onChange(e.target.value)}
-      placeholder="Text"
+      placeholder={placeholder}
+      inputMode={inputMode}
       maxLength={500}
       readOnly={readOnly}
     />

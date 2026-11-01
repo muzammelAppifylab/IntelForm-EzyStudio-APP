@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Search, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, Search, Trash2, X } from 'lucide-react'
 import type { CatalogField, ResponseRow } from '@shared/api-responses'
+import { Pagination } from '@/components/common/Pagination'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -80,9 +81,6 @@ export function TableView({ formId, state, update, openResponse, activeResponseI
   if (data.formTotal === 0) return <>{empty}</>
 
   const filtered = !!(state.q || state.from || state.filter.length || state.has)
-  const pages = Math.max(1, Math.ceil(data.total / data.pageSize))
-  const first = data.total === 0 ? 0 : (data.page - 1) * data.pageSize + 1
-  const last = Math.min(data.total, data.page * data.pageSize)
   const allOnPage = data.rows.length > 0 && data.rows.every((r) => selected.has(r.id))
   const someOnPage = data.rows.some((r) => selected.has(r.id))
 
@@ -242,23 +240,15 @@ export function TableView({ formId, state, update, openResponse, activeResponseI
         </Table>
       </div>
 
-      <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-body-sm text-muted-foreground">
-        <span className="tabular-nums" aria-live="polite">
-          {data.total === 0 ? 'No responses' : `${formatNumber(first)}–${formatNumber(last)} of ${formatNumber(data.total)}`}
-          {filtered && data.total !== data.formTotal && ` (filtered from ${formatNumber(data.formTotal)})`}
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="tabular-nums">
-            Page {formatNumber(data.page)} of {formatNumber(pages)}
-          </span>
-          <Button variant="outline" size="icon-sm" aria-label="Previous page" disabled={data.page <= 1} onClick={() => update({ page: data.page - 1 > 1 ? data.page - 1 : null })}>
-            <ChevronLeft aria-hidden />
-          </Button>
-          <Button variant="outline" size="icon-sm" aria-label="Next page" disabled={data.page >= pages} onClick={() => update({ page: data.page + 1 })}>
-            <ChevronRight aria-hidden />
-          </Button>
-        </div>
-      </nav>
+      <Pagination
+        page={data.page}
+        pageSize={data.pageSize}
+        total={data.total}
+        noun="responses"
+        suffix={filtered && data.total !== data.formTotal && ` (filtered from ${formatNumber(data.formTotal)})`}
+        alwaysShowControls
+        onPage={(p) => update({ page: p > 1 ? p : null })}
+      />
 
       <ConfirmDelete
         open={confirm}
@@ -322,9 +312,9 @@ function ActiveFilters({ state, fields, update }: { state: TableState; fields: M
     <ul className="flex flex-wrap items-center gap-2" aria-label="Active filters">
       {chips.map((c) => (
         <li key={c.key}>
-          <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-card py-0.5 pr-1 pl-3 text-body-sm text-foreground">
+          <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-card py-0.5 pr-1 pl-2.5 text-body-sm text-foreground">
             <span className="max-w-80 truncate">{c.label}</span>
-            <Button variant="ghost" size="icon-xs" className="rounded-full" aria-label={`Remove filter ${c.label}`} onClick={c.remove}>
+            <Button variant="ghost" size="icon-xs" aria-label={`Remove filter ${c.label}`} onClick={c.remove}>
               <X aria-hidden />
             </Button>
           </span>

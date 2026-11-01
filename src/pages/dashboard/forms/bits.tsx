@@ -1,5 +1,4 @@
 import { Rows3 } from 'lucide-react'
-import type { ReactNode } from 'react'
 import type { FormStatus } from '@shared/api-forms'
 import { LAYOUT_LABEL, type Layout } from '@shared/form/definition'
 import { StatusBadge } from '@/components/ds/StatusBadge'
@@ -29,14 +28,4 @@ export function FormStatusBadge({ status }: { status: FormStatus }) {
 
 export function UnpublishedBadge() {
   return <StatusBadge status="unpublished" />
-}
-
-/** Small labelled metric used in the strip. */
-export function StatTile({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
-  return (
-    <section className={cn('grid content-start gap-2 rounded-lg border bg-card p-5', className)} aria-label={label}>
-      <h2 className="text-overline text-muted-foreground uppercase">{label}</h2>
-      {children}
-    </section>
-  )
 }

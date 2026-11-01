@@ -11,7 +11,7 @@ export interface TurnstileHandle {
   reset: () => void
 }
 
-const TurnstileWidget = forwardRef<TurnstileHandle, { siteKey: string; lang: string }>(function TurnstileWidget({ siteKey, lang }, ref) {
+const TurnstileWidget = forwardRef<TurnstileHandle, { siteKey: string }>(function TurnstileWidget({ siteKey }, ref) {
   const inst = useRef<TurnstileInstance>(null)
   useImperativeHandle(ref, () => ({
     async getToken() {
@@ -29,7 +29,7 @@ const TurnstileWidget = forwardRef<TurnstileHandle, { siteKey: string; lang: str
       <Turnstile
         ref={inst}
         siteKey={siteKey}
-        options={{ execution: 'execute', appearance: 'interaction-only', action: 'submit', language: lang, theme: 'auto', size: 'flexible' }}
+        options={{ execution: 'execute', appearance: 'interaction-only', action: 'submit', language: 'en', theme: 'auto', size: 'flexible' }}
       />
     </div>
   )

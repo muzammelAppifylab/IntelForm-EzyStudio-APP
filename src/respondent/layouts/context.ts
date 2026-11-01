@@ -25,6 +25,8 @@ export interface LayoutContext {
   formErrorAction?: FormErrorAction | null
   /** Final validation, then the network (or the end screen in preview). */
   submit: () => Promise<SubmitOutcome>
+  /** The form's step sound, when moving forward to the next question or section. */
+  playStep: () => void
   markStarted: () => void
   /** "Question 3 of 8" → document.title (live) and the polite live region. */
   announce: (status: string | null, opts?: { error?: boolean }) => void
@@ -36,9 +38,10 @@ export interface LayoutContext {
 export function focusStep(container: HTMLElement | null, preferInput: boolean): void {
   if (!container) return
   if (preferInput) {
-    const input = container.querySelector<HTMLElement>(
-      'input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not(.sr-only), textarea, select',
-    )
+    // The question's main control (id `if-…`) first: a phone's country picker comes before its number box.
+    const typing = 'input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not(.sr-only), textarea, select'
+    const main = typing.split(', ').map((s) => `${s}[id^="if-"]`).join(', ')
+    const input = container.querySelector<HTMLElement>(main) ?? container.querySelector<HTMLElement>(typing)
     if (input) {
       input.focus({ preventScroll: true })
       return

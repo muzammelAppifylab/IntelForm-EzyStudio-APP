@@ -6,6 +6,8 @@ import { FIELD_TYPE_META } from '@shared/form/field-types'
 import { FIELD_ICONS } from '@/form-types/icons'
 import { useBuildShortcuts } from '@/builder/lifecycle'
 import { useBuilderStore } from '@/builder/store'
+import { cn } from '@/components/ui/cn'
+import { BuildToolbar } from './BuildToolbar'
 import { Canvas, CANVAS_END } from './Canvas'
 import { DeleteDialog } from './DeleteDialog'
 import { InsertMenu } from './InsertMenu'
@@ -16,6 +18,7 @@ import { SettingsPanel } from '../panel/SettingsPanel'
 export function BuildTab() {
   const store = useBuilderStore()
   const [insertOpen, setInsertOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(true)
   useBuildShortcuts(store, { openInsert: () => !store.getState().readOnly && setInsertOpen(true) })
 
   return (
@@ -40,9 +43,19 @@ export function BuildTab() {
         }
       }}
     >
-      <div className="grid h-full grid-cols-[256px_minmax(0,1fr)_320px]">
-        <Palette />
-        <Canvas onInsert={() => setInsertOpen(true)} />
+      <div
+        className={cn(
+          'grid h-full gap-4 px-3 pt-3 pb-3 sm:px-4 sm:pt-4 sm:pb-4',
+          paletteOpen
+            ? 'grid-cols-[15rem_minmax(0,1fr)_19rem] xl:grid-cols-[20rem_minmax(0,1fr)_22rem] 2xl:grid-cols-[21rem_minmax(0,1fr)_25rem]'
+            : 'grid-cols-[4.5rem_minmax(0,1fr)_19rem] xl:grid-cols-[4.5rem_minmax(0,1fr)_22rem] 2xl:grid-cols-[4.5rem_minmax(0,1fr)_25rem]',
+        )}
+      >
+        <Palette collapsed={!paletteOpen} onToggle={() => setPaletteOpen((o) => !o)} />
+        <div className="relative min-h-0">
+          <Canvas onInsert={() => setInsertOpen(true)} />
+          <BuildToolbar onInsert={() => setInsertOpen(true)} />
+        </div>
         <SettingsPanel />
       </div>
       <DragOverlay dropAnimation={null} disabled={(source) => source?.type !== 'palette'}>
@@ -51,7 +64,7 @@ export function BuildTab() {
           if (!type) return null
           const Icon = FIELD_ICONS[type]
           return (
-            <div className="flex items-center gap-2 rounded-md border-2 border-border-ink bg-card px-3 py-2 text-label text-foreground shadow-pop">
+            <div className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-label text-foreground shadow-pop">
               <Icon className="size-4 text-foreground" aria-hidden />
               {FIELD_TYPE_META[type].label}
             </div>

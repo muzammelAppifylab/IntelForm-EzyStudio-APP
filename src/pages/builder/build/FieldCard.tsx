@@ -18,6 +18,7 @@ import { cn } from '@/components/ui/cn'
 import { FIELD_ICONS } from '@/form-types/icons'
 import { describeRule } from '@/builder/describe'
 import { fieldName } from '@/builder/ops'
+import { fieldTint } from '@/builder/type-ui'
 import { PipedText } from '@/builder/pipe/PipedText'
 import { PipeInput } from '@/builder/pipe/PipeInput'
 import { useBuilder, useBuilderStore } from '@/builder/store'
@@ -62,6 +63,75 @@ export const FieldCard = memo(function FieldCard({ field, index, number, count, 
     if (!selected) s().select(field.id)
   }
 
+  const actions = (
+    <div
+      className={cn(
+        'flex items-center gap-0.5 rounded-md bg-card transition-opacity duration-(--duration-fast) ease-out',
+        !selected && 'absolute top-1/2 right-4 -translate-y-1/2 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100',
+        readOnly && 'hidden',
+      )}
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`Duplicate ${name}`} onClick={() => s().duplicate(field.id)}>
+            <Copy aria-hidden />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Duplicate ({MOD}D)</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`Delete ${name}`} onClick={() => s().requestDelete(field.id)}>
+            <Trash2 aria-hidden />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Delete (Delete key)</TooltipContent>
+      </Tooltip>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`More actions for ${name}`}>
+            <EllipsisVertical aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuItem disabled={index === 0} onSelect={() => s().moveBy(field.id, -1)}>
+            <ArrowUp aria-hidden />
+            Move up
+            <DropdownMenuShortcut>{MOD}⇧↑</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={index === count - 1} onSelect={() => s().moveBy(field.id, 1)}>
+            <ArrowDown aria-hidden />
+            Move down
+            <DropdownMenuShortcut>{MOD}⇧↓</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {!isSection && (
+            <DropdownMenuItem onSelect={() => s().updateField(field.id, (f) => void (f.required = !f.required), undefined, 'Toggle required')}>
+              <Asterisk aria-hidden />
+              {field.required ? 'Make optional' : 'Make required'}
+              <DropdownMenuShortcut>{MOD}⇧R</DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onSelect={() => s().duplicate(field.id)}>
+            <Copy aria-hidden />
+            Duplicate
+            <DropdownMenuShortcut>{MOD}D</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onSelect={() => s().requestDelete(field.id)}>
+            <Trash2 aria-hidden />
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  )
+
+  const required = field.required && !isSection && (
+    <span className="ml-1 text-destructive" aria-hidden>
+      *
+    </span>
+  )
+
   return (
     <li
       ref={ref}
@@ -72,126 +142,94 @@ export const FieldCard = memo(function FieldCard({ field, index, number, count, 
       onFocus={select}
       onMouseDown={select}
       className={cn(
-        'group relative rounded-lg border border-border bg-card outline-none transition-[box-shadow,border-color] duration-(--duration-fast)',
-        'hover:border-input focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        selected && 'border-border-ink ring-1 ring-border-ink hover:border-border-ink',
+        'group relative rounded-lg border bg-card outline-none transition-[border-color] duration-(--duration-fast) ease-out',
+        'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        selected ? 'border-ring ring-1 ring-ring' : 'border-border hover:border-input',
         isDragging && 'z-10 opacity-80 shadow-pop',
         isDropTarget && !isDragging && 'border-border-ink',
-        isSection && 'bg-secondary',
+        isSection && !selected && 'bg-muted',
       )}
     >
-      <div className="flex items-center gap-2 px-3 pt-3">
+      {/* Row: handle, type icon, number, label, then the rule chip and type (or actions on hover). */}
+      <div className={cn('flex min-h-[4.5rem] items-center gap-3 px-4', selected ? 'pt-4 pb-2' : 'py-3')}>
         {!readOnly && (
           <button
             ref={handle}
             type="button"
-            className="focus-ring -ml-1 grid size-7 cursor-grab place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground active:cursor-grabbing"
+            className="focus-ring -ml-1 grid size-7 shrink-0 cursor-grab place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground active:cursor-grabbing"
             aria-label={`Reorder ${name}. Press space to pick up, arrow keys to move, space to drop.`}
           >
             <GripVertical className="size-4" aria-hidden />
           </button>
         )}
-        <span className="inline-flex items-center gap-1.5 text-caption text-muted-foreground">
-          <Icon className="size-3.5" aria-hidden />
-          {isSection ? 'Section break' : `${number}. ${meta.label}`}
+        <span
+          className={cn(
+            'grid size-8 shrink-0 place-items-center rounded-md',
+            selected ? 'border border-option-selected-border bg-option-selected text-option-selected-foreground' : fieldTint(field.type),
+          )}
+          title={meta.label}
+        >
+          <Icon className="size-4" aria-hidden />
+        </span>
+        {/* Sans and tabular: the serif "1" read like a text cursor next to the title. */}
+        <span className="w-6 shrink-0 text-center text-label text-muted-foreground tabular-nums" aria-hidden>
+          {isSection ? '§' : number}
         </span>
         {field.required && !isSection && <span className="sr-only">Required</span>}
-        {field.hideLabel && <span className="text-caption text-muted-foreground">Label hidden</span>}
-        <div
-          className={cn(
-            'ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100',
-            selected && 'opacity-100',
-            readOnly && 'hidden',
-          )}
-        >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`Duplicate ${name}`} onClick={() => s().duplicate(field.id)}>
-                <Copy aria-hidden />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Duplicate ({MOD}D)</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`Delete ${name}`} onClick={() => s().requestDelete(field.id)}>
-                <Trash2 aria-hidden />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Delete (Delete key)</TooltipContent>
-          </Tooltip>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`More actions for ${name}`}>
-                <EllipsisVertical aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem disabled={index === 0} onSelect={() => s().moveBy(field.id, -1)}>
-                <ArrowUp aria-hidden />
-                Move up
-                <DropdownMenuShortcut>{MOD}⇧↑</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem disabled={index === count - 1} onSelect={() => s().moveBy(field.id, 1)}>
-                <ArrowDown aria-hidden />
-                Move down
-                <DropdownMenuShortcut>{MOD}⇧↓</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              {!isSection && (
-                <DropdownMenuItem onSelect={() => s().updateField(field.id, (f) => void (f.required = !f.required), undefined, 'Toggle required')}>
-                  <Asterisk aria-hidden />
-                  {field.required ? 'Make optional' : 'Make required'}
-                  <DropdownMenuShortcut>{MOD}⇧R</DropdownMenuShortcut>
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onSelect={() => s().duplicate(field.id)}>
-                <Copy aria-hidden />
-                Duplicate
-                <DropdownMenuShortcut>{MOD}D</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onSelect={() => s().requestDelete(field.id)}>
-                <Trash2 aria-hidden />
-                Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
 
-      <div className="grid gap-3 px-5 pt-2 pb-5">
-        <div className="grid gap-1">
+        <div className="min-w-0 flex-1">
           {editable ? (
-            <div className="flex items-start gap-0.5 [&>div:first-child]:w-auto [&>div:first-child]:max-w-full [&>div:first-child]:min-w-[12ch]">
-            <PipeInput
-              variant="inline"
-              ariaLabel={isSection ? 'Section title' : 'Question label'}
-              placeholder={isSection ? 'Section title' : 'Type your question'}
-              value={field.label}
-              beforeIndex={index}
-              autoFocus={focusTarget === 'label' || autoFocus}
-              className={isSection ? 'text-subheading text-foreground' : 'text-question text-foreground'}
-              onChange={(label) => s().updateField(field.id, (f) => void (f.label = label.slice(0, 500)), `label:${field.id}`, 'Edit label')}
-            />
+            <div className="flex items-start gap-0.5 [&>div:first-child]:mr-0 [&>div:first-child]:w-auto [&>div:first-child]:max-w-[calc(100%+0.5rem)] [&>div:first-child]:min-w-[12ch]">
+              <PipeInput
+                variant="inline"
+                ariaLabel={isSection ? 'Section title' : 'Question label'}
+                placeholder={isSection ? 'Section title' : 'Type your question'}
+                value={field.label}
+                beforeIndex={index}
+                autoFocus={focusTarget === 'label' || autoFocus}
+                className="text-question text-foreground"
+                onChange={(label) => s().updateField(field.id, (f) => void (f.label = label.slice(0, 500)), `label:${field.id}`, 'Edit label')}
+              />
               {field.required && !isSection && (
-                <span className="text-question text-destructive" aria-hidden>
+                <span className="py-1 text-question text-destructive" aria-hidden>
                   *
                 </span>
               )}
             </div>
           ) : (
-            <p
-              className={cn(isSection ? 'text-subheading' : 'text-question', 'text-foreground', !field.label && 'text-field-placeholder')}
-              onMouseDown={() => setFocusTarget('label')}
-            >
+            <p className={cn('truncate text-question text-foreground', !field.label && 'text-field-placeholder')} onMouseDown={() => setFocusTarget('label')}>
               {field.label ? <PipedText text={field.label} /> : isSection ? 'Untitled section' : 'Type your question'}
-              {field.required && !isSection && (
-                <span className="ml-0.5 text-destructive" aria-hidden>
-                  *
-                </span>
-              )}
+              {required}
             </p>
           )}
+        </div>
+
+        {!selected && (
+          <div className="flex shrink-0 items-center gap-2 transition-opacity duration-(--duration-fast) ease-out group-focus-within:opacity-0 group-hover:opacity-0">
+            {issues.length > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-warning-subtle px-2 py-0.5 text-caption font-medium text-warning-subtle-foreground">
+                <TriangleAlert className="size-3.5" aria-hidden />
+                {issues.length}
+                <span className="sr-only">{issues.length === 1 ? 'warning' : 'warnings'}</span>
+              </span>
+            )}
+            {field.logic && (
+              <span className="inline-flex max-w-56 items-center gap-1 rounded-md bg-info-subtle px-2 py-0.5 text-caption font-medium text-info-subtle-foreground" title={describeRule(draft, field.logic)}>
+                <GitBranch className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">{describeRule(draft, field.logic)}</span>
+              </span>
+            )}
+            <span className="hidden text-body-sm whitespace-nowrap text-muted-foreground xl:inline">{isSection ? 'Section break' : meta.label}</span>
+            {field.hideLabel && <span className="sr-only">Label hidden</span>}
+          </div>
+        )}
+        {actions}
+      </div>
+
+      {/* Inset to the title text (handle, icon, number, gaps), so description and preview line up under it. */}
+      {selected && (
+      <div className="grid gap-4 px-5 pt-1 pb-6 sm:pl-[8.75rem]">
+        <div className="grid gap-1">
           {editable ? (
             <PipeInput
               variant="inline"
@@ -221,6 +259,7 @@ export const FieldCard = memo(function FieldCard({ field, index, number, count, 
               </p>
             )
           )}
+          {field.hideLabel && <span className="text-caption text-muted-foreground">Label hidden from respondents</span>}
         </div>
         <FieldPreview field={field} editable={editable} />
         {field.logic && (
@@ -240,6 +279,7 @@ export const FieldCard = memo(function FieldCard({ field, index, number, count, 
           </ul>
         )}
       </div>
+      )}
     </li>
   )
 })

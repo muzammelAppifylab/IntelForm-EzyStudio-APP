@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { FormDefinition } from '@shared/form/definition'
 import { validateSubmission } from '@shared/form/logic'
+import type { StepSound } from '@shared/form/settings'
 import type { FormTheme } from '@shared/form/theme'
 import { TtcClock, useFormEngine } from './engine'
 import { AllAtOnce } from './layouts/AllAtOnce'
@@ -8,6 +9,7 @@ import type { FormErrorAction, LayoutContext, SubmitOutcome } from './layouts/co
 import { OneAtATime } from './layouts/OneAtATime'
 import { Paged } from './layouts/Paged'
 import { redirectAfterSubmit } from './redirect'
+import { playStepSound } from './sound'
 import { EndScreenView, StartScreen } from './screens'
 import { FormShell } from './Shell'
 import './extras.css'
@@ -27,12 +29,12 @@ export type SubmitResult =
 export interface FormRendererProps {
   definition: FormDefinition
   theme: FormTheme
-  /** Label overrides (definition.labels are applied too). */
-  labels?: Record<string, string>
   /** preview: no network, no Turnstile; submit just shows the end screen. */
   mode: 'live' | 'preview'
   /** Width hint for the builder preview (mobile also turns off input autofocus). */
   device?: 'desktop' | 'mobile'
+  /** Sound on moving to the next question or section, and on submit (form setting). */
+  stepSound?: StepSound
   onSubmit?: (answers: Record<string, unknown>, meta: { startedAt: number; ttc: Record<string, number> }) => Promise<SubmitResult>
 
   // Live-page extras (optional; the builder preview leaves them out)
@@ -63,9 +65,9 @@ function isDesktop(device?: 'desktop' | 'mobile'): boolean {
 }
 
 export function FormRenderer(props: FormRendererProps) {
-  const { definition: def, theme, labels: overrides, mode, device, onSubmit, title, embed, manageDocumentTitle } = props
+  const { definition: def, theme, mode, device, onSubmit, title, embed, manageDocumentTitle } = props
   const preview = mode === 'preview'
-  const engine = useFormEngine(def, overrides, props.initialAnswers)
+  const engine = useFormEngine(def, props.initialAnswers)
   const ttc = useMemo(() => new TtcClock(), [])
   const [phase, setPhase] = useState<'start' | 'form' | 'end'>(def.startScreen.enabled && !props.initialAnswers ? 'start' : 'form')
   const shownPhase = phase === 'start' && !def.startScreen.enabled ? 'form' : phase
@@ -104,13 +106,14 @@ export function FormRenderer(props: FormRendererProps) {
       engine.showErrors(errs)
       return { ok: false, errors: errs }
     }
-    const final = validateSubmission(def, engine.pruned, { labels: overrides, context: { dayTolerance: 0 }, hidden: 'drop' })
+    const final = validateSubmission(def, engine.pruned, { context: { dayTolerance: 0 }, hidden: 'drop' })
     if (!final.ok) {
       engine.showErrors(final.errors)
       return { ok: false, errors: final.errors }
     }
     ttc.leave()
     if (preview || !onSubmit) {
+      playStepSound(props.stepSound ?? 'off', true)
       setPhase('end')
       return { ok: true }
     }
@@ -120,6 +123,7 @@ export function FormRenderer(props: FormRendererProps) {
     try {
       const r = await onSubmit(final.answers, { startedAt: startedAt.current ?? Date.now(), ttc: ttc.snapshot() })
       if (r.ok) {
+        playStepSound(props.stepSound ?? 'off', true)
         if (r.redirectUrl) {
           redirectAfterSubmit(r.redirectUrl, def.fields.map((f) => f.id), !!embed)
           if (!embed) return { ok: true }
@@ -162,6 +166,7 @@ export function FormRenderer(props: FormRendererProps) {
     formError,
     formErrorAction,
     submit,
+    playStep: () => playStepSound(props.stepSound ?? 'off'),
     markStarted,
     announce: (s, opts) => {
       setStatus(s)

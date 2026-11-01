@@ -415,11 +415,12 @@ taste:
     shadows:
       pop: { value: "0 12px 32px shadow-color @ 12%", use: "Menus, popovers, dialogs and the dragged field only. Nothing else casts a shadow." }
     fonts:
-      display: { family: Instrument Serif, weights: [400], use: "Headings, hero, KPI numbers, one-at-a-time questions. Always weight 400: scale, not weight, carries emphasis." }
+      display: { family: Instrument Serif, weights: [400], use: "Headings, hero, KPI numbers, one-at-a-time questions. Small (all-at-once) questions use the body font instead, since the serif has no 600. Always weight 400: scale, not weight, carries emphasis." }
       sans: { family: Figtree, weights: [400, 500, 600, 700], use: "All UI: body, labels, buttons, tables, inputs." }
       mono: { family: JetBrains Mono, use: "Slugs, embed snippets, webhook payloads." }
     typography:
       hero: { font: display, size_px: 96, line_height_px: 92, weight: 400, letter_spacing_em: -0.02, transform: none, use: "Front page hero headline only." }
+      wordmark: { font: display, size_px: "fluid 72-192 (clamp(4.5rem, 14vw, 12rem))", line_height: 0.85, weight: 400, letter_spacing_em: -0.03, transform: none, use: "Front page footer wordmark (the app name) only. Decorative: one per page." }
       title: { font: display, size_px: 56, line_height_px: 56, weight: 400, letter_spacing_em: -0.015, transform: none, use: "Public page titles and front page sections." }
       heading: { font: display, size_px: 40, line_height_px: 44, weight: 400, letter_spacing_em: -0.01, transform: none, use: "Dashboard and builder page titles." }
       heading-sm: { font: display, size_px: 28, line_height_px: 32, weight: 400, letter_spacing_em: -0.005, transform: none, use: "Section titles inside chambers and large cards." }

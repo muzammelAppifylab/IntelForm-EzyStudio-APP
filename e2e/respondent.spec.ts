@@ -39,7 +39,6 @@ function definition(layout: Layout) {
     layout,
     startScreen: { enabled: false, title: '', button: 'Start' },
     endScreen: { title: 'Thanks, {f_kbname}!', message: 'We will write to {f_kbmail}.' },
-    labels: {},
     fields: [
       ...(layout === 'one_at_a_time' ? [] : [{ id: 'f_kbsec1', type: 'section_break', label: 'About you', required: false, props: {} }]),
       { id: 'f_kbname', type: 'short_text', label: 'Your name', required: true, props: {} },

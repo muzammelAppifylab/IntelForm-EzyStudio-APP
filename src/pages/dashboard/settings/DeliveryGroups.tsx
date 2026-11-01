@@ -62,7 +62,7 @@ export function SpamGroup({ view }: { view: AppSettingsView }) {
   return (
     <GroupCard
       title="Spam protection"
-      description="Cloudflare Turnstile checks that a person, not a bot, submits your forms. Each form can turn it off in its settings."
+      description="Optional. Cloudflare Turnstile checks that a person, not a bot, submits your forms. Each form can turn it off in its settings."
       onSubmit={submit}
       dirty={dirty}
       saving={save.isPending}
@@ -75,7 +75,7 @@ export function SpamGroup({ view }: { view: AppSettingsView }) {
       }
     >
       <p className="text-body-sm text-muted-foreground">
-        Create a widget in the Cloudflare dashboard under Turnstile, add this site’s domain, then paste both keys here. The honeypot and rate limit stay on either way.
+        Without keys, forms are still protected by a honeypot and a rate limit. Add Turnstile if a form starts getting spam: create a widget in the Cloudflare dashboard under Turnstile, add this site’s domain, then paste both keys here.
       </p>
       <Field label="Site key" description="Public. Starts with 0x." error={errors.siteKey}>
         {(p) => <Input {...p} value={siteKey} spellCheck={false} autoComplete="off" onChange={(e) => setSiteKey(e.target.value)} className="font-mono sm:max-w-sm" />}

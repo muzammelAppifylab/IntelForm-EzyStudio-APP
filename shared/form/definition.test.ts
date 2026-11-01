@@ -12,7 +12,7 @@ import {
   optionId,
   type FormField,
 } from './definition'
-import { SYSTEM_LABELS, errorMessage, formatLabel, resolveLabels } from './labels'
+import { SYSTEM_LABELS, errorMessage, formatLabel } from './labels'
 import { isSafeUrl, safeUrl } from './safe-url'
 
 describe('formDefinition', () => {
@@ -35,7 +35,6 @@ describe('formDefinition', () => {
         },
       ],
       endScreen: { title: 'Thanks!', message: 'We got it.', redirectUrl: null },
-      labels: { next: 'Next', submit: 'Submit' },
     }
     const parsed = formDefinition.parse(example)
     const choice = parsed.fields[1]
@@ -143,13 +142,6 @@ describe('csv', () => {
 })
 
 describe('labels', () => {
-  it('merges overrides, ignoring blanks and unknown keys', () => {
-    const l = resolveLabels({ next: 'Suivant', submit: ' ', bogus: 'x' })
-    expect(l.next).toBe('Suivant')
-    expect(l.submit).toBe(SYSTEM_LABELS.submit)
-    expect('bogus' in l).toBe(false)
-  })
-
   it('formats placeholders and error codes', () => {
     expect(formatLabel(SYSTEM_LABELS.step, { n: 2, total: 4 })).toBe('Step 2 of 4')
     expect(formatLabel(SYSTEM_LABELS.question, { n: 3, total: 8 })).toBe('Question 3 of 8')
