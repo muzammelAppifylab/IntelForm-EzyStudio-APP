@@ -8,11 +8,11 @@ import {applyAppDefaultTheme} from './theme';
 
 /**
  * IntelForm's App settings branding (name, favicon, accent colour, default mode), public and
- * cached: GET /site-api/public/app. Shared by the dashboard shell and the public pages.
+ * cached: GET /site-api/public-site/app. Shared by the dashboard shell and the public pages.
  */
 export const appInfoQuery = queryOptions({
   queryKey: ['intelform', 'app-info'],
-  queryFn: () => api<PublicAppInfo>('/site-api/public/app'),
+  queryFn: () => api<PublicAppInfo>('/site-api/public-site/app'),
   staleTime: 5 * 60_000,
 });
 

@@ -19,7 +19,7 @@ export interface PublicFormCard {
   minutes: number | null
 }
 
-/** GET /api/public/home: what every public site page needs. */
+/** GET /site-api/public-site/home: what every public site page needs. */
 export interface PublicHome {
   appName: string
   logoUrl: string | null
@@ -40,7 +40,7 @@ export const LEGAL_KINDS = ['privacy', 'terms'] as const
 export type LegalKind = (typeof LEGAL_KINDS)[number]
 export const LEGAL_TITLE: Record<LegalKind, string> = { privacy: 'Privacy policy', terms: 'Terms' }
 
-/** GET /api/public/legal/:kind */
+/** GET /site-api/public-site/legal/:kind */
 export interface PublicLegal {
   kind: LegalKind
   title: string
