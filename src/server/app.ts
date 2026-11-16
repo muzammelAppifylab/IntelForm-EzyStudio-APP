@@ -9,8 +9,17 @@ import {syncPermissions} from '../platform/permission-sync';
 import {authSettings} from './auth-settings';
 import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
-import {jobRoutes} from './routes/jobs';
+import {appSettingsRoutes} from './routes/app-settings';
+import {builderRoutes} from './routes/builder';
+import {contactsRoutes} from './routes/contacts';
+import {formsRoutes} from './routes/forms';
+import {publicFormsRoutes} from './routes/public-forms';
+import {publicSiteRoutes} from './routes/public-site';
+import {responsesRoutes} from './routes/responses';
 import {siteRoutes} from './routes/site';
+import {templatesRoutes} from './routes/templates';
+import {themesRoutes} from './routes/themes';
+import {uploadsRoutes} from './routes/uploads';
 
 /**
  * The Site API: this site's ONLY backend, one Hono app at `/site-api/*`.
@@ -25,7 +34,16 @@ import {siteRoutes} from './routes/site';
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
  *   GET  /site          the site's brand                        routes/site.ts
- *   *    /jobs/...      the job board (Site Database)           routes/jobs.ts
+ *   *    /forms/...     IntelForm: forms (list, create, publish) routes/forms.ts
+ *   *    /builder/...   a form's definition, logic, autosave     routes/builder.ts
+ *   *    /templates/... form templates                           routes/templates.ts
+ *   *    /themes/...    form design themes                       routes/themes.ts
+ *   *    /responses/... responses, summaries, export             routes/responses.ts
+ *   *    /public/forms/... the respondent side (anonymous)       routes/public-forms.ts
+ *   *    /contacts/...  contacts from responses                  routes/contacts.ts
+ *   *    /uploads/...   form images and answer files             routes/uploads.ts
+ *   *    /app-settings  IntelForm's app-wide settings            routes/app-settings.ts
+ *   *    /public-site/... data for the public website            routes/public-site.ts
  *   *    /checkout/...  start and confirm a payment             routes/checkout.ts
  *   *    /memberships/... the member's memberships               routes/checkout.ts
  *
@@ -72,7 +90,18 @@ export const app = new Hono()
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
   .route('/site', siteRoutes)
-  .route('/jobs', jobRoutes)
+  .route('/forms', formsRoutes)
+  .route('/builder', builderRoutes)
+  .route('/templates', templatesRoutes)
+  .route('/themes', themesRoutes)
+  .route('/responses', responsesRoutes)
+  // Respondents are anonymous but SAME-ORIGIN (the form at /f/<slug> and its embed are pages
+  // of this site), so they stay behind sameOrigin + csrf like every write (siteFetch sends the token).
+  .route('/public/forms', publicFormsRoutes)
+  .route('/contacts', contactsRoutes)
+  .route('/uploads', uploadsRoutes)
+  .route('/app-settings', appSettingsRoutes)
+  .route('/public-site', publicSiteRoutes)
   .route('/memberships', membershipRoutes)
 
   .notFound(c => c.json(problem('not_found', 'No such Site API route.'), 404))

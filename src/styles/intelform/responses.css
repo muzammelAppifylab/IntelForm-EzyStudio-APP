@@ -1,0 +1,5 @@
+/*
+ * IntelForm dashboard CSS for screens/builder/responses.tsx, src/portal/intelform/responses/**.
+ * Scope every rule under the screen root class `.screen-responses` (`<div className="app-page screen-responses">`).
+ * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ */

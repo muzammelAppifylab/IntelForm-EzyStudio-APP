@@ -16,78 +16,152 @@
 :root {
   color-scheme: light;
 
-  --bg: #ffffff;
-  --surface: #f5f3ef;
-  --card: #ffffff;
-  --ink: #0e0f0f;
-  --muted: #545b57;
-  --subtle: #6b726e;
-  --line: #e3e1da;
-  --line-strong: #cfccc3;
-  --hover: #f0eee8;
+  /* IntelForm "paper & ink" (legacy/docs/DESIGN.md v2.1): an oat paper canvas, warm
+     violet-black ink, periwinkle actions edged in 2px ink, pine green confirmations and
+     one persimmon live accent. Shadowless: borders and fills separate surfaces; only
+     menus, popovers and dialogs float (`--shadow-lg`). */
+  --bg: #f5f2ea;
+  --surface: #f5f2ea;
+  --card: #fdfcf9;
+  --ink: #211d2a;
+  --muted: #5a5851;
+  --subtle: #716e67;
+  --line: #dad8d2;
+  --line-strong: #8b8881;
+  --hover: #eae8e3;
 
-  --accent: #0f6b4f;
-  --accent-hover: #0b5640;
+  /* Strong brand (periwinkle 600): focus rings, links, checked controls, chart lines. */
+  --accent: #6c48ca;
+  --accent-hover: #5737a8;
   --accent-ink: #ffffff;
-  --accent-soft: #d6ebdd;
-  --accent-text: #0b5640;
+  --accent-soft: #e5e2fe;
+  --accent-text: #5737a8;
+  --ring: var(--accent);
 
-  --success: #1f7a4d;
-  --success-soft: #dcf0e3;
-  --warning: #8a5a00;
-  --warning-soft: #fbeccc;
-  --danger: #b42318;
-  --danger-hover: #912018;
-  --danger-soft: #fde4e1;
-  --info: #1d5fa8;
-  --info-soft: #dfeafa;
+  /* The primary button and selected tiles: soft periwinkle, label and 2px edge in ink. */
+  --primary: #c9c0ff;
+  --primary-hover: #b4a5fe;
+  --primary-ink: #211d2a;
+  --edge: #211d2a;
 
-  --shadow-sm: 0 1px 2px rgb(16 24 20 / 0.06), 0 1px 3px rgb(16 24 20 / 0.08);
-  --shadow-md: 0 4px 8px -2px rgb(16 24 20 / 0.08), 0 2px 4px -2px rgb(16 24 20 / 0.06);
-  --shadow-lg: 0 12px 24px -6px rgb(16 24 20 / 0.14), 0 4px 8px -4px rgb(16 24 20 / 0.08);
-  --overlay: rgb(10 14 12 / 0.5);
+  --success: #2f5d46;
+  --success-soft: #e3f0e8;
+  --warning: #8c5e02;
+  --warning-soft: #fdedd6;
+  --danger: #a12144;
+  --danger-hover: #7d1633;
+  --danger-ink: #ffffff;
+  --danger-soft: #fee6e9;
+  --info: #432984;
+  --info-soft: #eeebfd;
+
+  /* IntelForm's own: the live accent (persimmon, once per screen), the dark "chamber"
+     panel, ratings, NPS groups, the respondent progress bar and chart series. */
+  --highlight: #e8613f;
+  --highlight-ink: #211d2a;
+  --pine: #2f5d46;
+  --pine-ink: #f5f2ea;
+  --chamber: #211d2a;
+  --chamber-ink: #f5f2ea;
+  --chamber-muted: #c3c0ba;
+  --field: #fdfcf9;
+  --option-selected: #c9c0ff;
+  --option-selected-ink: #211d2a;
+  --progress-fill: #211d2a;
+  --progress-track: #dad8d2;
+  --rating: #eaad4f;
+  --rating-empty: #a6a39c;
+  --nps-detractor: #e55071;
+  --nps-passive: #eaad4f;
+  --nps-promoter: #42765c;
+  --chart-1: #6c48ca;
+  --chart-2: #42765c;
+  --chart-3: #e8613f;
+  --chart-4: #d9961a;
+  --chart-5: #1361d6;
+  --chart-6: #8b8881;
+
+  --shadow-sm: 0 0 0 transparent;
+  --shadow-md: 0 0 0 transparent;
+  --shadow-lg: 0 12px 32px color-mix(in oklab, #211d2a 12%, transparent);
+  --overlay: rgb(33 29 42 / 0.5);
 
   --radius-sm: 8px;
   --radius: 12px;
-  --radius-lg: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-full: 9999px;
 
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-display: var(--font-sans);
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  /* Figtree for every control, Instrument Serif (regular weight only) for titles and big
+     numbers. Self-hosted when the @fontsource packages are installed (see app.css);
+     until then the fallbacks below are used. */
+  --font-sans: Figtree, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0d1110;
-  --surface: #111614;
-  --card: #171d1b;
-  --ink: #eceeed;
-  --muted: #a3ada8;
-  --subtle: #8b9590;
-  --line: #27302d;
-  --line-strong: #3a4541;
-  --hover: #1e2623;
+  --bg: #17151d;
+  --surface: #17151d;
+  --card: #221f2a;
+  --ink: #f5f2ea;
+  --muted: #c3c0ba;
+  --subtle: #a6a39c;
+  --line: #34304a;
+  --line-strong: #8b8881;
+  --hover: #2a2638;
 
-  --accent: #4cc08f;
-  --accent-hover: #6bd0a5;
-  --accent-ink: #04140d;
-  --accent-soft: #163a2c;
-  --accent-text: #7fd1ae;
+  --accent: #b4a5fe;
+  --accent-hover: #c9c0ff;
+  --accent-ink: #211d2a;
+  --accent-soft: #3a2a5c;
+  --accent-text: #b4a5fe;
 
-  --success: #5ccf92;
-  --success-soft: #15342a;
-  --warning: #f0b955;
-  --warning-soft: #3a2c12;
-  --danger: #ff8a80;
-  --danger-hover: #ffaaa3;
-  --danger-soft: #3d1a18;
-  --info: #7db4f2;
-  --info-soft: #172b44;
+  --primary: #c9c0ff;
+  --primary-hover: #b4a5fe;
+  --primary-ink: #211d2a;
+  --edge: #f5f2ea;
 
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 4px 10px -2px rgb(0 0 0 / 0.45);
-  --shadow-lg: 0 16px 32px -8px rgb(0 0 0 / 0.6);
+  --success: #a6ccb7;
+  --success-soft: #0e2b27;
+  --warning: #f8c883;
+  --warning-soft: #33240a;
+  --danger: #fd758e;
+  --danger-hover: #ffa9b5;
+  --danger-ink: #211d2a;
+  --danger-soft: #3a1018;
+  --info: #b4a5fe;
+  --info-soft: #2a2140;
+
+  --highlight: #e8613f;
+  --highlight-ink: #211d2a;
+  --pine: #a6ccb7;
+  --pine-ink: #211d2a;
+  --chamber: #0e0c15;
+  --chamber-ink: #f5f2ea;
+  --chamber-muted: #c3c0ba;
+  --field: #17151d;
+  --option-selected: #3a2a5c;
+  --option-selected-ink: #f5f2ea;
+  --progress-fill: #b4a5fe;
+  --progress-track: #34304a;
+  --rating: #eaad4f;
+  --rating-empty: #716e67;
+  --nps-detractor: #fd758e;
+  --nps-passive: #eaad4f;
+  --nps-promoter: #7eaf94;
+  --chart-1: #b4a5fe;
+  --chart-2: #7eaf94;
+  --chart-3: #e8613f;
+  --chart-4: #eaad4f;
+  --chart-5: #639fff;
+  --chart-6: #8b8881;
+
+  --shadow-sm: 0 0 0 transparent;
+  --shadow-md: 0 0 0 transparent;
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
   --overlay: rgb(0 0 0 / 0.6);
 }
 
@@ -95,35 +169,65 @@
   :root:not([data-theme='light']) {
     color-scheme: dark;
 
-    --bg: #0d1110;
-    --surface: #111614;
-    --card: #171d1b;
-    --ink: #eceeed;
-    --muted: #a3ada8;
-    --subtle: #8b9590;
-    --line: #27302d;
-    --line-strong: #3a4541;
-    --hover: #1e2623;
+    --bg: #17151d;
+    --surface: #17151d;
+    --card: #221f2a;
+    --ink: #f5f2ea;
+    --muted: #c3c0ba;
+    --subtle: #a6a39c;
+    --line: #34304a;
+    --line-strong: #8b8881;
+    --hover: #2a2638;
 
-    --accent: #4cc08f;
-    --accent-hover: #6bd0a5;
-    --accent-ink: #04140d;
-    --accent-soft: #163a2c;
-    --accent-text: #7fd1ae;
+    --accent: #b4a5fe;
+    --accent-hover: #c9c0ff;
+    --accent-ink: #211d2a;
+    --accent-soft: #3a2a5c;
+    --accent-text: #b4a5fe;
 
-    --success: #5ccf92;
-    --success-soft: #15342a;
-    --warning: #f0b955;
-    --warning-soft: #3a2c12;
-    --danger: #ff8a80;
-    --danger-hover: #ffaaa3;
-    --danger-soft: #3d1a18;
-    --info: #7db4f2;
-    --info-soft: #172b44;
+    --primary: #c9c0ff;
+    --primary-hover: #b4a5fe;
+    --primary-ink: #211d2a;
+    --edge: #f5f2ea;
 
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow-md: 0 4px 10px -2px rgb(0 0 0 / 0.45);
-    --shadow-lg: 0 16px 32px -8px rgb(0 0 0 / 0.6);
+    --success: #a6ccb7;
+    --success-soft: #0e2b27;
+    --warning: #f8c883;
+    --warning-soft: #33240a;
+    --danger: #fd758e;
+    --danger-hover: #ffa9b5;
+    --danger-ink: #211d2a;
+    --danger-soft: #3a1018;
+    --info: #b4a5fe;
+    --info-soft: #2a2140;
+
+    --highlight: #e8613f;
+    --highlight-ink: #211d2a;
+    --pine: #a6ccb7;
+    --pine-ink: #211d2a;
+    --chamber: #0e0c15;
+    --chamber-ink: #f5f2ea;
+    --chamber-muted: #c3c0ba;
+    --field: #17151d;
+    --option-selected: #3a2a5c;
+    --option-selected-ink: #f5f2ea;
+    --progress-fill: #b4a5fe;
+    --progress-track: #34304a;
+    --rating: #eaad4f;
+    --rating-empty: #716e67;
+    --nps-detractor: #fd758e;
+    --nps-passive: #eaad4f;
+    --nps-promoter: #7eaf94;
+    --chart-1: #b4a5fe;
+    --chart-2: #7eaf94;
+    --chart-3: #e8613f;
+    --chart-4: #eaad4f;
+    --chart-5: #639fff;
+    --chart-6: #8b8881;
+
+    --shadow-sm: 0 0 0 transparent;
+    --shadow-md: 0 0 0 transparent;
+    --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
     --overlay: rgb(0 0 0 / 0.6);
   }
 }
@@ -218,6 +322,14 @@ h3 {
   line-height: 1.15;
   margin: 0 0 0.4em;
   letter-spacing: -0.02em;
+}
+
+/* Titles in Instrument Serif, which has ONE weight: never bold it. */
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
 }
 
 h1 {
@@ -501,10 +613,11 @@ hr {
   gap: 0.5rem;
   min-height: 40px;
   padding: 0 16px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  background: var(--accent);
-  color: var(--accent-ink);
+  border-radius: var(--radius);
+  /* Paper & ink: the primary and secondary buttons wear a 2px ink edge. */
+  border: 2px solid var(--edge);
+  background: var(--primary);
+  color: var(--primary-ink);
   font: inherit;
   font-size: 0.925rem;
   font-weight: 600;
@@ -521,14 +634,14 @@ hr {
 }
 
 .button:hover {
-  background: var(--accent-hover);
+  background: var(--primary-hover);
 }
 
 .button.ghost,
 .button.button-secondary {
   background: var(--card);
   color: var(--ink);
-  border-color: var(--line-strong);
+  border-color: var(--edge);
 }
 
 .button.ghost:hover,
@@ -538,6 +651,7 @@ hr {
 
 .button.button-ghost {
   background: transparent;
+  border-color: transparent;
   color: var(--ink);
   box-shadow: none;
 }
@@ -550,6 +664,7 @@ hr {
 .button.button-link {
   min-height: 0;
   padding: 2px 4px;
+  border-color: transparent;
   background: transparent;
   color: var(--accent-text);
   box-shadow: none;
@@ -564,12 +679,14 @@ hr {
 
 .button.danger,
 .button.button-danger {
+  border-color: var(--danger);
   background: var(--danger);
-  color: #ffffff;
+  color: var(--danger-ink);
 }
 
 .button.danger:hover,
 .button.button-danger:hover {
+  border-color: var(--danger-hover);
   background: var(--danger-hover);
 }
 

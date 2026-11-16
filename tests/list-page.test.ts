@@ -16,16 +16,9 @@ describe('a list page', () => {
     expect(listUrl('/site-api/jobs', params, 'before', 12)).toBe('/site-api/jobs?type=contract&remote=1&before=12');
   });
 
+  // The template's job board (its example list page) was removed for IntelForm; the helper stays.
   it('never builds a row from HTML', () => {
     const helper = readFileSync(new URL('../src/lib/list-page.ts', import.meta.url), 'utf8');
-    const page = readFileSync(new URL('../src/pages/jobs/index.astro', import.meta.url), 'utf8');
-    for (const source of [helper, page]) expect(source).not.toMatch(/innerHTML|set:html|insertAdjacentHTML/);
-  });
-
-  it('the job board shell is static and carries what search engines read', () => {
-    const page = readFileSync(new URL('../src/pages/jobs/index.astro', import.meta.url), 'utf8');
-    expect(page).toContain('export const prerender = true');
-    expect(page).toContain('<h1>Open roles</h1>');
-    expect(page).toContain('description=');
+    expect(helper).not.toMatch(/innerHTML|set:html|insertAdjacentHTML/);
   });
 });

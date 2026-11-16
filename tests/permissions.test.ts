@@ -22,9 +22,30 @@ describe('the permission catalogue', () => {
     expect(CORE.ROLE_READ).toBe('site:role:read');
     expect(CORE.ROLE_UPDATE).toBe('site:role:update');
     expect(CORE.AUDIT_READ).toBe('site:audit:read');
-    expect(PERMISSIONS.JOB_MANAGE).toBe('site:job:manage');
+    expect(PERMISSIONS.FORM_READ).toBe('site:form:read');
+    expect(PERMISSIONS.FORM_WRITE).toBe('site:form:write');
+    expect(PERMISSIONS.FORM_DELETE).toBe('site:form:delete');
+    expect(PERMISSIONS.RESPONSE_READ).toBe('site:response:read');
+    expect(PERMISSIONS.RESPONSE_DELETE).toBe('site:response:delete');
+    expect(PERMISSIONS.CONTACT_READ).toBe('site:contact:read');
+    expect(PERMISSIONS.CONTACT_WRITE).toBe('site:contact:write');
+    expect(PERMISSIONS.APP_SETTINGS).toBe('site:intelform:settings');
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
-      ['editRoles', 'manageJobs', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
+      [
+        'editRoles',
+        'manageRoles',
+        'manageUsers',
+        'readAudit',
+        'updateUsers',
+        'viewForms',
+        'editForms',
+        'deleteForms',
+        'viewResponses',
+        'deleteResponses',
+        'viewContacts',
+        'editContacts',
+        'manageAppSettings',
+      ].sort()
     );
     expect(Object.values(NO_ABILITIES).every(v => v === false)).toBe(true);
   });
@@ -32,15 +53,48 @@ describe('the permission catalogue', () => {
   it('derives the abilities from granted codenames, wildcards included', () => {
     const owner = abilitiesFor(new Set(['*']));
     expect(Object.values(owner).every(Boolean)).toBe(true);
-    const admin = abilitiesFor(new Set(['site:user:*', 'site:role:read', 'site:audit:read', 'site:job:manage']));
+    const admin = abilitiesFor(
+      new Set([
+        'site:user:*',
+        'site:role:read',
+        'site:audit:read',
+        'site:form:read',
+        'site:form:write',
+        'site:form:delete',
+        'site:response:read',
+        'site:response:delete',
+        'site:contact:read',
+        'site:contact:write',
+        'site:intelform:settings',
+      ])
+    );
     expect(admin).toEqual({
       manageUsers: true,
       updateUsers: true,
       manageRoles: true,
       editRoles: false,
       readAudit: true,
-      manageJobs: true,
+      viewForms: true,
+      editForms: true,
+      deleteForms: true,
+      viewResponses: true,
+      deleteResponses: true,
+      viewContacts: true,
+      editContacts: true,
+      manageAppSettings: true,
     } satisfies Abilities);
+    // IntelForm's Viewer: reads forms, responses and contacts, changes nothing.
+    const viewer = abilitiesFor(new Set(['site:form:read', 'site:response:read', 'site:contact:read']));
+    expect(
+      Object.entries(viewer)
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+        .sort()
+    ).toEqual(['viewContacts', 'viewForms', 'viewResponses']);
+    // The roles each entry is first granted to.
+    expect(CATALOGUE.FORM_READ.roles).toEqual(['admin', 'editor', 'viewer']);
+    expect(CATALOGUE.FORM_WRITE.roles).toEqual(['admin', 'editor']);
+    expect(CATALOGUE.APP_SETTINGS.roles).toEqual(['admin']);
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue
     void NO_ABILITIES.manageEverything;

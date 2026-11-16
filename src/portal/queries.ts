@@ -1,6 +1,6 @@
 import {infiniteQueryOptions, queryOptions} from '@tanstack/react-query';
 
-import type {AdminUser, AuditRow, JobsPage, PermissionRow, RoleRow} from '../lib/types';
+import type {AdminUser, AuditRow, PermissionRow, RoleRow} from '../lib/types';
 import {refreshSession} from '../platform/browser';
 import {api, read} from './api';
 import type {Me} from './shared';
@@ -12,7 +12,11 @@ import type {Me} from './shared';
  * screen renders from the cache. Kept apart from the screens so the routes can
  * import them without pulling the (lazy) screen code into the first bundle.
  *
- * A save invalidates by key prefix (`['users']`, `['jobs']`, `['roles']`).
+ * A save invalidates by key prefix (`['users']`, `['roles']`).
+ *
+ * IntelForm's reads live per domain in `./intelform/queries/<domain>.ts` (forms, builder,
+ * responses, contacts, templates, themes, app-settings…), each owned by its screen; keep
+ * this file to the template's own reads.
  */
 
 /** Who is signed in, and what the portal may SHOW them. Shared by every screen. */
@@ -47,10 +51,6 @@ export const firstUsersQuery = queryOptions({
   queryKey: ['users', 'first'],
   queryFn: () => read<UsersPage>(api.admin.users.$get({query: {before: '', email: '', status: ''}})),
 });
-export const firstJobsQuery = queryOptions({
-  queryKey: ['jobs', 'manage', 'first'],
-  queryFn: () => read<JobsPage>(api.jobs.manage.$get({query: {before: ''}})),
-});
 export const firstAuditQuery = queryOptions({
   queryKey: ['audit', 'first'],
   queryFn: () => read<AuditPage>(api.admin.audit.$get({query: {before: ''}})),
@@ -65,14 +65,6 @@ export const usersQuery = (filter: {email: string; status: string}) =>
       read<UsersPage>(api.admin.users.$get({query: {before: pageParam ?? '', email: filter.email, status: filter.status}})),
     getNextPageParam: last => (last.nextBefore ? String(last.nextBefore) : undefined),
   });
-
-/** `/dashboard/jobs`: every job, open and closed. */
-export const manageJobsQuery = infiniteQueryOptions({
-  queryKey: ['jobs', 'manage'],
-  initialPageParam: undefined as string | undefined,
-  queryFn: ({pageParam}) => read<JobsPage>(api.jobs.manage.$get({query: {before: pageParam ?? ''}})),
-  getNextPageParam: last => (last.nextBefore ? String(last.nextBefore) : undefined),
-});
 
 /** `/dashboard/activity`: the audit log, newest first. */
 export const auditQuery = infiniteQueryOptions({

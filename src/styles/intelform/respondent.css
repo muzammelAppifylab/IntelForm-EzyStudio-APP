@@ -1,0 +1,6 @@
+/*
+ * The PUBLIC form a respondent fills in (/f/<slug> and its embed), not the dashboard.
+ * Imported by the respondent page itself (src/pages/f/...), after global.css; owned by the
+ * respondent agent. Per-form theme values arrive as custom properties on the form's root
+ * (set through the CSSOM, never style=""), falling back to the global tokens.
+ */

@@ -37,20 +37,20 @@ datasource db {
 /// A person with an account on this site. `email` is stored trimmed and
 /// lower-cased. Only the user and holders of `site:user:read` ever see it.
 model User {
-  id              Int       @id @default(autoincrement())
-  email           String    @unique @db.VarChar(254)
+  id                Int       @id @default(autoincrement())
+  email             String    @unique @db.VarChar(254)
   /// The platform's opaque id, on the site owner's account only (src/platform/auth/owner.ts).
-  platformOwnerId String?   @unique @map("platform_owner_id") @db.VarChar(64)
+  platformOwnerId   String?   @unique @map("platform_owner_id") @db.VarChar(64)
   /// A versioned hash string (src/platform/auth/password.ts).
-  passwordHash    String    @map("password_hash") @db.VarChar(255)
-  name            String    @db.VarChar(80)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  name              String    @db.VarChar(80)
   /// `active` or `suspended`.
-  status          String    @default("active") @db.VarChar(16)
-  emailVerifiedAt DateTime? @map("email_verified_at")
+  status            String    @default("active") @db.VarChar(16)
+  emailVerifiedAt   DateTime? @map("email_verified_at")
   /// Bumped on password change, logout-all and suspension: every access token
   /// carrying an older value stops working at once.
-  sessionVersion  Int       @default(1) @map("session_version")
-  lastLoginAt     DateTime? @map("last_login_at")
+  sessionVersion    Int       @default(1) @map("session_version")
+  lastLoginAt       DateTime? @map("last_login_at")
   /// Two-step sign-in (src/platform/auth/two-factor.ts): the authenticator secret, SEALED
   /// (never in clear), set once the user confirmed a first code (`totpEnabledAt`).
   totpSecretSealed  String?   @map("totp_secret_sealed") @db.VarChar(255)
@@ -59,8 +59,8 @@ model User {
   totpEnabledAt     DateTime? @map("totp_enabled_at")
   /// The 30-second step of the last accepted code: that code (and older) never works again.
   totpLastStep      Int?      @map("totp_last_step")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
 
   roles              UserRole[]
   refreshTokens      RefreshToken[]
@@ -69,6 +69,18 @@ model User {
   emailChanges       EmailChange[]
   recoveryCodes      RecoveryCode[]
   signInCodes        SignInCode[]
+
+  // IntelForm (relation lists only: no columns on this managed table).
+  formsCreated       Form[]              @relation("FormCreatedBy")
+  formsUpdated       Form[]              @relation("FormUpdatedBy")
+  formVersions       FormVersion[]
+  themes             Theme[]
+  templates          Template[]
+  formPrefs          UserFormPref[]
+  prefs              UserPref[]
+  responseTablePrefs ResponseTablePref[]
+  formPresence       FormPresence[]
+  intelformSettings  IntelformSettings[]
 
   @@index([status, id])
   @@map("users")
@@ -91,7 +103,7 @@ model Role {
   @@map("roles")
 }
 
-/// The permission catalogue: one row per codename (`site:job:manage`,
+/// The permission catalogue: one row per codename (`site:form:read`,
 /// `site:user:*`, `*`). Shipped as idempotent migrations, matched by codename.
 model Permission {
   id          Int      @id @default(autoincrement())
@@ -430,4 +442,363 @@ model Job {
 
   @@index([status, id])
   @@map("jobs")
+}
+
+// ---------------------------------------------------------------- IntelForm
+// Forms, versions, responses and everything around them (ported from IntelForm's own schema,
+// legacy/server/db/migrations). Ids are uuids: they appear in dashboard URLs and API bodies
+// (`z.uuid()` in src/lib/intelform/api-*.ts). Who created or changed something points at
+// `users.id` with ON DELETE SET NULL: forms and responses outlive a deleted account.
+// Partial, expression and trigram indexes, CHECKs and the contact trigger are SQL in the
+// migration (Prisma's schema can't hold them): open every later `--create-only` migration and
+// delete any `DROP INDEX` / `DROP TRIGGER` of them before applying.
+
+/// A form. `draft` is the editable definition (src/lib/intelform/form/definition.ts); what
+/// respondents see is `publishedVersion`. `settings` is the flat FormSettings object
+/// (src/lib/intelform/form/settings.ts), `theme` the FormTheme (form/theme.ts).
+model Form {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Public link slug. Lower-case letters, digits and hyphens (CHECK in SQL).
+  slug               String    @unique @db.VarChar(60)
+  title              String    @db.VarChar(200)
+  /// `draft`, `live` or `closed` (CHECK in SQL).
+  status             String    @default("draft") @db.VarChar(10)
+  draft              Json      @db.JsonB
+  publishedVersionId String?   @unique @map("published_version_id") @db.Uuid
+  settings           Json      @default("{}") @db.JsonB
+  theme              Json      @default("{}") @db.JsonB
+  /// The draft or theme changed since the last Publish ("Unpublished changes").
+  hasUnpublished     Boolean   @default(false) @map("has_unpublished")
+  /// The webhook signing secret (never in `settings`, which the browser reads). Server only.
+  webhookSecret      String?   @map("webhook_secret") @db.VarChar(255)
+  /// Bumped on every save: autosave conflict detection (If-Match).
+  revision           Int       @default(0)
+  /// Kept on write by the submit and delete routes: the forms list never counts responses.
+  responseCount      Int       @default(0) @map("response_count")
+  lastResponseAt     DateTime? @map("last_response_at") @db.Timestamptz(3)
+  createdById        Int?      @map("created_by")
+  updatedById        Int?      @map("updated_by")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy         User?               @relation("FormCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy         User?               @relation("FormUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  publishedVersion  FormVersion?        @relation("FormPublishedVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  versions          FormVersion[]       @relation("FormVersions")
+  oldSlugs          FormSlugOld[]
+  responses         Response[]
+  events            FormEvent[]
+  eventCounts       FormEventCount[]
+  webhookDeliveries WebhookDelivery[]
+  userPrefs         UserFormPref[]
+  tablePrefs        ResponseTablePref[]
+  presence          FormPresence[]
+
+  @@index([updatedAt(sort: Desc), id(sort: Desc)])
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([responseCount(sort: Desc), updatedAt(sort: Desc)])
+  @@index([status, updatedAt(sort: Desc)])
+  @@index([createdById])
+  @@index([updatedById])
+  @@map("forms")
+}
+
+/// A published snapshot of a form: what respondents fill in and what responses point at.
+model FormVersion {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  formId        String   @map("form_id") @db.Uuid
+  /// 1, 2, 3… per form.
+  version       Int
+  definition    Json     @db.JsonB
+  theme         Json     @db.JsonB
+  publishedAt   DateTime @default(now()) @map("published_at") @db.Timestamptz(3)
+  publishedById Int?     @map("published_by")
+
+  form         Form       @relation("FormVersions", fields: [formId], references: [id], onDelete: Cascade)
+  publishedBy  User?      @relation(fields: [publishedById], references: [id], onDelete: SetNull)
+  publishedFor Form?      @relation("FormPublishedVersion")
+  responses    Response[]
+
+  @@unique([formId, version])
+  @@index([publishedById])
+  @@map("form_versions")
+}
+
+/// An old slug of a form: the old public link keeps redirecting after the link changed.
+model FormSlugOld {
+  slug      String   @id @db.VarChar(60)
+  formId    String   @map("form_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([formId])
+  @@map("form_slugs_old")
+}
+
+/// One submitted response. `answers` is `{fieldId: value}` (CHECK: a JSON object). The
+/// `contact_*` columns are filled by the `responses_contact_fill` trigger from the version's
+/// email / name / phone questions: contacts are these columns grouped by `contact_key`
+/// ("e:<email>" or "p:<E.164 phone>"); there is no contacts table. Never write them yourself.
+model Response {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  formId        String    @map("form_id") @db.Uuid
+  formVersionId String    @map("form_version_id") @db.Uuid
+  answers       Json      @db.JsonB
+  startedAt     DateTime? @map("started_at") @db.Timestamptz(3)
+  submittedAt   DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(3)
+  durationMs    Int?      @map("duration_ms")
+  /// Keyed hash of the respondent's IP, never the address.
+  ipHash        String?   @map("ip_hash") @db.VarChar(64)
+  /// ISO 3166 alpha-2.
+  country       String?   @db.VarChar(2)
+  /// `desktop`, `mobile` or `tablet`.
+  device        String?   @db.VarChar(16)
+  browser       String?   @db.VarChar(40)
+  /// Hash of the one-response-per-browser token.
+  browserToken  String?   @map("browser_token") @db.VarChar(64)
+  /// Server-built text of the text-like answers, for search (trigram index in SQL).
+  searchText    String    @default("") @map("search_text") @db.Text
+  /// Time per question in ms, measured in the browser: `{fieldId: ms}`.
+  ttc           Json?     @db.JsonB
+  /// One response per email: the normalised address of the checked answer (partial unique index in SQL).
+  emailKey      String?   @map("email_key") @db.VarChar(254)
+  /// Filled by the trigger, never by code.
+  contactEmail  String?   @map("contact_email") @db.VarChar(254)
+  contactName   String?   @map("contact_name") @db.VarChar(200)
+  contactPhone  String?   @map("contact_phone") @db.VarChar(20)
+  contactKey    String?   @map("contact_key") @db.VarChar(260)
+
+  form              Form              @relation(fields: [formId], references: [id], onDelete: Cascade)
+  formVersion       FormVersion       @relation(fields: [formVersionId], references: [id], onDelete: Cascade)
+  webhookDeliveries WebhookDelivery[]
+
+  @@index([formId, submittedAt(sort: Desc), id(sort: Desc)])
+  @@index([formVersionId])
+  @@index([submittedAt])
+  /// Substring search (ILIKE) on search_text. Needs pg_trgm (created in the migration).
+  @@index([searchText(ops: raw("gin_trgm_ops"))], map: "responses_search_trgm", type: Gin)
+  /// Choice filters: `answers @> '{"f_x": "o_y"}'`.
+  @@index([answers(ops: JsonbPathOps)], map: "responses_answers", type: Gin)
+  @@map("responses")
+}
+
+/// A form view or start, one per browser session (the funnel). Swept after the rollup.
+model FormEvent {
+  id           BigInt   @id @default(autoincrement())
+  formId       String   @map("form_id") @db.Uuid
+  /// `view` or `start` (CHECK in SQL).
+  type         String   @db.VarChar(8)
+  sessionToken String   @map("session_token") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@unique([formId, type, sessionToken])
+  @@index([createdAt])
+  @@map("form_events")
+}
+
+/// Funnel rollup: views and starts per form per 15-minute bucket (correct day boundaries in
+/// every time zone).
+model FormEventCount {
+  formId String   @map("form_id") @db.Uuid
+  bucket DateTime @db.Timestamptz(3)
+  views  Int      @default(0)
+  starts Int      @default(0)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([formId, bucket])
+  @@map("form_event_counts")
+}
+
+/// One webhook POST (a response, a test send or a resend). Goes with its response.
+model WebhookDelivery {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  formId       String   @map("form_id") @db.Uuid
+  responseId   String?  @map("response_id") @db.Uuid
+  /// The `webhook-id` header sent: the same on a resend.
+  webhookId    String?  @map("webhook_id") @db.VarChar(64)
+  url          String   @db.VarChar(2000)
+  statusCode   Int?     @map("status_code")
+  durationMs   Int?     @map("duration_ms")
+  /// First 1 KB of the endpoint's answer.
+  responseBody String?  @map("response_body") @db.VarChar(1024)
+  error        String?  @db.VarChar(500)
+  /// What was sent, for Resend.
+  payload      Json?    @db.JsonB
+  isTest       Boolean  @default(false) @map("is_test")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  form     Form      @relation(fields: [formId], references: [id], onDelete: Cascade)
+  response Response? @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  @@index([formId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([responseId])
+  @@index([createdAt])
+  @@map("webhook_deliveries")
+}
+
+/// A saved form theme (Theme tab → Saved themes), shared by the whole team.
+model Theme {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @db.VarChar(80)
+  settings    Json     @db.JsonB
+  createdById Int?     @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([createdById])
+  @@map("themes")
+}
+
+/// A template a teammate saved from a form ("Save as template"). The built-in templates are
+/// code (src/lib/intelform/form/templates), never rows.
+model Template {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String   @unique @db.VarChar(80)
+  name        String   @db.VarChar(120)
+  category    String   @db.VarChar(40)
+  description String   @default("") @db.VarChar(300)
+  definition  Json     @db.JsonB
+  theme       Json     @default("{}") @db.JsonB
+  settings    Json     @default("{}") @db.JsonB
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdById Int?     @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([sortOrder, createdAt])
+  @@index([createdById])
+  @@map("templates")
+}
+
+/// Per user, per form preferences (opaque to the database).
+model UserFormPref {
+  userId    Int      @map("user_id")
+  formId    String   @map("form_id") @db.Uuid
+  prefs     Json     @default("{}") @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([userId, formId])
+  @@index([formId])
+  @@map("user_form_prefs")
+}
+
+/// Per user preferences by key, e.g. `forms.view` = "grid" | "list" (key format CHECK in SQL).
+model UserPref {
+  userId    Int      @map("user_id")
+  key       String   @db.VarChar(64)
+  value     Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, key])
+  @@map("user_prefs")
+}
+
+/// The Responses table's columns per user and form: ordered `[{id, visible}]`.
+model ResponseTablePref {
+  userId    Int      @map("user_id")
+  formId    String   @map("form_id") @db.Uuid
+  columns   Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([userId, formId])
+  @@index([formId])
+  @@map("response_table_prefs")
+}
+
+/// Who has a form open in the builder: each tab touches its row every 20 s; rows older than
+/// 45 s don't count and are swept on the way. (IntelForm kept this in memory; a Worker can't.)
+model FormPresence {
+  formId String   @map("form_id") @db.Uuid
+  /// One id per browser tab.
+  tabId  String   @map("tab_id") @db.VarChar(64)
+  userId Int      @map("user_id")
+  seenAt DateTime @default(now()) @map("seen_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([formId, tabId])
+  @@index([userId])
+  @@index([seenAt])
+  @@map("form_presence")
+}
+
+/// Fixed-window rate limits of the public form routes (submit, unlock, events, public pages):
+/// one upsert per check, keyed by the caller (`respond:<ipHash>:<formId>`, never a raw IP).
+/// Ended windows are swept by a scheduled job.
+model IntelformRateLimit {
+  key           String   @db.VarChar(200)
+  windowStart   DateTime @map("window_start") @db.Timestamptz(3)
+  windowSeconds Int      @map("window_seconds")
+  count         Int      @default(1)
+
+  @@id([key, windowStart])
+  @@index([windowStart])
+  @@map("intelform_rate_limits")
+}
+
+/// IntelForm's app settings: ONE row (`id = 1`, CHECK in SQL). Non-secret values only;
+/// secrets (the Turnstile secret key) are owner secrets read with `config.ownerSecret()`.
+/// Emails go through the platform relay, so there are no mail provider settings here.
+model IntelformSettings {
+  id               Int      @id @default(1)
+  // General
+  appName          String   @default("IntelForm") @map("app_name") @db.VarChar(60)
+  logoUrl          String?  @map("logo_url") @db.VarChar(2048)
+  faviconUrl       String?  @map("favicon_url") @db.VarChar(2048)
+  /// IANA time zone for dates in the dashboard and summaries.
+  timezone         String   @default("UTC") @db.VarChar(64)
+  /// One of DATE_FORMATS (src/lib/intelform/settings-app.ts).
+  dateFormat       String   @default("DD/MM/YYYY") @map("date_format") @db.VarChar(12)
+  // Branding
+  /// `#RRGGBB`, or null for the design default.
+  accentColor      String?  @map("accent_color") @db.VarChar(7)
+  /// `light`, `dark` or `system`.
+  defaultMode      String   @default("system") @map("default_mode") @db.VarChar(6)
+  /// A built-in theme preset id or a saved theme's uuid; null = the built-in default.
+  defaultThemeId   String?  @map("default_theme_id") @db.VarChar(100)
+  // Spam protection: the public site key only.
+  turnstileSiteKey String?  @map("turnstile_site_key") @db.VarChar(200)
+  // Data
+  /// Delete responses older than this many days; null keeps them forever.
+  retentionDays    Int?     @map("retention_days")
+  // Public site (the forms hub)
+  siteIndexing     Boolean  @default(false) @map("site_indexing")
+  siteDescription  String   @default("") @map("site_description") @db.VarChar(300)
+  siteOgImage      String?  @map("site_og_image") @db.VarChar(2048)
+  contactEmail     String   @default("") @map("contact_email") @db.VarChar(254)
+  privacyText      String   @default("") @map("privacy_text") @db.VarChar(50000)
+  termsText        String   @default("") @map("terms_text") @db.VarChar(50000)
+  // Notification defaults (sent through the platform's email relay)
+  /// Sender name on response notifications and confirmations; null = the app name.
+  emailFromName    String?  @map("email_from_name") @db.VarChar(100)
+  emailReplyTo     String?  @map("email_reply_to") @db.VarChar(254)
+  updatedById      Int?     @map("updated_by")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+  @@map("intelform_settings")
 }

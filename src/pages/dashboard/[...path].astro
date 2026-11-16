@@ -12,6 +12,7 @@
  */
 import App from '../../layouts/App.astro';
 import {config} from '../../platform/config';
+import {allowFileUploads} from '../../platform/files';
 import PortalApp from '../../portal/PortalApp';
 import {pageContext} from '../../server/page';
 
@@ -23,6 +24,8 @@ const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
 // session there: the app starts anyway and asks `/site-api/me` itself (its
 // shell sends a signed-out visitor to sign in).
 const open = viewer.state === 'user' || config.preview;
+// The builder uploads logos and images straight to storage (src/portal/intelform/builder/api.ts).
+if (open) await allowFileUploads(Astro.csp, Astro.url);
 ---
 
 <App site={site} viewer={viewer} title="Dashboard">

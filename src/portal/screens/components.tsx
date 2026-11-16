@@ -4,10 +4,16 @@ import {
   Badge,
   BarChart,
   Button,
+  Calendar,
   Card,
   Checkbox,
+  Collapsible,
   type Column,
+  Combobox,
+  CommandPalette,
+  CopyField,
   DataTable,
+  DatePicker,
   DefinitionList,
   Drawer,
   EmptyState,
@@ -19,20 +25,31 @@ import {
   Menu,
   Modal,
   Notice,
+  NpsScale,
+  NpsSummaryBar,
   PageHeader,
   Person,
+  Popover,
   ProgressBar,
   RadioCards,
+  RadioGroup,
+  RatingScale,
+  ScrollArea,
   rules,
   SearchInput,
   SegmentedControl,
   Select,
   SettingRow,
+  Slider,
   Sparkline,
+  Spinner,
   Stat,
+  StatCard,
   StatusBadge,
   Switch,
   Tabs,
+  ToggleGroup,
+  Tooltip,
   useConfirm,
   useForm,
   useToast,
@@ -57,7 +74,7 @@ const STATUS_TONES = {active: 'success', trial: 'info', overdue: 'warning'} as c
 export function Components() {
   const toast = useToast();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'icons'>('buttons');
+  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'intelform' | 'icons'>('buttons');
 
   return (
     <div className="app-page">
@@ -81,12 +98,14 @@ export function Components() {
           {value: 'forms', label: 'Forms'},
           {value: 'data', label: 'Data'},
           {value: 'feedback', label: 'States'},
+          {value: 'intelform', label: 'IntelForm'},
           {value: 'icons', label: 'Icons & colours', count: ICON_NAMES.length},
         ]}>
         {tab === 'buttons' && <ButtonsDemo onToast={toast.success} confirm={confirm} />}
         {tab === 'forms' && <FormsDemo onSaved={() => toast.success('Saved.')} />}
         {tab === 'data' && <DataDemo />}
         {tab === 'feedback' && <FeedbackDemo />}
+        {tab === 'intelform' && <IntelFormDemo onToast={toast.success} />}
         {tab === 'icons' && <IconsDemo />}
       </Tabs>
     </div>
@@ -413,6 +432,140 @@ function IconsDemo() {
               {name}
             </div>
           ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+const COUNTRIES = ['Bangladesh', 'Canada', 'Denmark', 'France', 'Germany', 'India', 'Japan', 'Kenya', 'Mexico', 'Norway', 'Spain', 'United Kingdom', 'United States'].map(name => ({
+  value: name.toLowerCase().replaceAll(' ', '-'),
+  label: name,
+}));
+
+/** The pieces added for IntelForm: pickers, toggles, scales, popovers, the calendar, KPI cards. */
+function IntelFormDemo({onToast}: {onToast: (message: string) => void}) {
+  const [layout, setLayout] = useState<'classic' | 'paged' | 'one'>('classic');
+  const [marks, setMarks] = useState<('bold' | 'italic' | 'underline')[]>(['bold']);
+  const [align, setAlign] = useState<'left' | 'center'>('left');
+  const [radius, setRadius] = useState(12);
+  const [nps, setNps] = useState<number | null>(8);
+  const [stars, setStars] = useState<number | null>(4);
+  const [faces, setFaces] = useState<number | null>(null);
+  const [country, setCountry] = useState<string | null>(null);
+  const [date, setDate] = useState<string | null>(null);
+  const [day, setDay] = useState<string | null>(null);
+  const [palette, setPalette] = useState(false);
+  return (
+    <div className="kit-section">
+      <Card title="StatCard" description="A KPI with a delta (colour + arrow + word); tone chamber for the one hero number.">
+        <div className="grid-3">
+          <StatCard label="Responses" icon="inbox" value="1,284" delta={{value: '12%', trend: 'up', period: 'vs last 7 days'}} tone="chamber" />
+          <StatCard label="Completion rate" icon="check-circle" value="68%" delta={{value: '3%', trend: 'down', period: 'vs last 7 days'}} />
+          <StatCard label="Drop-off" icon="trending-down" value={null} />
+        </div>
+      </Card>
+      <Card title="Choices" description="RadioGroup, ToggleGroup (single and multiple), Slider.">
+        <div className="form-stack">
+          <RadioGroup
+            legend="Layout"
+            value={layout}
+            onChange={setLayout}
+            inline
+            options={[
+              {value: 'classic', label: 'Classic'},
+              {value: 'paged', label: 'Paged'},
+              {value: 'one', label: 'One at a time'},
+            ]}
+          />
+          <div className="kit-row">
+            <ToggleGroup
+              label="Text style"
+              multiple
+              iconOnly
+              value={marks}
+              onChange={setMarks}
+              options={[
+                {value: 'bold', label: 'Bold', icon: 'bold'},
+                {value: 'italic', label: 'Italic', icon: 'italic'},
+                {value: 'underline', label: 'Underline', icon: 'underline'},
+              ]}
+            />
+            <ToggleGroup
+              label="Alignment"
+              value={align}
+              onChange={setAlign}
+              options={[
+                {value: 'left', label: 'Left', icon: 'align-left'},
+                {value: 'center', label: 'Centre', icon: 'columns'},
+              ]}
+            />
+          </div>
+          <Slider label="Corner radius" value={radius} onChange={setRadius} min={0} max={32} format={value => `${value} px`} />
+        </div>
+      </Card>
+      <Card title="Answer scales" description="With onChange they are inputs; without, a read-only answer.">
+        <div className="form-stack">
+          <NpsScale legend="How likely are you to recommend us to a friend?" value={nps} onChange={setNps} />
+          <RatingScale legend="How was your visit?" value={stars} onChange={setStars} />
+          <RatingScale legend="How do you feel?" variant="emoji" value={faces} onChange={setFaces} />
+          <div className="kit-row">
+            <NpsScale legend="Read-only NPS answer" value={9} />
+            <RatingScale legend="Read-only rating" value={3} />
+          </div>
+          <NpsSummaryBar detractors={12} passives={20} promoters={41} />
+        </div>
+      </Card>
+      <Card title="Pickers" description="Combobox (type to filter), DatePicker, Calendar.">
+        <div className="form-stack">
+          <Field label="Country" id="kit-country">
+            <Combobox id="kit-country" value={country} onChange={setCountry} options={COUNTRIES} placeholder="Choose a country" searchLabel="Search countries" />
+          </Field>
+          <Field label="Closes on" id="kit-date" hint="The form stops taking answers that day.">
+            <DatePicker id="kit-date" value={date} onChange={setDate} clearable />
+          </Field>
+          <Calendar value={day} onChange={setDay} label="Pick a day" />
+        </div>
+      </Card>
+      <Card title="Popover, Tooltip, CommandPalette, Collapsible, ScrollArea, Spinner, CopyField">
+        <div className="form-stack">
+          <div className="kit-row">
+            <Popover label="Quick filter" trigger={<><Icon name="filter" size={16} /> Filter</>} triggerClassName="button button-secondary">
+              <Checkbox label="Only completed" checked onChange={() => onToast('Changed.')} />
+              <Button size="sm" onClick={() => onToast('Applied.')}>Apply</Button>
+            </Popover>
+            <Tooltip content="Copies the form's link">
+              <IconButton icon="link" label="Copy link" variant="secondary" />
+            </Tooltip>
+            <Button variant="secondary" icon="search" onClick={() => setPalette(true)}>
+              Add a field…
+            </Button>
+            <Spinner label="Loading the preview…" showLabel />
+          </div>
+          <CommandPalette
+            open={palette}
+            onClose={() => setPalette(false)}
+            label="Add a field"
+            commands={[
+              {id: 'short', label: 'Short text', group: 'Text', icon: 'text-cursor-input', onSelect: () => onToast('Short text added.')},
+              {id: 'long', label: 'Long text', group: 'Text', icon: 'align-left', onSelect: () => onToast('Long text added.')},
+              {id: 'nps', label: 'Net Promoter Score', group: 'Rating', icon: 'gauge', onSelect: () => onToast('NPS added.')},
+              {id: 'rating', label: 'Rating', group: 'Rating', icon: 'star', onSelect: () => onToast('Rating added.')},
+            ]}
+          />
+          <Collapsible title="Advanced" description="Hidden fields and redirects.">
+            <p className="muted">Anything that most forms never need.</p>
+          </Collapsible>
+          <ScrollArea label="Long list" size="sm">
+            <ul className="list">
+              {COUNTRIES.map(c => (
+                <li key={c.value} className="list-row">
+                  {c.label}
+                </li>
+              ))}
+            </ul>
+          </ScrollArea>
+          <CopyField label="Form link" value="https://example.com/f/customer-survey/" hint="Anyone with the link can answer." />
         </div>
       </Card>
     </div>

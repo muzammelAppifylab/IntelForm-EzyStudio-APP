@@ -33,13 +33,12 @@ export interface NavItem {
 }
 
 /**
- * Top navigation. Every href is a page of THIS site (`/`, `/blog/`, `/jobs/`,
+ * Top navigation. Every href is a page of THIS site (`/`, `/blog/`,
  * `/about/`, `/dashboard`, `/account/…`): plain links.
  */
 export const NAV: NavItem[] = [
   {label: 'Home', href: '/'},
   {label: 'Blog', href: '/blog/'},
-  {label: 'Jobs', href: '/jobs/'},
   {label: 'About', href: '/about/'},
 ];
 
@@ -88,7 +87,6 @@ export const HOME = {
       {icon: 'bell', title: 'Updates that matter', body: 'Hear about what needs you, when it needs you, and nothing else.'},
       {icon: 'shield', title: 'Private and secure', body: 'Secure sign-in and a private space that only you can open.'},
       {icon: 'book', title: 'Practical guides', body: 'Stories and how-tos on the blog, written by the team.'},
-      {icon: 'briefcase', title: 'Open roles', body: 'See who is hiring on the job board, updated as new roles open.'},
     ],
   },
   how: {
@@ -101,7 +99,6 @@ export const HOME = {
     ],
   },
   blog: {title: 'Latest from the blog', link: 'All posts'},
-  jobs: {title: 'Open roles', link: 'All jobs', remote: 'Remote'},
   faq: {
     eyebrow: 'Questions',
     title: 'Questions, answered',

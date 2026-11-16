@@ -1,0 +1,5 @@
+/*
+ * IntelForm dashboard CSS for screens/overview.tsx (the IntelForm overview).
+ * Scope every rule under the screen root class `.screen-overview` (`<div className="app-page screen-overview">`).
+ * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ */

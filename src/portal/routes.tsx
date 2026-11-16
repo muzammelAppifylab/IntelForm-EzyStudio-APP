@@ -6,6 +6,7 @@ import {
   Link,
   lazyRouteComponent,
   Outlet,
+  redirect,
   useMatches,
   useNavigate,
   useRouter,
@@ -17,11 +18,6 @@ import type {Abilities} from '../lib/types';
 import {logout} from '../platform/browser';
 import {
   auditQuery,
-  firstAuditQuery,
-  firstJobsQuery,
-  firstUsersQuery,
-  healthQuery,
-  manageJobsQuery,
   meQuery,
   permissionsQuery,
   rolesQuery,
@@ -109,6 +105,7 @@ export function RouteError({error}: ErrorComponentProps) {
   );
 }
 
+/** `ability` names a flag of `/me`'s `abilities` (src/server/permissions.ts CATALOGUE). */
 type NavItem = {to: string; label: string; icon: IconName; exact?: boolean; ability?: keyof Abilities};
 
 /**
@@ -121,17 +118,23 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
     label: 'Workspace',
     items: [
       {to: '/', label: 'Overview', icon: 'dashboard', exact: true},
-      {to: '/account', label: 'Your account', icon: 'user'},
+      {to: '/forms', label: 'Forms', icon: 'form', ability: 'viewForms'},
+      {to: '/templates', label: 'Templates', icon: 'template', ability: 'editForms'},
+      {to: '/contacts', label: 'Contacts', icon: 'contact', ability: 'viewContacts'},
     ],
   },
   {
     label: 'Manage',
     items: [
-      {to: '/jobs', label: 'Jobs', icon: 'briefcase', ability: 'manageJobs'},
+      {to: '/app-settings', label: 'Settings', icon: 'settings', ability: 'manageAppSettings'},
       {to: '/users', label: 'Users', icon: 'users', ability: 'manageUsers'},
       {to: '/roles', label: 'Roles', icon: 'shield', ability: 'manageRoles'},
       {to: '/activity', label: 'Activity', icon: 'activity', ability: 'readAudit'},
     ],
+  },
+  {
+    label: 'You',
+    items: [{to: '/account', label: 'Your account', icon: 'user'}],
   },
   // Only in the Preview and `npm run dev` (never in a build): the UI kit, on screen.
   ...(import.meta.env.DEV
@@ -361,16 +364,7 @@ const overviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   staticData: {title: 'Overview'},
-  loader: async ({context: {queryClient}}) => {
-    // The tiles the visitor may see, as the screen's `enabled` flags decide.
-    const [me] = await Promise.all([queryClient.ensureQueryData(meQuery).catch(() => null), warm(queryClient.ensureQueryData(healthQuery), queryClient.ensureQueryData(twoFactorQuery), queryClient.ensureQueryData(siteQuery))]);
-    const can = me?.abilities;
-    await warm(
-      ...(can?.manageUsers ? [queryClient.ensureQueryData(firstUsersQuery)] : []),
-      ...(can?.manageJobs ? [queryClient.ensureQueryData(firstJobsQuery)] : []),
-      ...(can?.readAudit ? [queryClient.ensureQueryData(firstAuditQuery)] : [])
-    );
-  },
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(meQuery), queryClient.ensureQueryData(siteQuery)),
   component: lazyRouteComponent(() => import('./screens/overview'), 'Overview'),
 });
 const accountRoute = createRoute({
@@ -388,12 +382,78 @@ const accountRoute = createRoute({
     ),
   component: lazyRouteComponent(() => import('./screens/account'), 'Account'),
 });
-const jobsRoute = createRoute({
+// ------------------------------------------------------------------ IntelForm --
+// Screens start as stubs; each screen's agent sends its `loader` (warming its own
+// queries from ./intelform/queries/<domain>.ts) to the owner of this file.
+const formsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/jobs',
-  staticData: {title: 'Jobs'},
-  loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(manageJobsQuery)),
-  component: lazyRouteComponent(() => import('./screens/jobs'), 'Jobs'),
+  path: '/forms',
+  staticData: {title: 'Forms'},
+  component: lazyRouteComponent(() => import('./screens/forms'), 'Forms'),
+});
+const templatesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/templates',
+  staticData: {title: 'Templates'},
+  component: lazyRouteComponent(() => import('./screens/templates'), 'Templates'),
+});
+const contactsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/contacts',
+  staticData: {title: 'Contacts'},
+  component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
+});
+const appSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/app-settings',
+  staticData: {title: 'Settings'},
+  component: lazyRouteComponent(() => import('./screens/app-settings'), 'AppSettings'),
+});
+
+// One form's builder: a layout (header + tabs) with a child route per tab; the bare
+// `/forms/$formId` opens the Build tab.
+const builderRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/forms/$formId',
+  staticData: {title: 'Form'},
+  component: lazyRouteComponent(() => import('./screens/builder/layout'), 'BuilderLayout'),
+});
+const builderIndexRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: '/',
+  beforeLoad: ({params}) => {
+    throw redirect({to: '/forms/$formId/build', params, replace: true});
+  },
+});
+const buildRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: 'build',
+  staticData: {title: 'Build'},
+  component: lazyRouteComponent(() => import('./screens/builder/build'), 'BuildTab'),
+});
+const designRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: 'design',
+  staticData: {title: 'Design'},
+  component: lazyRouteComponent(() => import('./screens/builder/design'), 'DesignTab'),
+});
+const formSettingsRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: 'settings',
+  staticData: {title: 'Form settings'},
+  component: lazyRouteComponent(() => import('./screens/builder/settings'), 'SettingsTab'),
+});
+const shareRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: 'share',
+  staticData: {title: 'Share'},
+  component: lazyRouteComponent(() => import('./screens/builder/share'), 'ShareTab'),
+});
+const responsesRoute = createRoute({
+  getParentRoute: () => builderRoute,
+  path: 'responses',
+  staticData: {title: 'Responses'},
+  component: lazyRouteComponent(() => import('./screens/builder/responses'), 'ResponsesTab'),
 });
 const usersRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -434,7 +494,11 @@ const devRoutes = import.meta.env.DEV
 export const routeTree = rootRoute.addChildren([
   overviewRoute,
   accountRoute,
-  jobsRoute,
+  formsRoute,
+  templatesRoute,
+  contactsRoute,
+  appSettingsRoute,
+  builderRoute.addChildren([builderIndexRoute, buildRoute, designRoute, formSettingsRoute, shareRoute, responsesRoute]),
   usersRoute,
   rolesRoute,
   activityRoute,

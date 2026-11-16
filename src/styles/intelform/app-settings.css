@@ -1,0 +1,5 @@
+/*
+ * IntelForm dashboard CSS for screens/app-settings.tsx.
+ * Scope every rule under the screen root class `.screen-app-settings` (`<div className="app-page screen-app-settings">`).
+ * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ */

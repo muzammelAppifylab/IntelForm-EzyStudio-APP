@@ -38,7 +38,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
       '',
     ]);
     expect((await admin.get('/site-api/admin/users?email=MEMBER@example.test')).status).toBe(403);
-    expect((await admin.get(`/site-api/admin/users/${ids.member}`)).json.user.email).toBe('m•••@example.test');
+    expect(((await admin.get(`/site-api/admin/users/${ids.member}`)).json.user as {email: string}).email).toBe('m•••@example.test');
   });
 
   it('the site owner sees every email and can look people up by email', async () => {
@@ -89,9 +89,9 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
 
   it('roles: only permissions you hold can be granted; owner and built-ins are protected', async () => {
     const created = await owner.post('/site-api/admin/roles', {
-      slug: 'editor',
-      name: 'Editor',
-      permissions: ['site:job:manage'],
+      slug: 'reviewer',
+      name: 'Reviewer',
+      permissions: ['site:form:read'],
     });
     expect(created.status).toBe(201);
     expect((await owner.request('PATCH', '/site-api/admin/roles/owner', {name: 'Boss'})).status).toBe(403);
@@ -101,15 +101,16 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     // An admin who could edit roles still cannot grant what they lack: give them role:update via a role.
     await owner.post('/site-api/admin/roles', {slug: 'role-editor', name: 'Role editor', permissions: ['site:role:update']});
     await owner.request('PUT', `/site-api/admin/users/${ids.admin}/roles`, {roles: ['member', 'admin', 'role-editor']});
-    expect((await admin.request('PATCH', '/site-api/admin/roles/editor', {permissions: ['site:job:manage', '*']})).status).toBe(403);
-    expect((await admin.request('PATCH', '/site-api/admin/roles/editor', {permissions: ['site:user:read']})).status).toBe(200);
-    expect((await owner.request('DELETE', '/site-api/admin/roles/editor')).status).toBe(200);
+    expect((await admin.request('PATCH', '/site-api/admin/roles/reviewer', {permissions: ['site:form:read', '*']})).status).toBe(403);
+    expect((await admin.request('PATCH', '/site-api/admin/roles/reviewer', {permissions: ['site:user:read']})).status).toBe(200);
+    expect((await owner.request('DELETE', '/site-api/admin/roles/reviewer')).status).toBe(200);
   });
 
   it('permissions apply on the next request, and the audit log records changes', async () => {
-    expect((await member.get('/site-api/jobs/manage?before=')).status).toBe(403);
+    // (The template's job board, used here before, was removed for IntelForm: a core admin route instead.)
+    expect((await member.get('/site-api/admin/users')).status).toBe(403);
     await owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member', 'admin']});
-    expect((await member.get('/site-api/jobs/manage?before=')).status).toBe(200);
+    expect((await member.get('/site-api/admin/users')).status).toBe(200);
     const audit = await owner.get('/site-api/admin/audit');
     expect(audit.status).toBe(200);
     const actions = (audit.json.events as {action: string}[]).map(e => e.action);

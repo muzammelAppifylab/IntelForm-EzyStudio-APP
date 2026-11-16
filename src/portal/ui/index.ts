@@ -9,9 +9,13 @@
  * On screen while you work: `/dashboard/components` in the Preview (dev only).
  */
 export * from './button';
+export * from './calendar';
+export * from './choice';
 export * from './display';
+export * from './extras';
 export * from './form';
 export * from './icon';
 export * from './nav';
 export * from './overlay';
+export * from './popover';
 export * from './table';

@@ -1,0 +1,15 @@
+/*
+ * IntelForm's screen styles for the dashboard, one file per screen area, loaded by
+ * src/layouts/App.astro AFTER app.css (so a screen's scoped rule wins over the kit's).
+ * Each file is owned by its screen; add a new area as a new file and one line here.
+ */
+@import './overview.css';
+@import './forms.css';
+@import './templates.css';
+@import './builder.css';
+@import './design.css';
+@import './settings.css';
+@import './share.css';
+@import './responses.css';
+@import './contacts.css';
+@import './app-settings.css';

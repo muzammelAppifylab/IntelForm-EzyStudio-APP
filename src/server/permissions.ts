@@ -20,18 +20,87 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
  */
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
-  /** Post, edit, close and delete jobs (`/dashboard/jobs`). */
-  JOB_MANAGE: {
-    codename: 'site:job:manage',
-    title: 'Manage jobs',
-    description: 'Post, edit, close and delete jobs on the job board.',
-    group: 'Jobs',
-    ability: 'manageJobs',
+
+  // ------------------------------------------------------------- IntelForm
+  // IntelForm's old team roles map onto the template's: Owner is `owner` (holds `*`), Editor and
+  // Viewer are the `editor` / `viewer` roles the intelform migration creates, and `admin` gets
+  // what an Editor has plus the app settings. src/lib/intelform/roles.ts mirrors this for the UI.
+
+  /** Open the forms list, the builder (read only) and a form's settings. */
+  FORM_READ: {
+    codename: 'site:form:read',
+    title: 'See forms',
+    description: 'Open the forms list and look at any form, its settings and its share links.',
+    group: 'Forms',
+    ability: 'viewForms',
+    roles: ['admin', 'editor', 'viewer'],
+  },
+  /** Create, edit, duplicate, publish, close and reopen forms; settings, webhooks, saved themes and templates. */
+  FORM_WRITE: {
+    codename: 'site:form:write',
+    title: 'Create and edit forms',
+    description: 'Create, edit, duplicate, publish, close and reopen forms, their settings and webhooks, saved themes and templates.',
+    group: 'Forms',
+    ability: 'editForms',
+    roles: ['admin', 'editor'],
+  },
+  /** Delete a form with all its responses. */
+  FORM_DELETE: {
+    codename: 'site:form:delete',
+    title: 'Delete forms',
+    description: 'Delete a form together with every response it collected.',
+    group: 'Forms',
+    ability: 'deleteForms',
+    roles: ['admin', 'editor'],
+  },
+  /** Read and export responses, summaries and analytics. */
+  RESPONSE_READ: {
+    codename: 'site:response:read',
+    title: 'See responses',
+    description: 'Read, summarise and export the responses of every form.',
+    group: 'Responses',
+    ability: 'viewResponses',
+    roles: ['admin', 'editor', 'viewer'],
+  },
+  /** Delete single responses or many at once. */
+  RESPONSE_DELETE: {
+    codename: 'site:response:delete',
+    title: 'Delete responses',
+    description: 'Delete one response or many at once.',
+    group: 'Responses',
+    ability: 'deleteResponses',
+    roles: ['admin', 'editor'],
+  },
+  /** Open the contacts list and a contact's responses, and export them. */
+  CONTACT_READ: {
+    codename: 'site:contact:read',
+    title: 'See contacts',
+    description: 'Open the contacts list and every response a contact sent, and export contacts.',
+    group: 'Contacts',
+    ability: 'viewContacts',
+    roles: ['admin', 'editor', 'viewer'],
+  },
+  /** Erase contacts (deletes every response they sent). */
+  CONTACT_WRITE: {
+    codename: 'site:contact:write',
+    title: 'Erase contacts',
+    description: 'Erase contacts, deleting every response they sent.',
+    group: 'Contacts',
+    ability: 'editContacts',
+    roles: ['admin', 'editor'],
+  },
+  /** IntelForm's app settings: branding, response retention, the public site, notification defaults. */
+  APP_SETTINGS: {
+    codename: 'site:intelform:settings',
+    title: 'Manage form app settings',
+    description: 'Change branding, response retention, the public site and notification defaults.',
+    group: 'Settings',
+    ability: 'manageAppSettings',
     roles: ['admin'],
   },
 });
 
-/** Codenames by key: `PERMISSIONS.JOB_MANAGE` is `'site:job:manage'`. */
+/** Codenames by key: `PERMISSIONS.FORM_READ` is `'site:form:read'`. */
 export const PERMISSIONS = codenamesOf(CATALOGUE);
 
 export type Codename = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
