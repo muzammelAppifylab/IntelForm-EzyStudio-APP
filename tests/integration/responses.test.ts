@@ -1,6 +1,8 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
+// Registers the job handlers: locally an export job runs as soon as it is sent.
+import '../../src/server/background';
 import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -159,8 +161,6 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
       id: rid(2),
       prevId: rid(1),
       nextId: rid(3),
-      position: 2,
-      total: 60,
       formVersion: 1,
     });
     expect((d.json.answers as {label: string; text: string}[])[1]).toMatchObject({label: 'Favourite fruit', text: 'Banana'});
@@ -170,8 +170,13 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect((await viewer.get(`/site-api/responses/forms/${MISSING}/responses`)).status).toBe(404);
   });
 
-  it('exports CSV with the filters', async () => {
-    const res = await viewer.get(`${base}/responses.csv?filter=f_choice01:o_bbbb01&tz=Europe/Berlin`);
+  it('exports CSV with the filters (a background job, then the download)', async () => {
+    const started = await viewer.post('/site-api/exports', {kind: 'responses', formId: FORM, query: {filter: ['f_choice01:o_bbbb01'], tz: 'Europe/Berlin'}});
+    expect(started.status).toBe(202);
+    expect(started.json).toMatchObject({kind: 'responses', status: 'ready', rows: 30});
+    const id = started.json.id as string;
+    expect((await viewer.get(`/site-api/exports/${id}`)).json).toMatchObject({status: 'ready'});
+    const res = await viewer.get(`/site-api/exports/${id}/download`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('text/csv; charset=utf-8');
     expect(res.headers.get('content-disposition')).toContain('Feedback feedback responses');
@@ -179,7 +184,8 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect(lines).toHaveLength(31);
     // The body decoder drops the BOM; the unit tests check it is sent.
     expect(lines[0]!.replace(/^﻿/, '')).toBe('Email,Favourite fruit,Recommend us?,Submitted at,Completion time (seconds),Device,Browser,Country,Response ID');
-    const picked = await viewer.get(`${base}/responses.csv?ids=${rid(3)}&ids=${rid(1001)}`);
+    const pick = await viewer.post('/site-api/exports', {kind: 'responses', formId: FORM, query: {ids: [rid(3), rid(1001)]}});
+    const picked = await viewer.get(`/site-api/exports/${pick.json.id as string}/download`);
     expect(String(picked.json.text).split('\r\n').filter(Boolean)).toHaveLength(2);
   });
 
@@ -248,12 +254,18 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect(form.lastResponseAt?.getTime()).toBe(newest.submittedAt.getTime());
     expect(await db.response.count({where: {formId: OTHER}})).toBe(2);
     expect((await editor.post(`${base}/responses/bulk-delete`, {ids: []})).status).toBe(422);
+    // The cached summary was cleared by the deletes.
+    expect((await viewer.get(`${base}/summary?range=7d`)).json.totals).toMatchObject({responses: 57});
   });
 
   it('exports every form as a ZIP for app settings holders only', async () => {
-    expect((await editor.get('/site-api/responses/export-all.zip')).status).toBe(403);
-    const zip = await owner.get('/site-api/responses/export-all.zip');
+    expect((await editor.post('/site-api/exports', {kind: 'all'})).status).toBe(403);
+    const started = await owner.post('/site-api/exports', {kind: 'all'});
+    expect(started.json).toMatchObject({kind: 'all', status: 'ready'});
+    const zip = await owner.get(`/site-api/exports/${started.json.id as string}/download`);
     expect(zip.status).toBe(200);
     expect(zip.headers.get('content-type')).toBe('application/zip');
+    // The parts stay until the hourly sweep, a day later.
+    expect(await db.intelformExportPart.count()).toBeGreaterThan(0);
   });
 });

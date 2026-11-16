@@ -22,17 +22,6 @@ export const SAVED_SORT_ORDER = 1000;
 /** Category of a template saved without one. */
 export const SAVED_CATEGORY = 'Saved';
 
-const savedSelect = {
-  id: true,
-  slug: true,
-  name: true,
-  category: true,
-  description: true,
-  definition: true,
-  createdAt: true,
-  createdBy: {select: {name: true}},
-} as const;
-
 interface SavedRow {
   id: string;
   slug: string;
@@ -75,13 +64,49 @@ export function templateCategories(templates: readonly TemplateSummary[]): strin
   return [...new Set(templates.map(t => t.category))];
 }
 
+/** Saved templates listed at most (the gallery shows the first 100, newest first within their order). */
+export const SAVED_TEMPLATES_MAX = 100;
+
+interface SavedListRow {
+  id: string;
+  slug: string;
+  name: string;
+  category: string;
+  description: string;
+  created_at: Date;
+  layout: string | null;
+  field_count: number;
+  created_by: string | null;
+}
+
 /** GET /site-api/templates: built-ins first (sortOrder), then saved (sortOrder, newest first). */
 export async function listTemplates(db: PrismaClient): Promise<TemplatesResponse> {
-  const rows = await db.template.findMany({
-    select: savedSelect,
-    orderBy: [{sortOrder: 'asc'}, {createdAt: 'desc'}],
-  });
-  const templates = [...BUILTIN_TEMPLATE_SUMMARIES, ...rows.map(savedTemplateSummary)];
+  // Layout and question count are worked out in SQL, so no definition JSON leaves the database.
+  const rows = await db.$queryRaw<SavedListRow[]>`
+    SELECT t.id::text AS id, t.slug, t.name, t.category, t.description, t.created_at,
+      t.definition->>'layout' AS layout,
+      (SELECT count(*)::int FROM jsonb_array_elements(
+         CASE WHEN jsonb_typeof(t.definition->'fields') = 'array' THEN t.definition->'fields' ELSE '[]'::jsonb END) f
+       WHERE jsonb_typeof(f->'type') = 'string' AND f->>'type' <> 'section_break') AS field_count,
+      u.name AS created_by
+    FROM templates t LEFT JOIN users u ON u.id = t.created_by
+    ORDER BY t.sort_order ASC, t.created_at DESC
+    LIMIT ${SAVED_TEMPLATES_MAX}`;
+  const saved = rows.map(
+    (r): TemplateSummary => ({
+      id: r.id,
+      slug: r.slug,
+      name: r.name,
+      category: r.category,
+      description: r.description,
+      isBuiltin: false,
+      layout: layoutOf({layout: r.layout}),
+      fieldCount: Number(r.field_count),
+      createdBy: r.created_by,
+      createdAt: r.created_at.toISOString(),
+    })
+  );
+  const templates = [...BUILTIN_TEMPLATE_SUMMARIES, ...saved];
   return {templates, categories: templateCategories(templates)};
 }
 

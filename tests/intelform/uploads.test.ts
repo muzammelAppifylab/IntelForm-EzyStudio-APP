@@ -342,7 +342,8 @@ function addFile(f: Partial<FakeFile> & {id: string; bytes: Uint8Array}): FakeFi
     name: 'signature.png',
     contentType: 'image/png',
     size: f.bytes.length,
-    visibility: 'public',
+    // Signature uploads are private (personal data); image tests say 'public' themselves.
+    visibility: 'private',
     status: 'pending',
     ...f,
   };
@@ -378,13 +379,13 @@ describe('signatures and images against the platform (mocked)', () => {
       invalidMessage: 'Sign again in the box',
     });
 
-  it('claims a genuine signature: completes, validates and stores its public {url}', async () => {
+  it('claims a genuine signature: completes, validates and stores its private {fileId}', async () => {
     addFile({id: FILE_A, bytes: canvasPng()});
     const token = await signUploadToken(SECRET, {fileId: FILE_A, formId: FORM, fieldId: 'sig', exp: later()});
     const answers: Record<string, unknown> = {name: 'Ann', sig: {fileId: FILE_A, token}};
     const res = await claim(answers);
     expect(res).toEqual({ok: true, fileIds: [FILE_A]});
-    expect(answers.sig).toEqual({url: `/__platform/files/${FILE_A}/signature.png`});
+    expect(answers.sig).toEqual({fileId: FILE_A});
     expect(files.get(FILE_A)?.status).toBe('ready');
     expect(storedSignatureFileId(answers.sig)).toBe(FILE_A);
     expect(answersSignatureFileIds(answers)).toEqual([FILE_A]);
@@ -417,6 +418,13 @@ describe('signatures and images against the platform (mocked)', () => {
     expect(await claim(answers)).toMatchObject({ok: false, status: 422});
     expect(deleted).toEqual([FILE_A]);
     expect(answers.sig).toEqual({fileId: FILE_A, token});
+  });
+
+  it('refuses a PUBLIC file: signatures are personal data, only private uploads are claimed', async () => {
+    addFile({id: FILE_A, visibility: 'public', bytes: canvasPng()});
+    const token = await signUploadToken(SECRET, {fileId: FILE_A, formId: FORM, fieldId: 'sig', exp: later()});
+    expect(await claim({sig: {fileId: FILE_A, token}})).toMatchObject({ok: false, status: 422});
+    expect(files.get(FILE_A)?.status).toBe('pending');
   });
 
   it('refuses a file that is not a signature upload', async () => {

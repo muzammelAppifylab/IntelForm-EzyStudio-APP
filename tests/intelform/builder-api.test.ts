@@ -18,7 +18,8 @@ import {
   testPayload,
   UnsafeWebhookUrl,
 } from '../../src/server/intelform/builder/webhook-core';
-import {runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
+import {runDelivery, webhookUrlPolicy} from '../../src/server/intelform/builder/webhook-delivery';
+import {config} from '../../src/platform/config';
 
 const field = (id: string, type: string, label: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -100,12 +101,12 @@ describe('autosave: settings', () => {
 
   it('refuses private and plain-http webhook URLs when saving', async () => {
     for (const url of ['https://127.0.0.1/x', 'https://10.1.2.3/x', 'https://localhost/x', 'https://db.internal/x', 'http://hooks.example.com/x']) {
-      await expect(preparePatch({settings: {webhook: {url}}}, {allowHttp: false})).rejects.toMatchObject({
+      await expect(preparePatch({settings: {webhook: {url}}}, {policy: {allowHttp: false}})).rejects.toMatchObject({
         status: 422,
         fields: {'settings.webhook.url': [expect.any(String)]},
       });
     }
-    const ok = await preparePatch({settings: {webhook: {enabled: true, url: 'https://hooks.example.com/x'}}}, {allowHttp: false});
+    const ok = await preparePatch({settings: {webhook: {enabled: true, url: 'https://hooks.example.com/x'}}}, {policy: {allowHttp: false}});
     expect(ok.settingsPatch).toEqual({webhook: {enabled: true, url: 'https://hooks.example.com/x'}});
   });
 
@@ -180,7 +181,29 @@ describe('webhook URLs', () => {
     for (const bad of ['ftp://x.example.com', 'not a url', 'https://user:pw@hooks.example.com', 'https://2130706433/', 'https://intranet/x', 'https://printer.local/x']) {
       expect(() => assertSafeUrl(bad), bad).toThrow(UnsafeWebhookUrl);
     }
-    expect(() => assertSafeUrl('http://localhost:4000/hook', {allowHttp: true})).not.toThrow();
+    expect(() => assertSafeUrl('http://localhost:4000/hook', {allowHttp: true, allowPrivate: true})).not.toThrow();
+  });
+});
+
+describe('webhook URLs in the deployed Preview (production=false, localDev=false)', () => {
+  it('refuses private, loopback, metadata and local-name targets on save and send', async () => {
+    const prod = vi.spyOn(config, 'production', 'get').mockReturnValue(false);
+    const local = vi.spyOn(config, 'localDev', 'get').mockReturnValue(false);
+    try {
+      expect(webhookUrlPolicy()).toEqual({allowHttp: true, allowPrivate: false});
+      for (const url of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1:8080/x', 'http://localhost/x', 'http://db.internal/x', 'http://[::1]/x']) {
+        await expect(preparePatch({settings: {webhook: {url}}}), url).rejects.toMatchObject({status: 422});
+        const fetchFn = vi.fn();
+        const out = await runDelivery(fakeDb(queued({settings: {webhook: {enabled: true, url, headers: []}}})).db, 'id', {fetch: fetchFn as never});
+        expect(out?.error, url).toMatch(/private or local|local host names/);
+        expect(fetchFn).not.toHaveBeenCalled();
+      }
+      // Plain http to a public host stays allowed off production.
+      await expect(preparePatch({settings: {webhook: {url: 'http://hooks.example.com/x'}}})).resolves.toBeTruthy();
+    } finally {
+      prod.mockRestore();
+      local.mockRestore();
+    }
   });
 });
 
@@ -265,7 +288,7 @@ describe('webhook delivery job', () => {
   it('sends one signed POST, records the outcome, and follows no redirect', async () => {
     const {db, updates, secret} = fakeDb(queued());
     const fetchFn = vi.fn(async (_url: string, _init: RequestInit) => new Response('thanks', {status: 200}));
-    const out = await runDelivery(db, '00000000-0000-4000-8000-0000000000d1', {fetch: fetchFn as never, allowHttp: false});
+    const out = await runDelivery(db, '00000000-0000-4000-8000-0000000000d1', {fetch: fetchFn as never, policy: {allowHttp: false}});
     expect(out).toMatchObject({ok: true, statusCode: 200, error: null});
     const [url, init] = fetchFn.mock.calls[0]!;
     expect(url).toBe('https://hooks.example.com/x');
@@ -309,7 +332,7 @@ describe('webhook delivery job', () => {
     expect(off).toMatchObject({ok: false, error: 'The webhook is turned off for this form'});
     const unsafe = await runDelivery(fakeDb(queued({settings: {webhook: {enabled: true, url: 'https://10.0.0.5/x', headers: []}}})).db, 'id', {
       fetch: fetchFn as never,
-      allowHttp: false,
+      policy: {allowHttp: false},
     });
     expect(unsafe?.error).toMatch(/private or local/);
     expect(fetchFn).not.toHaveBeenCalled();

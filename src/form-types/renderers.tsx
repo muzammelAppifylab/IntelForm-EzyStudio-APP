@@ -1,10 +1,8 @@
-import type {ComponentType} from 'react';
+import {type ComponentType, createElement, lazy, Suspense} from 'react';
 
 import type {FieldType} from '../lib/intelform/form/field-types';
 import type {FieldRendererProps} from '../respondent/types';
-import AddressRenderer from './address/Renderer';
 import ConsentRenderer from './consent/Renderer';
-import CountryRenderer from './country/Renderer';
 import DateRenderer from './date/Renderer';
 import DropdownRenderer from './dropdown/Renderer';
 import EmailRenderer from './email/Renderer';
@@ -14,7 +12,6 @@ import NameRenderer from './name/Renderer';
 import NpsRenderer from './nps/Renderer';
 import NumberRenderer from './number/Renderer';
 import PhoneRenderer from './phone/Renderer';
-import PictureChoiceRenderer from './picture_choice/Renderer';
 import RatingRenderer from './rating/Renderer';
 import SectionBreakRenderer from './section_break/Renderer';
 import ShortTextRenderer from './short_text/Renderer';
@@ -28,6 +25,22 @@ import './respondent.css';
 
 export type {FieldRendererProps} from '../respondent/types';
 export {isGroupField} from '../respondent/types';
+
+/**
+ * Field types with heavy code (the full country list behind country and address, the picture
+ * tiles) are fetched only when a form uses them: a public form downloads the inputs it shows.
+ */
+function onDemand<P extends object>(load: () => Promise<{default: ComponentType<P>}>): ComponentType<P> {
+  const Lazy = lazy(load);
+  function OnDemand(props: P) {
+    return createElement(Suspense, {fallback: createElement('div', {className: 'rf-field-loading', 'aria-busy': true})}, createElement(Lazy as ComponentType<P>, props));
+  }
+  return OnDemand;
+}
+
+const AddressRenderer = onDemand(() => import('./address/Renderer'));
+const CountryRenderer = onDemand(() => import('./country/Renderer'));
+const PictureChoiceRenderer = onDemand(() => import('./picture_choice/Renderer'));
 
 /**
  * The respondent input of each field type. Plain elements with the respondent's `rf-*` and the

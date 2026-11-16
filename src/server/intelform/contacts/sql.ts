@@ -6,9 +6,11 @@ import type {ContactSort, ContactsFilterQuery} from '../../../lib/intelform/api-
  * Every piece is a tagged `Prisma.sql` (values are bound parameters); identifiers and sort
  * expressions come only from the fixed maps below (docs/agent/security.md A05).
  *
- * Contacts are responses grouped by `responses.contact_key` ("e:<email>" or "p:<phone>"),
- * which the trigger in the intelform migration fills. Nothing is stored per contact: every
- * query aggregates responses on the fly, so there is nothing to keep in sync.
+ * Contacts are responses grouped by `responses.contact_key` ("e:<email>" or "p:<phone>"). The
+ * `contacts` table holds one row per key (count, first / last seen, latest details, forms),
+ * kept by triggers on `responses` in the same statement as every insert and delete (the
+ * review-fixes migration). Lists, filters, the strip and the CSV read that table, aliased `c`,
+ * with an index per sort and keyset paging: never an aggregate over responses per request.
  */
 
 type Sql = Prisma.Sql;
@@ -28,30 +30,11 @@ export function likePattern(q: string): string {
   return `%${q.replace(/[\\%_]/g, ch => `\\${ch}`)}%`;
 }
 
-/**
- * The `c` CTE: one row per contact. Email, name, phone and country are the latest non-empty
- * values. `inner` narrows the responses scanned (one key for the detail, selected keys for CSV).
- */
-export function contactsCte(inner: Sql = Prisma.sql`true`): Sql {
-  return Prisma.sql`c AS (
-    SELECT contact_key AS key,
-      count(*)::int AS n,
-      min(submitted_at) AS first_seen,
-      max(submitted_at) AS last_seen,
-      (array_agg(contact_email ORDER BY submitted_at DESC, id DESC) FILTER (WHERE contact_email IS NOT NULL))[1] AS email,
-      (array_agg(contact_name ORDER BY submitted_at DESC, id DESC) FILTER (WHERE contact_name IS NOT NULL))[1] AS name,
-      (array_agg(contact_phone ORDER BY submitted_at DESC, id DESC) FILTER (WHERE contact_phone IS NOT NULL))[1] AS phone,
-      (array_agg(country ORDER BY submitted_at DESC, id DESC) FILTER (WHERE country IS NOT NULL))[1] AS country,
-      count(DISTINCT form_id)::int AS form_count,
-      array_agg(DISTINCT form_id) AS form_ids
-    FROM responses
-    WHERE contact_key IS NOT NULL AND ${inner}
-    GROUP BY contact_key
-  )`;
-}
+/** The columns a contacts row is read with (from `contacts c`). */
+export const CONTACT_COLUMNS = Prisma.sql`c.key, c.n, c.first_seen, c.last_seen, c.email, c.name, c.phone, c.country, c.form_count`;
 
-/** Same expression as the responses contact-search trigram index (the intelform migration). */
-const SEARCH_EXPR = Prisma.sql`(coalesce(contact_name, '') || ' ' || coalesce(contact_email, '') || ' ' || coalesce(contact_phone, ''))`;
+/** Same expression as the contacts_search_trgm index (the review-fixes migration). */
+const SEARCH_EXPR = Prisma.sql`(coalesce(c.name, '') || ' ' || coalesce(c.email, '') || ' ' || coalesce(c.phone, ''))`;
 
 /** `col` within local dates [from, to] in tz, inclusive, DST-safe. */
 export function dayRange(col: Sql, from: string | undefined, to: string | undefined, tz: string): Sql[] {
@@ -69,12 +52,12 @@ export function searchPatterns(q: string): string[] {
   return patterns;
 }
 
-/** WHERE on the `c` CTE for the list and CSV filters. */
+/** WHERE on `contacts c` for the list and CSV filters. */
 export function filterFragment(q: ContactsFilterQuery, tz: string): Sql {
   const parts: Sql[] = [];
   if (q.q) {
     const match = or(searchPatterns(q.q).map(p => Prisma.sql`${SEARCH_EXPR} ILIKE ${p}`));
-    parts.push(Prisma.sql`c.key IN (SELECT contact_key FROM responses WHERE contact_key IS NOT NULL AND (${match}))`);
+    parts.push(Prisma.sql`(${match})`);
   }
   if (q.segment === 'returning') parts.push(Prisma.sql`c.n >= 2`);
   if (q.segment === 'new') {
@@ -94,25 +77,98 @@ export function filterFragment(q: ContactsFilterQuery, tz: string): Sql {
   return and(parts);
 }
 
-const SORT_EXPR: Record<ContactSort, Sql> = {
-  last_seen: Prisma.sql`c.last_seen`,
-  first_seen: Prisma.sql`c.first_seen`,
-  name: Prisma.sql`lower(c.name)`,
-  email: Prisma.sql`c.email`,
-  responses: Prisma.sql`c.n`,
-};
-
-/** ORDER BY from the fixed map; empty values last both ways, then latest activity, then key. */
-export function orderFragment(sort: ContactSort, dir: 'asc' | 'desc'): Sql {
-  const expr = SORT_EXPR[sort] ?? SORT_EXPR.last_seen;
-  return dir === 'asc'
-    ? Prisma.sql`${expr} ASC NULLS LAST, c.last_seen DESC, c.key ASC`
-    : Prisma.sql`${expr} DESC NULLS LAST, c.last_seen DESC, c.key ASC`;
+interface SortSpec {
+  expr: Sql;
+  /** The SQL type a cursor value is cast back to. */
+  cast: Sql;
+  /** Can be NULL (empty values sort last both ways). */
+  nullable: boolean;
 }
 
-/** `/__platform/files/<id>/<name>` → `<id>` (a signature stored as a platform file), else null. */
-export function platformFileId(url: unknown): string | null {
-  if (typeof url !== 'string') return null;
-  const m = /^\/__platform\/files\/([A-Za-z0-9_-]{1,100})\//.exec(url);
-  return m ? m[1]! : null;
+const SORTS: Record<ContactSort, SortSpec> = {
+  last_seen: {expr: Prisma.sql`c.last_seen`, cast: Prisma.sql`timestamptz`, nullable: false},
+  first_seen: {expr: Prisma.sql`c.first_seen`, cast: Prisma.sql`timestamptz`, nullable: false},
+  name: {expr: Prisma.sql`lower(c.name)`, cast: Prisma.sql`text`, nullable: true},
+  email: {expr: Prisma.sql`c.email`, cast: Prisma.sql`text`, nullable: true},
+  responses: {expr: Prisma.sql`c.n`, cast: Prisma.sql`int`, nullable: false},
+};
+
+const sortOf = (sort: ContactSort) => SORTS[sort] ?? SORTS.last_seen;
+/** Sorted by latest activity already (an unknown sort falls back to it): no tie-break column. */
+const byActivity = (sort: ContactSort) => sortOf(sort) === SORTS.last_seen;
+
+/** The sort value of a row as cursor text (`(expr)::text`), selected beside the row. */
+export function sortValue(sort: ContactSort): Sql {
+  const {expr} = sortOf(sort);
+  return sort === 'last_seen' || sort === 'first_seen'
+    ? Prisma.sql`to_char(${expr} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+    : Prisma.sql`(${expr})::text`;
+}
+
+/** The latest activity as cursor text (the tie-break after the sort value). */
+export const LAST_SEEN_TEXT = Prisma.sql`to_char(c.last_seen AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+
+/**
+ * ORDER BY from the fixed map; empty values last both ways, then the latest activity, then the
+ * key (the indexes end the same way).
+ */
+export function orderFragment(sort: ContactSort, dir: 'asc' | 'desc'): Sql {
+  const {expr, nullable} = sortOf(sort);
+  const way = dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const head = nullable ? Prisma.sql`(${expr} IS NULL), ${expr} ${way}` : Prisma.sql`${expr} ${way}`;
+  return byActivity(sort) ? Prisma.sql`${head}, c.key ASC` : Prisma.sql`${head}, c.last_seen DESC, c.key ASC`;
+}
+
+/** A keyset position: the last row's sort value (null when empty), its latest activity and key. */
+export interface ContactCursor {
+  v: string | null;
+  t: string;
+  k: string;
+}
+
+/** Rows after `cur` in orderFragment's order. */
+export function afterFragment(sort: ContactSort, dir: 'asc' | 'desc', cur: ContactCursor): Sql {
+  const {expr, cast, nullable} = sortOf(sort);
+  // Within one sort value: later in (last_seen DESC, key ASC).
+  const tie =
+    byActivity(sort)
+      ? Prisma.sql`c.key > ${cur.k}`
+      : Prisma.sql`(c.last_seen < ${cur.t}::timestamptz OR (c.last_seen = ${cur.t}::timestamptz AND c.key > ${cur.k}))`;
+  if (cur.v === null) return Prisma.sql`(${expr} IS NULL AND ${tie})`;
+  const v = Prisma.sql`${cur.v}::${cast}`;
+  const past = dir === 'asc' ? Prisma.sql`${expr} > ${v}` : Prisma.sql`${expr} < ${v}`;
+  const tail = nullable ? Prisma.sql`${expr} IS NULL OR ` : Prisma.empty;
+  return Prisma.sql`(${tail}${past} OR (${expr} = ${v} AND ${tie}))`;
+}
+
+const toBase64Url = (text: string) => {
+  let bin = '';
+  for (const b of new TextEncoder().encode(text)) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+const fromBase64Url = (text: string) => {
+  const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
+};
+
+const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** `?cursor=` text ↔ ContactCursor (base64url JSON, UTF-8); null for anything malformed. */
+export function encodeContactCursor(c: ContactCursor): string {
+  return toBase64Url(JSON.stringify([c.v, c.t, c.k]));
+}
+
+export function decodeContactCursor(text: string | undefined): ContactCursor | null {
+  if (!text || text.length > 1200) return null;
+  try {
+    const json = JSON.parse(fromBase64Url(text)) as unknown;
+    if (!Array.isArray(json) || json.length !== 3) return null;
+    const [v, t, k] = json as unknown[];
+    if ((v !== null && typeof v !== 'string') || typeof t !== 'string' || !ISO_MS.test(t) || typeof k !== 'string' || k.length > 260) return null;
+    if (typeof v === 'string' && v.length > 300) return null;
+    return {v, t, k};
+  } catch {
+    return null;
+  }
 }

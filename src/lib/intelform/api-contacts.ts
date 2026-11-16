@@ -3,12 +3,13 @@ import { isRealDay } from './api-responses'
 
 /**
  * Contacts: people who answered any form, grouped by email (or phone when a response has no email).
- * Derived from responses; there is no separate contacts table to keep in sync.
- *   GET  /api/contacts                list page (search, advanced filters, sort, 50 per page)
- *   GET  /api/contacts/detail?key=    one contact and every response they sent, newest first
- *   GET  /api/contacts/export.csv     streamed CSV, same filters (or just the selected keys: ?key=…&key=…)
- *   POST /api/contacts/delete         erase contacts: deletes every response they sent
- * List, detail and CSV need `responses.view`; delete needs `responses.delete`.
+ * The `contacts` table holds one row per contact, kept by triggers on responses.
+ *   GET  /site-api/contacts                list page (search, advanced filters, sort, 50 per page, keyset `cursor`)
+ *   GET  /site-api/contacts/overview       the strip and filter choices (cached, workspace-wide)
+ *   GET  /site-api/contacts/detail?key=    one contact and their latest responses, newest first
+ *   POST /site-api/exports {kind: 'contacts', query}   the CSV, built by a background job (api-exports.ts)
+ *   POST /site-api/contacts/delete         erase contacts: deletes every response they sent
+ * Reading needs site:contact:read; erasing site:contact:write AND site:response:delete.
  */
 
 export const CONTACTS_PAGE_SIZE = 50
@@ -75,7 +76,8 @@ export const contactsFilterQuery = z
 export type ContactsFilterQuery = z.infer<typeof contactsFilterQuery>
 
 export const contactsListQuery = contactsFilterQuery.and(
-  z.object({ page: z.coerce.number().int().min(1).max(100_000).default(1) }),
+  /** The previous page's `nextCursor` (keyset: the last row's sort value and key). */
+  z.object({ cursor: z.string().max(800).optional() }),
 )
 export type ContactsListQuery = z.infer<typeof contactsListQuery>
 
@@ -129,10 +131,9 @@ export interface ContactsStrip {
 
 export interface ContactsListResponse {
   contacts: ContactRow[]
-  /** Matching the filters. */
-  total: number
-  page: number
   pageSize: number
+  /** Pass as `cursor` for the next page; null on the last one. No total: there is no count per request. */
+  nextCursor: string | null
 }
 
 /** GET /api/contacts/overview: whole workspace, ignoring filters, so it isn't refetched per page. */

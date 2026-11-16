@@ -1,10 +1,12 @@
 import { defineBackground, JobRejected, sendJob } from '../platform/background'
 import { getDb, type PrismaClient } from '../platform/db'
-import { deleteFile } from '../platform/files'
 import { jobRequestUrl, runResponseNotify, runWebhookDelivery, sweepWindows } from './intelform/notify'
 import { trimWebhookDeliveries } from './intelform/webhooks'
 import { webhookDeliveryJob } from './intelform/builder/webhook-delivery'
 import { clearPublicSiteCache } from './intelform/public-site/data'
+import { clearPublicFormCache } from './intelform/respondent/cache'
+import { drainFileTrash, FILE_CLEANUP_LIST, fileCleanupJob, scheduleFileCleanup } from './intelform/uploads/trash'
+import { EXPORTS_LIST, runExportJob, sweepExports } from './intelform/exports/job'
 
 /**
  * This site's BACKGROUND JOBS: one handler per list (docs/agent/background-jobs.md).
@@ -24,7 +26,10 @@ import { clearPublicSiteCache } from './intelform/public-site/data'
  *   intelform-webhooks         the builder's "Send test" / "Resend" (one attempt, logged)
  *   intelform-retention        daily: responses past the retention period, old raw form events
  *   intelform-maintenance      hourly: close forms past their close date, trim the webhook log,
- *                              sweep rate-limit windows and stale builder presence
+ *                              sweep rate-limit windows, stale builder presence, old hourly
+ *                              counts and old exports; remove trashed files a send left behind
+ *   intelform-file-cleanup     stored files (signatures) of deleted responses, a few at a time
+ *   intelform-exports          builds a CSV / ZIP export in bounded parts (intelform/exports/job.ts)
  */
 
 function db(): PrismaClient {
@@ -44,9 +49,18 @@ export const background = defineBackground({
   'intelform-retention': async (data, job) => {
     const result = await applyRetention(db())
     if (result.more) await continueLater('intelform-retention', data, job.scheduledFor)
+    // Their signature files are in the file trash (the delete trigger): the cleanup job removes them.
+    if (result.responses) await scheduleFileCleanup(jobRequestUrl())
   },
   'intelform-maintenance': async () => {
     await hourlyMaintenance(db())
+  },
+  [FILE_CLEANUP_LIST]: async (data) => {
+    const step = Number((data as { step?: unknown } | null)?.step ?? 0)
+    await fileCleanupJob(db(), jobRequestUrl(), Number.isSafeInteger(step) && step >= 0 ? step : 0)
+  },
+  [EXPORTS_LIST]: async (data) => {
+    await runExportJob(db(), jobRequestUrl(), data)
   },
 })
 
@@ -74,24 +88,14 @@ async function continueLater(list: string, data: unknown, scheduledFor: string):
 export const RETENTION_BATCH = 500
 /** Batches per run: 10,000 responses, well inside the 60 s a run has. */
 export const RETENTION_MAX_BATCHES = 20
-/** Stop starting batches after this long, to leave room for the files and the recount. */
+/** Stop starting batches after this long (a run has 60 s). */
 const RETENTION_BUDGET_MS = 35_000
 /** Raw view/start events are kept this long (the 15-minute rollup in form_event_counts stays). */
 export const EVENTS_KEEP_DAYS = 30
 const EVENTS_BATCH = 10_000
 
-const FILE_ID_RE = /\/__platform\/files\/([A-Za-z0-9_-]{1,128})(?:[/?#]|$)/
-
-/** The platform file id inside a stored answer URL (`/__platform/files/<id>/<name>`), or null. */
-export function fileIdOf(url: unknown): string | null {
-  if (typeof url !== 'string') return null
-  const m = FILE_ID_RE.exec(url)
-  return m ? m[1] : null
-}
-
 export interface RetentionResult {
   responses: number
-  files: number
   events: number
   /** More responses are past the period than this run deleted. */
   more: boolean
@@ -99,55 +103,53 @@ export interface RetentionResult {
 
 /**
  * Deletes responses older than IntelForm settings `retentionDays` (null = keep forever), in
- * batches, oldest first, with their signature files (platform storage) and webhook log rows
- * (ON DELETE CASCADE). forms.response_count and last_response_at are recounted for the forms a
- * batch touched, under their row locks like the delete route, so a concurrent submit is counted
- * once. Also deletes raw form_events older than EVENTS_KEEP_DAYS.
+ * batches, oldest first. Each batch is ONE statement: it deletes the rows, takes them off their
+ * forms' response_count (`GREATEST(response_count - n, 0)`) and moves last_response_at back to
+ * the newest response that stays (index on form_id, submitted_at), so no form is ever counted,
+ * and a submit landing at the same moment is counted once (the UPDATE holds the form row).
+ * Webhook log rows go with them (ON DELETE CASCADE); their signature files go to the file
+ * trash (the delete trigger) for the cleanup job. Also deletes raw form_events older than
+ * EVENTS_KEEP_DAYS.
  */
-export async function applyRetention(
-  client: PrismaClient,
-  deps: { removeFile?: (id: string) => Promise<unknown>; now?: () => number } = {},
-): Promise<RetentionResult> {
+export async function applyRetention(client: PrismaClient, deps: { now?: () => number } = {}): Promise<RetentionResult> {
   const now = deps.now ?? Date.now
   const started = now()
-  const out: RetentionResult = { responses: 0, files: 0, events: 0, more: false }
+  const out: RetentionResult = { responses: 0, events: 0, more: false }
 
   const settings = await client.intelformSettings.findUnique({ where: { id: 1 }, select: { retentionDays: true } })
   const days = settings?.retentionDays ?? null
   if (days && days >= 1) {
-    const removeFile = deps.removeFile ?? ((id: string) => deleteFile(jobRequestUrl(), id))
     for (let i = 0; i < RETENTION_MAX_BATCHES; i++) {
       if (now() - started > RETENTION_BUDGET_MS) {
         out.more = true
         break
       }
-      const deleted = await client.$queryRaw<{ form_id: string; urls: string[] | null }[]>`
-        DELETE FROM responses WHERE id IN (
-          SELECT id FROM responses
-          WHERE submitted_at < now() - make_interval(days => ${days}::int)
-          ORDER BY submitted_at
-          LIMIT ${RETENTION_BATCH}
+      const [batch] = await client.$queryRaw<{ deleted: number }[]>`
+        WITH gone AS (
+          DELETE FROM responses WHERE id IN (
+            SELECT id FROM responses
+            WHERE submitted_at < now() - make_interval(days => ${days}::int)
+            ORDER BY submitted_at
+            LIMIT ${RETENTION_BATCH}
+          )
+          RETURNING form_id
+        ),
+        touched AS (SELECT form_id, count(*)::int AS n FROM gone GROUP BY form_id),
+        counted AS (
+          UPDATE forms f SET
+            response_count = GREATEST(f.response_count - t.n, 0),
+            last_response_at = (
+              SELECT max(r.submitted_at) FROM responses r
+              WHERE r.form_id = f.id AND r.submitted_at >= now() - make_interval(days => ${days}::int)
+            )
+          FROM touched t WHERE f.id = t.form_id
+          RETURNING f.id
         )
-        RETURNING form_id::text AS form_id, ARRAY(
-          SELECT v->>'url' FROM jsonb_each(CASE WHEN jsonb_typeof(answers) = 'object' THEN answers ELSE '{}'::jsonb END) e(k, v)
-          WHERE jsonb_typeof(v) = 'object' AND v->>'url' LIKE '%/__platform/files/%'
-        ) AS urls
+        SELECT (SELECT count(*)::int FROM gone) AS deleted, (SELECT count(*)::int FROM counted) AS forms
       `
-      out.responses += deleted.length
-      // The rows are gone (that DELETE committed on its own): now their files. A file that
-      // can't be removed now stays in storage; the answer that pointed at it is gone either way.
-      const fileIds = [...new Set(deleted.flatMap((r) => (r.urls ?? []).map(fileIdOf).filter((id): id is string => !!id)))]
-      for (const id of fileIds) {
-        try {
-          const res = (await removeFile(id)) as { ok?: boolean } | undefined
-          if (!res || res.ok !== false) out.files++
-        } catch {
-          // no Site Key on this machine, or storage off: nothing to remove here
-        }
-      }
-      const formIds = [...new Set(deleted.map((r) => r.form_id))].sort()
-      if (formIds.length) await recountResponses(client, formIds)
-      if (deleted.length < RETENTION_BATCH) break
+      const deleted = Number(batch?.deleted ?? 0)
+      out.responses += deleted
+      if (deleted < RETENTION_BATCH) break
       if (i === RETENTION_MAX_BATCHES - 1) out.more = true
     }
   }
@@ -163,18 +165,6 @@ export async function applyRetention(
     if (n < EVENTS_BATCH) break
   }
   return out
-}
-
-async function recountResponses(client: PrismaClient, formIds: string[]): Promise<void> {
-  await client.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM forms WHERE id = ANY(${formIds}::uuid[]) ORDER BY id FOR UPDATE`
-    await tx.$executeRaw`
-      UPDATE forms f SET
-        response_count = (SELECT count(*)::int FROM responses r WHERE r.form_id = f.id),
-        last_response_at = (SELECT max(submitted_at) FROM responses r WHERE r.form_id = f.id)
-      WHERE f.id = ANY(${formIds}::uuid[])
-    `
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -203,14 +193,34 @@ export async function sweepPresence(client: PrismaClient): Promise<number> {
   `
 }
 
-export async function hourlyMaintenance(client: PrismaClient): Promise<Record<string, number>> {
+/** Hourly response counts older than anything the strip or "this week" reads. */
+export async function sweepResponseHours(client: PrismaClient): Promise<number> {
+  return client.$executeRaw`
+    DELETE FROM form_response_hours WHERE (form_id, hour) IN (
+      SELECT form_id, hour FROM form_response_hours WHERE hour < now() - interval '35 days' LIMIT 10000
+    )
+  `
+}
+
+export async function hourlyMaintenance(
+  client: PrismaClient,
+  deps: { drain?: typeof drainFileTrash } = {},
+): Promise<Record<string, number>> {
   const closedForms = await closeExpiredForms(client)
-  // A closed form leaves the public site's list (it filters closeAt anyway; this keeps it tidy).
-  if (closedForms > 0) await clearPublicSiteCache().catch(() => undefined)
-  return {
+  // A closed form leaves the public site's list and its cached public page.
+  if (closedForms > 0) {
+    await clearPublicSiteCache().catch(() => undefined)
+    await clearPublicFormCache().catch(() => undefined)
+  }
+  const out = {
     closedForms,
     webhookDeliveries: await trimWebhookDeliveries(client),
-    rateLimits: await sweepWindows(client),
+    rateLimits: await sweepWindows(client, { budgetMs: 15_000 }),
     presence: await sweepPresence(client),
+    responseHours: await sweepResponseHours(client),
+    exports: await sweepExports(client),
   }
+  // Files of deleted responses that a refused job send left behind.
+  const drained = await (deps.drain ?? drainFileTrash)(client, jobRequestUrl(), { budgetMs: 15_000 })
+  return { ...out, files: drained.removed }
 }

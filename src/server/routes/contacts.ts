@@ -1,9 +1,8 @@
-import {type Context, Hono} from 'hono';
+import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
 import {
   contactDetailQuery,
-  contactsCsvQuery,
   contactsListQuery,
   deleteContactsInput,
   type ContactDetailResponse,
@@ -11,23 +10,24 @@ import {
   type ContactsOverviewResponse,
   type DeleteContactsResponse,
 } from '../../lib/intelform/api-contacts';
-import {deleteFile} from '../../platform/files';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
-import {contentDisposition} from '../intelform/contacts/csv';
-import {CSV_KEYS, LIST_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
-import {contactDetail, contactsCsvChunks, contactsCsvFilename, contactsOverview, deleteContacts, listContacts} from '../intelform/contacts/query';
-import {safeTz, todayIn} from '../intelform/contacts/tz';
+import {LIST_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
+import {clearContactsOverview, contactDetail, contactsOverview, deleteContacts, listContacts} from '../intelform/contacts/query';
+import {safeTz} from '../intelform/contacts/tz';
+import {clearSummaryCache} from '../intelform/responses/summary';
+import {scheduleFileCleanup} from '../intelform/uploads/trash';
 import {PERMISSIONS} from '../permissions';
 
 /**
- * `/site-api/contacts/*`: people who answered any form, grouped by email (else phone). Derived
- * from responses: there is no contacts table to keep in sync.
- *   GET  /                 list page (search, filters, sort, 50 per page, with the matching total)
- *   GET  /overview         the strip and filter choices (whole workspace, ignoring filters)
+ * `/site-api/contacts/*`: people who answered any form, grouped by email (else phone). One row
+ * per contact in the `contacts` table, kept by triggers on responses (contacts/sql.ts).
+ *   GET  /                 list page (search, filters, sort, 50 per page, keyset `cursor`)
+ *   GET  /overview         the strip and filter choices (whole workspace, cached 10 minutes)
  *   GET  /detail?key=      one contact and their latest 200 responses
- *   GET  /export.csv       streamed CSV (the filters, or repeated ?key=)
  *   POST /delete           {keys} erases contacts: deletes every response they sent
- * Reading (and so every email shown) needs site:contact:read; erasing needs site:contact:write.
+ * The CSV is an export job: POST /site-api/exports {kind: 'contacts'} (routes/exports.ts).
+ * Reading (and so every email shown) needs site:contact:read; erasing needs site:contact:write
+ * AND site:response:delete (it deletes every response the contact sent).
  */
 
 const UNKNOWN = 'That contact no longer exists.';
@@ -49,20 +49,6 @@ const deleteBody = validator('json', (value, c) => {
   }
   return parsed.data;
 });
-
-/** Removes the deleted responses' signature files after commit, without delaying the answer. */
-function removeFilesLater(c: Context, fileIds: string[]) {
-  if (!fileIds.length) return;
-  const work = Promise.allSettled(fileIds.slice(0, 1000).map(id => deleteFile(c.req.url, id))).then(results => {
-    const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)).length;
-    if (failed) console.error(`[contacts] ${failed} signature file(s) not removed`);
-  });
-  try {
-    c.executionCtx.waitUntil(work);
-  } catch {
-    // No execution context (a test calling the app directly): the promise still runs.
-  }
-}
 
 export const contactsRoutes = new Hono()
   .get(
@@ -89,48 +75,21 @@ export const contactsRoutes = new Hono()
     if (!detail) return c.json(problem('not_found', UNKNOWN), 404);
     return c.json<ContactDetailResponse>(detail);
   })
-  .get(
-    '/export.csv',
-    queryWith(contactsCsvQuery, CSV_KEYS),
+  // Erasing a contact deletes their responses: it needs response deletion as well.
+  .post(
+    '/delete',
+    deleteBody,
     withViewer,
     requireAuth,
-    requirePermission(PERMISSIONS.CONTACT_READ),
+    requirePermission(PERMISSIONS.CONTACT_WRITE),
+    requirePermission(PERMISSIONS.RESPONSE_DELETE),
     withDb,
     async c => {
-      const q = c.req.valid('query');
-      const db = c.var.db;
-      const tz = await safeTz(db, q.tz);
-      c.header('Content-Type', 'text/csv; charset=utf-8');
-      c.header('Content-Disposition', contentDisposition(contactsCsvFilename(todayIn(tz))));
-      c.header('Cache-Control', 'private, no-store');
-      // Pull-based: each batch is read only when the client takes the previous one (bounded memory).
-      const chunks = contactsCsvChunks(db, q, tz);
-      const encoder = new TextEncoder();
-      const body = new ReadableStream<Uint8Array>(
-        {
-          async pull(controller) {
-            try {
-              const next = await chunks.next();
-              if (next.done) controller.close();
-              else controller.enqueue(encoder.encode(next.value));
-            } catch (err) {
-              console.error(`[contacts] csv export failed: ${(err as Error).message}`.slice(0, 500));
-              controller.enqueue(encoder.encode('\r\nExport failed. Try again.\r\n'));
-              controller.close();
-            }
-          },
-          async cancel() {
-            await chunks.return(undefined);
-          },
-        },
-        {highWaterMark: 0}
-      );
-      return c.body(body);
+      const {keys} = c.req.valid('json');
+      const result = await deleteContacts(c.var.db, keys);
+      // Their signature files are in the file trash (the delete trigger): the cleanup job removes
+      // them a few at a time. The cached strip and the touched forms' summaries go now.
+      if (result.responses) await Promise.all([clearContactsOverview(), clearSummaryCache(), scheduleFileCleanup(c.req.url)]);
+      return c.json<DeleteContactsResponse>(result);
     }
-  )
-  .post('/delete', deleteBody, withViewer, requireAuth, requirePermission(PERMISSIONS.CONTACT_WRITE), withDb, async c => {
-    const {keys} = c.req.valid('json');
-    const {contacts, responses, fileIds} = await deleteContacts(c.var.db, keys);
-    removeFilesLater(c, fileIds);
-    return c.json<DeleteContactsResponse>({contacts, responses});
-  });
+  );

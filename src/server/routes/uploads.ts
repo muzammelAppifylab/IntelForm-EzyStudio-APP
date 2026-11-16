@@ -22,6 +22,8 @@ import {storedSignatureFileId} from '../intelform/uploads/signatures';
 import {guarded} from '../intelform/uploads/storage';
 import {signUploadToken} from '../intelform/uploads/token';
 import {PERMISSIONS} from '../permissions';
+import {SYSTEM_LABELS} from '../../lib/intelform/form/labels';
+import {checkUnlockToken, readRenderToken} from '../intelform/respondent/tokens';
 
 /**
  * `/site-api/uploads/*`: IntelForm's files, through the platform's storage (docs/agent/files.md).
@@ -32,7 +34,9 @@ import {PERMISSIONS} from '../permissions';
  *                               → 201 {fileId, upload}                      (public file)
  *   POST /:fileId/complete      editors: confirm it, check the bytes → {url, contentType, size}
  *   POST /signature             ANONYMOUS, rate limited: start a respondent's SIGNATURE upload
- *                               {formId, fieldId, contentType, size} → 201 {fileId, upload, token}
+ *                               {formId, fieldId, contentType, size, renderToken, unlockToken?}
+ *                               → 201 {fileId, upload, token}. Needs the page's render token and,
+ *                               for a password-protected form, its unlock token (as the submit).
  *                               (private file, pending until the submit route claims it:
  *                               src/server/intelform/uploads/signatures.ts)
  *   GET  /signatures/:responseId/:fieldId
@@ -85,12 +89,14 @@ const signatureBody = validator('json', (value, c) => {
   const fieldId = typeof v.fieldId === 'string' ? v.fieldId : '';
   const contentType = typeof v.contentType === 'string' ? v.contentType : '';
   const size = typeof v.size === 'number' ? v.size : 0;
+  const renderToken = typeof v.renderToken === 'string' && v.renderToken.length <= 200 ? v.renderToken : '';
+  const unlockToken = typeof v.unlockToken === 'string' && v.unlockToken.length <= 400 ? v.unlockToken : null;
   if (!UUID.test(formId) || !FIELD_ID.test(fieldId)) {
     return c.json(problem('not_found', 'This form is no longer available.'), 404);
   }
   const invalid = checkSignature({type: contentType, size});
   if (invalid) return c.json({...problem('invalid_input', invalid), fields: {[fieldId]: [invalid]}}, 422);
-  return {formId, fieldId, contentType, size};
+  return {formId, fieldId, contentType, size, renderToken, unlockToken};
 });
 
 const signatureParam = validator('param', (value, c) => {
@@ -168,6 +174,7 @@ export const uploadsRoutes = new Hono()
       where: {id: input.formId},
       select: {
         status: true,
+        settings: true,
         publishedVersion: {select: {definition: true}},
         versions: {
           where: {publishedAt: {gt: new Date(Date.now() - PREVIOUS_VERSION_GRACE_MS)}},
@@ -178,13 +185,22 @@ export const uploadsRoutes = new Hono()
     if (!form || form.status !== 'live' || !form.publishedVersion) {
       return c.json(problem('not_found', 'This form is no longer available.'), 404);
     }
+    // The same gates as the submit: a page this site rendered for this form, and the password.
+    const rendered = input.renderToken ? await readRenderToken(secret, input.renderToken, input.formId) : null;
+    if (rendered === null) return c.json(problem('not_found', 'This form is no longer available.'), 404);
+    if (rendered === 'expired') return c.json(problem('page_expired', SYSTEM_LABELS.pageExpired), 409);
+    const passwordHash = (form.settings as {passwordHash?: unknown} | null)?.passwordHash;
+    if (typeof passwordHash === 'string' && passwordHash && !(await checkUnlockToken(secret, input.unlockToken, input.formId, passwordHash))) {
+      return c.json(problem('locked', 'Enter the form password again, then submit.'), 401);
+    }
     const definitions = [form.publishedVersion.definition, ...form.versions.map(v => v.definition)];
     if (!definitions.some(d => hasSignatureField(d, input.fieldId))) {
       return c.json(problem('not_found', 'This question is no longer on the form. Reload the page.'), 404);
     }
 
     const grant = await guarded(() =>
-      createUpload(c.req.url, {name: SIGNATURE_NAME, contentType: SIGNATURE_TYPE, size: input.size, visibility: 'public'})
+      // Private (personal data): shown only through GET /signatures/:responseId/:fieldId below.
+      createUpload(c.req.url, {name: SIGNATURE_NAME, contentType: SIGNATURE_TYPE, size: input.size, visibility: 'private'})
     );
     if (!grant.ok) {
       // The owner's storage problem is not the respondent's: one plain message.

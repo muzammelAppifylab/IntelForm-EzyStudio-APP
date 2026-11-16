@@ -2,7 +2,7 @@ import type {FormField} from '../../../lib/intelform/form/definition';
 import type {FieldType} from '../../../lib/intelform/form/field-types';
 import {answerToCsv} from '../../../lib/intelform/form/csv';
 import {countryName, formatDate, formatTime, isIsoDate, isTime} from '../../../lib/intelform/form/types/registry';
-import {isUploadedFileUrl} from '../../../lib/intelform/settings-app';
+import {signatureViewPath, storedSignatureFileId} from '../uploads/signatures';
 
 /**
  * Answer → display text for the table, the drawer and the summary's latest answers.
@@ -11,24 +11,16 @@ import {isUploadedFileUrl} from '../../../lib/intelform/settings-app';
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** A stored file id: `/__platform/files/<id>/<name>`. */
-const FILE_ID = /^\/__platform\/files\/([A-Za-z0-9_-]{1,100})\//;
-
 /**
- * The URL of a signature answer, only when it is `{url}` pointing at a file this site stored
- * (`/__platform/files/<id>/<name>`, the platform's public file link). Anything else (free text
- * kept from before the field became a signature, an outside URL that would log every viewer's
- * address) is not a signature and must never become a link or an image in the dashboard.
+ * A signature answer is "signed" only when it holds a file this site stored (`{fileId}`, or the
+ * older `{url: "/__platform/files/<id>/…"}`). Its link is never the file: it is the guarded
+ * view route (RESPONSE_READ, a 5-minute link per view), so a forwarded CSV or email never opens
+ * it without a sign-in. Anything else (free text kept from before the field became a signature,
+ * an outside URL that would log every viewer's address) never becomes a link or an image.
  */
-export function storedSignatureUrl(value: unknown): string | null {
-  const url = isRecord(value) ? value.url : undefined;
-  return typeof url === 'string' && isUploadedFileUrl(url) ? url : null;
-}
-
-/** The platform file id of a stored file URL, or null. */
-export function fileIdFromUrl(url: unknown): string | null {
-  if (typeof url !== 'string' || !isUploadedFileUrl(url)) return null;
-  return FILE_ID.exec(url)?.[1] ?? null;
+export function signatureLinkFor(value: unknown, responseId: string | undefined, fieldId: string): string | null {
+  if (!storedSignatureFileId(value)) return null;
+  return responseId ? signatureViewPath(responseId, fieldId) : null;
 }
 
 export interface DisplayValue {
@@ -36,7 +28,8 @@ export interface DisplayValue {
   url?: string;
 }
 
-export function displayAnswer(field: FormField, value: unknown): DisplayValue {
+/** `responseId` makes a signature's link (the guarded view route); without it a signature is just "Signed". */
+export function displayAnswer(field: FormField, value: unknown, responseId?: string): DisplayValue {
   if (value === undefined || value === null) return {text: ''};
   switch (field.type) {
     case 'section_break':
@@ -64,8 +57,10 @@ export function displayAnswer(field: FormField, value: unknown): DisplayValue {
         text: isRecord(value) && value.accepted === true ? 'Accepted' : '',
       };
     case 'signature': {
-      const url = storedSignatureUrl(value);
-      if (url) return {text: 'Signed', url};
+      if (storedSignatureFileId(value)) {
+        const url = signatureLinkFor(value, responseId, field.id);
+        return url ? {text: 'Signed', url} : {text: 'Signed'};
+      }
       return {text: typeof value === 'string' ? value : ''};
     }
     default:

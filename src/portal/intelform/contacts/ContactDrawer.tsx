@@ -14,12 +14,15 @@ export function ContactDrawer({
   contactKey,
   onClose,
   onDelete,
-  csvFor,
+  onExport,
+  exporting,
 }: {
   contactKey: string | null;
   onClose: () => void;
   onDelete: ((detail: ContactDetailResponse) => void) | null;
-  csvFor: (keys: string[]) => string;
+  /** Starts the CSV export of these contacts (a background job). */
+  onExport: (keys: string[]) => void;
+  exporting: boolean;
 }) {
   const open = !!contactKey;
   const query = useQuery({...contactDetailQuery(contactKey ?? ''), enabled: open});
@@ -40,10 +43,9 @@ export function ContactDrawer({
                 Delete contact
               </Button>
             )}
-            <a className={buttonClass({variant: 'secondary'})} href={csvFor([c.key])} download>
-              <Icon name="download" size={18} />
+            <Button variant="secondary" icon="download" pending={exporting} pendingLabel="Exporting…" onClick={() => onExport([c.key])}>
               Export CSV
-            </a>
+            </Button>
           </>
         ) : undefined
       }>

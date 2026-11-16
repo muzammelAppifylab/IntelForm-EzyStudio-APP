@@ -195,7 +195,7 @@ function LiveForm({
     let sent: Record<string, unknown>;
     try {
       // Drawn signatures go to storage first; the submit carries their {fileId, token}.
-      sent = await prepareSignatureAnswers(form.definition.fields, answers, form.id);
+      sent = await prepareSignatureAnswers(form.definition.fields, answers, form.id, {renderToken, unlockToken: unlockToken.current});
     } catch (err) {
       turnstile.current?.reset();
       if (err instanceof SignatureUploadError && err.fieldId) return {ok: false, errors: {[err.fieldId]: err.message}};

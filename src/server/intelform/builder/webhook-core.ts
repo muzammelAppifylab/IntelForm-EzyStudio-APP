@@ -1,4 +1,12 @@
 import type {FormDefinition, FormField} from '../../../lib/intelform/form/definition';
+import {
+  assertSafeUrl as checkUrl,
+  HTTPS_REQUIRED,
+  isIpLiteral,
+  isPrivateAddress as isPrivateLiteral,
+  WebhookUrlError,
+  type UrlPolicy,
+} from '../webhooks/ssrf';
 
 /**
  * Outbound webhooks, the pure parts (no database, no network): URL rules, the signing secret,
@@ -21,7 +29,7 @@ import type {FormDefinition, FormField} from '../../../lib/intelform/form/defini
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 export const MAX_BODY_CAPTURE = 1024;
-export const HTTPS_REQUIRED = 'Use an https:// address. Webhooks carry answers, so plain http:// isn’t allowed.';
+export {HTTPS_REQUIRED};
 
 export class UnsafeWebhookUrl extends Error {
   constructor(message: string) {
@@ -30,102 +38,24 @@ export class UnsafeWebhookUrl extends Error {
   }
 }
 
-function ipv4Octets(host: string): number[] | null {
-  const parts = host.split('.');
-  if (parts.length !== 4) return null;
-  const octets = parts.map(p => (/^\d{1,3}$/.test(p) ? Number(p) : NaN));
-  return octets.every(o => o >= 0 && o <= 255) ? octets : null;
-}
-
-function privateIpv4([a, b, c]: number[]): boolean {
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b! >= 64 && b! <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b! >= 16 && b! <= 31) ||
-    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-    (a === 192 && b === 88 && c === 99) ||
-    (a === 192 && b === 168) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    (a === 198 && b === 51 && c === 100) ||
-    (a === 203 && b === 0 && c === 113) ||
-    a! >= 224
-  );
-}
-
-/** Expands an IPv6 literal to 8 groups of 4 hex digits; null when it isn't one. */
-function expandIpv6(host: string): string[] | null {
-  let h = host.toLowerCase();
-  if (!h.includes(':')) return null;
-  // A dotted IPv4 tail (::ffff:1.2.3.4): turn it into two groups.
-  const dotted = h.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
-  if (dotted) {
-    const o = ipv4Octets(dotted[2]!);
-    if (!o) return null;
-    h = `${dotted[1]}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
-  }
-  const halves = h.split('::');
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - head.length - tail.length;
-  if (halves.length === 1 ? head.length !== 8 : missing < 1) return null;
-  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail];
-  if (!groups.every(g => /^[0-9a-f]{1,4}$/.test(g))) return null;
-  return groups.map(g => g.padStart(4, '0'));
-}
-
-/** True for loopback, private, link-local, CGNAT, metadata, multicast and other non-public literals. */
+/** True for a loopback, private, link-local, CGNAT, metadata, multicast or other non-public IP literal (false for a name). */
 export function isPrivateAddress(host: string): boolean {
-  const bare = host.replace(/^\[|\]$/g, '');
-  const v4 = ipv4Octets(bare);
-  if (v4) return privateIpv4(v4);
-  const g = expandIpv6(bare);
-  if (!g) return false; // not an IP literal
-  const first = parseInt(g[0]!, 16);
-  const allZeroUntil = (n: number) => g.slice(0, n).every(x => x === '0000');
-  if (allZeroUntil(6)) return true; // ::, ::1 and the deprecated IPv4-compatible ::a.b.c.d
-  if (allZeroUntil(5) && g[5] === 'ffff') return true; // IPv4-mapped
-  if (g[0] === '0064' && g[1] === 'ff9b') return true; // NAT64
-  if (g[0] === '0100' && g[1] === '0000' && g[2] === '0000' && g[3] === '0000') return true; // discard
-  if (g[0] === '2001' && parseInt(g[1]!, 16) < 0x200) return true; // IETF protocol assignments
-  if (g[0] === '2001' && g[1] === '0db8') return true; // documentation
-  if (g[0] === '2002') return true; // 6to4
-  if ((first & 0xfe00) === 0xfc00) return true; // unique local
-  if ((first & 0xffc0) === 0xfe80 || (first & 0xffc0) === 0xfec0) return true; // link / site local
-  if ((first & 0xff00) === 0xff00) return true; // multicast
-  return false;
+  return isIpLiteral(host) && isPrivateLiteral(host);
 }
 
 /**
  * Validates a webhook URL before saving or sending; throws UnsafeWebhookUrl with words for
- * people. `allowHttp` only off production (local receivers).
+ * people. One check for every webhook path (../webhooks/ssrf): `allowHttp` and
+ * `allowPrivate` are separate, and only your own machine (config.localDev) may target private
+ * or local hosts. Defaults to the running site's policy (urlPolicy()).
  */
-export function assertSafeUrl(raw: string, opts: {allowHttp?: boolean} = {}): URL {
-  if (raw.length > 2000) throw new UnsafeWebhookUrl('Use a shorter URL');
-  let url: URL;
+export function assertSafeUrl(raw: string, policy: Partial<UrlPolicy> = {}): URL {
   try {
-    url = new URL(raw);
-  } catch {
-    throw new UnsafeWebhookUrl('Enter a full URL starting with https://');
+    return checkUrl(raw, {allowHttp: policy.allowHttp ?? false, allowPrivate: policy.allowPrivate ?? false});
+  } catch (err) {
+    if (err instanceof WebhookUrlError) throw new UnsafeWebhookUrl(err.message);
+    throw err;
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new UnsafeWebhookUrl('Use an https:// address');
-  if (url.protocol === 'http:' && !opts.allowHttp) throw new UnsafeWebhookUrl(HTTPS_REQUIRED);
-  if (url.username || url.password) {
-    throw new UnsafeWebhookUrl('Remove the user name and password from the URL; use a custom header instead');
-  }
-  // "localhost." and "db.internal." are the same names as without the final dot.
-  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
-  if (!host) throw new UnsafeWebhookUrl('Enter a full URL starting with https://');
-  if (!opts.allowHttp) {
-    if (isPrivateAddress(host)) throw new UnsafeWebhookUrl('Webhooks can’t be sent to private or local network addresses');
-    if (/^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.home\.arpa)$/i.test(host) || !/[.:]/.test(host)) {
-      throw new UnsafeWebhookUrl('Webhooks can’t be sent to local host names');
-    }
-  }
-  return url;
 }
 
 // ------------------------------------------------------------------ signing --

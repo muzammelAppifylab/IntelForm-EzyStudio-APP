@@ -2,6 +2,7 @@ import { answerToCsv } from '../../../lib/intelform/form/csv'
 import { formDefinition, type FormDefinition, type FormField } from '../../../lib/intelform/form/definition'
 import { interpolate } from '../../../lib/intelform/form/logic'
 import { coreRegistry } from '../../../lib/intelform/form/types/registry'
+import { signatureViewPath, storedSignatureFileId } from '../uploads/signatures'
 
 /**
  * Answer helpers for the emails and the webhook payload (legacy server/respondent/answers.ts).
@@ -25,16 +26,20 @@ export function absoluteUrl(url: string, origin: string | null): string {
   return url.startsWith('/') && origin ? origin.replace(/\/+$/, '') + url : url
 }
 
-function signatureUrlOf(value: unknown): string {
-  return value && typeof value === 'object' && typeof (value as { url?: unknown }).url === 'string' ? (value as { url: string }).url : ''
+/**
+ * A signature answer as a link to the guarded view route (sign-in and site:response:read
+ * needed; the file itself is private), or '' when it holds no stored file.
+ */
+export function signatureLinkText(value: unknown, responseId: string, fieldId: string, origin: string | null): string {
+  return storedSignatureFileId(value) ? absoluteUrl(signatureViewPath(responseId, fieldId), origin) : ''
 }
 
 /** The answers as plain text: "Label\nanswer" blocks, blank line between them. */
-export function answersAsText(def: FormDefinition, answers: Record<string, unknown>, origin: string | null): string {
+export function answersAsText(def: FormDefinition, answers: Record<string, unknown>, origin: string | null, responseId = ''): string {
   return answeredFields(def, answers)
     .map((f) => {
       const label = interpolate(f.label, def, answers).trim() || 'Untitled question'
-      const v = f.type === 'signature' ? absoluteUrl(signatureUrlOf(answers[f.id]), origin) : answerText(f, answers[f.id])
+      const v = f.type === 'signature' ? signatureLinkText(answers[f.id], responseId, f.id, origin) : answerText(f, answers[f.id])
       return `${label}\n${v}`
     })
     .join('\n\n')

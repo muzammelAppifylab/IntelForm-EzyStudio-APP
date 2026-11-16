@@ -2,7 +2,10 @@ import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 
 import {ensurePermissions} from '../../src/platform/permission-sync';
 import {app} from '../../src/server/app';
+// Registers the job handlers: locally an export job runs as soon as it is sent.
+import '../../src/server/background';
 import {CATALOGUE, PERMISSIONS} from '../../src/server/permissions';
+import {encodeContactCursor} from '../../src/server/intelform/contacts/sql';
 import {type Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -56,6 +59,7 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
   let editor: Browser;
   let viewer: Browser;
   let member: Browser;
+  let clerk: Browser;
   let survey: {id: string; versionId: string};
   let signup: {id: string; versionId: string};
 
@@ -63,11 +67,16 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     configureEnv();
     await resetDatabase();
     await ensurePermissions(db, CATALOGUE);
-    await grant('editor', [PERMISSIONS.CONTACT_READ, PERMISSIONS.CONTACT_WRITE]);
+    await grant('editor', [PERMISSIONS.CONTACT_READ, PERMISSIONS.CONTACT_WRITE, PERMISSIONS.RESPONSE_DELETE]);
     await grant('viewer', [PERMISSIONS.CONTACT_READ]);
+    // A custom role an admin could build: may edit contacts, may NOT delete responses.
+    await db.role.create({data: {slug: 'clerk', name: 'Clerk'}});
+    await grant('clerk', [PERMISSIONS.CONTACT_READ, PERMISSIONS.CONTACT_WRITE]);
     editor = await signedIn(app, 'editor@example.test', undefined, '203.0.113.51');
     viewer = await signedIn(app, 'viewer@example.test', undefined, '203.0.113.52');
     member = await signedIn(app, 'member@example.test', undefined, '203.0.113.53');
+    clerk = await signedIn(app, 'clerk@example.test', undefined, '203.0.113.54');
+    await setRoles('clerk@example.test', 'member', 'clerk');
     await setRoles('editor@example.test', 'member', 'editor');
     await setRoles('viewer@example.test', 'member', 'viewer');
     await setRoles('member@example.test', 'member');
@@ -91,14 +100,15 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
   it('needs site:contact:read', async () => {
     expect((await member.get('/site-api/contacts')).status).toBe(403);
     expect((await member.get('/site-api/contacts/detail?key=e:ada@example.com')).status).toBe(403);
-    expect((await member.get('/site-api/contacts/export.csv')).status).toBe(403);
+    expect((await member.post('/site-api/exports', {kind: 'contacts', query: {}})).status).toBe(403);
   });
 
   it('groups by email across forms and keeps phone-only contacts', async () => {
     const res = await viewer.get('/site-api/contacts');
     expect(res.status).toBe(200);
-    const body = res.json as {total: number; contacts: {key: string; name: string | null; email: string | null; forms: {title: string}[]}[]};
-    expect(body.total).toBe(3);
+    const body = res.json as {nextCursor: string | null; contacts: {key: string; name: string | null; email: string | null; forms: {title: string}[]}[]};
+    expect(body.contacts).toHaveLength(3);
+    expect(body.nextCursor).toBeNull();
     expect(body.contacts.map(c => c.key)).toEqual(['e:ada@example.com', 'p:+15555550123', 'e:grace@example.com']);
     expect(body.contacts[0]).toMatchObject({name: 'Ada Lovelace', phone: '+447700900111', country: 'FR', responseCount: 2, formCount: 2});
     expect(body.contacts[0]!.forms.map(f => f.title)).toEqual(['Event signup', 'Customer survey']);
@@ -126,6 +136,16 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     expect(await keys('country=US&min=1&max=1')).toEqual(['p:+15555550123', 'e:grace@example.com']);
     expect(await keys('sort=name&dir=asc')).toEqual(['e:ada@example.com', 'e:grace@example.com', 'p:+15555550123']);
     expect(await keys('sort=responses&dir=desc')).toEqual(['e:ada@example.com', 'p:+15555550123', 'e:grace@example.com']);
+    // Keyset pages in a sort: the cursor after the first row brings the rest, in order.
+    const first = (await editor.get('/site-api/contacts?sort=responses&dir=desc')).json as {contacts: {key: string}[]};
+    expect(first.contacts).toHaveLength(3);
+    for (const sort of ['name', 'last_seen', 'first_seen', 'email', 'responses'] as const) {
+      const all = await keys(`sort=${sort}&dir=asc`);
+      const ada = (await db.contact.findUniqueOrThrow({where: {key: all[0]!}, select: {lastSeen: true, firstSeen: true, name: true, email: true, n: true}}));
+      const v = {name: ada.name?.toLowerCase() ?? null, last_seen: ada.lastSeen.toISOString(), first_seen: ada.firstSeen.toISOString(), email: ada.email, responses: String(ada.n)}[sort];
+      const cursor = encodeContactCursor({v, t: ada.lastSeen.toISOString(), k: all[0]!});
+      expect(await keys(`sort=${sort}&dir=asc&cursor=${cursor}`), sort).toEqual(all.slice(1));
+    }
     expect((await editor.get('/site-api/contacts?min=3&max=2')).status).toBe(422);
   });
 
@@ -140,8 +160,14 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     expect((await viewer.get('/site-api/contacts/detail?key=bogus')).status).toBe(404);
   });
 
-  it('exports CSV', async () => {
-    const res = await viewer.get('/site-api/contacts/export.csv?key=e:ada@example.com&tz=UTC');
+  it('exports CSV (a background job, then the download)', async () => {
+    const started = await viewer.post('/site-api/exports', {kind: 'contacts', query: {key: ['e:ada@example.com'], tz: 'UTC'}});
+    expect(started.status).toBe(202);
+    const job = started.json as {id: string; status: string; rows: number};
+    expect(job).toMatchObject({status: 'ready', rows: 1});
+    // Someone else's export is not theirs to see.
+    expect((await editor.get(`/site-api/exports/${job.id}`)).status).toBe(404);
+    const res = await viewer.get(`/site-api/exports/${job.id}/download`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/csv');
     const text = String((res.json as {text?: string}).text ?? '');
@@ -151,8 +177,11 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     expect(lines[1]).toMatch(/^Ada Lovelace,ada@example\.com,'\+447700900111,FR,2,Event signup; Customer survey,/);
   });
 
-  it('erases every response of a contact; viewers cannot', async () => {
+  it('erases every response of a contact; viewers cannot, nor can a role without response deletion', async () => {
     expect((await viewer.post('/site-api/contacts/delete', {keys: ['e:ada@example.com']})).status).toBe(403);
+    const before = await db.response.count();
+    expect((await clerk.post('/site-api/contacts/delete', {keys: ['e:ada@example.com']})).status).toBe(403);
+    expect(await db.response.count()).toBe(before);
     expect((await editor.post('/site-api/contacts/delete', {keys: []})).status).toBe(422);
     const res = await editor.post('/site-api/contacts/delete', {keys: ['e:ada@example.com', 'e:nobody@example.com']});
     expect(res.status).toBe(200);
@@ -162,6 +191,8 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     expect(byId[survey.id]!.responseCount).toBe(2);
     expect(byId[signup.id]!.responseCount).toBe(0);
     expect(byId[signup.id]!.lastResponseAt).toBeNull();
-    expect(((await editor.get('/site-api/contacts')).json as {total: number}).total).toBe(2);
+    expect(((await editor.get('/site-api/contacts')).json as {contacts: unknown[]}).contacts).toHaveLength(2);
+    // The contacts rows follow the responses (the delete trigger).
+    expect(await db.contact.count()).toBe(2);
   });
 });

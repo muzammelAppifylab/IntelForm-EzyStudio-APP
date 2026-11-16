@@ -11,7 +11,7 @@ import { deliveredOnce, deliverWebhook, readWebhookConfig, WebhookError, webhook
 import { answersAsText, readAnswers, readDefinition } from './answers'
 import { withoutLinks } from './links'
 import { MailError, mailProvider, normalizeMessage, type MailProvider } from './mailer'
-import { doneKey, hitWindow, isDone, markDone } from './markers'
+import { doneKey, doneSet, hitWindow, isDone, markAllDone, markDone } from './markers'
 import { readNotifySettings, type NotifySettings } from './settings'
 
 /**
@@ -33,6 +33,8 @@ export const WEBHOOK_LIST = 'intelform-webhook-deliver'
 
 /** Confirmation emails per form per hour: a form can't be turned into a bulk mailer. */
 export const CONFIRM_EMAIL_LIMIT = 200
+/** Team notification emails sent at once. */
+const TEAM_SEND_CONCURRENCY = 5
 /** Delay before the webhook job's first retry (seconds). */
 export const WEBHOOK_RETRY_DELAY = 60
 
@@ -295,27 +297,37 @@ async function notifyTeam(
   let teamSent = 0
   if (deps.mail && recipients.length) {
     const link = deps.origin ? `${deps.origin.replace(/\/+$/, '')}${path}` : path
-    const text = `${r.title} has a new response.\n\n${answersAsText(def, answers, deps.origin)}\n\nOpen it in IntelForm:\n${link}\n`
+    const text = `${r.title} has a new response.\n\n${answersAsText(def, answers, deps.origin, r.id)}\n\nOpen it in IntelForm:\n${link}\n`
     let failed: MailError | null = null
-    for (const u of recipients) {
-      const key = doneKey('notify', r.id, `u${u.id}`)
-      if (await isDone(db, key)) {
-        teamSent++
-        continue
-      }
-      const m = normalizeMessage({ to: u.email, subject: `New response: ${r.title}`, text })
-      if (!m) continue
-      try {
-        await deps.mail.send(m, { idempotencyKey: key })
-        await markDone(db, key)
-        teamSent++
-      } catch (err) {
-        if (!(err instanceof MailError)) throw err
-        if (err.retryable) failed = err
-        else console.warn(`[intelform] team notification refused by the mail provider (${err.message.slice(0, 80)})`)
-      }
+    // Every recipient's marker in one read, the emails a few at a time, the new markers in one write.
+    const keyOf = (u: { id: number }) => doneKey('notify', r.id, `u${u.id}`)
+    const done = await doneSet(db, recipients.map(keyOf))
+    teamSent += recipients.filter((u) => done.has(keyOf(u))).length
+    const todo = recipients.filter((u) => !done.has(keyOf(u)))
+    const sentKeys: string[] = []
+    let unexpected: unknown = null
+    for (let i = 0; i < todo.length; i += TEAM_SEND_CONCURRENCY) {
+      await Promise.all(
+        todo.slice(i, i + TEAM_SEND_CONCURRENCY).map(async (u) => {
+          const key = keyOf(u)
+          const m = normalizeMessage({ to: u.email, subject: `New response: ${r.title}`, text })
+          if (!m) return
+          try {
+            await deps.mail!.send(m, { idempotencyKey: key })
+            sentKeys.push(key)
+          } catch (err) {
+            if (!(err instanceof MailError)) unexpected ??= err
+            else if (err.retryable) failed = err
+            else console.warn(`[intelform] team notification refused by the mail provider (${err.message.slice(0, 80)})`)
+          }
+        }),
+      )
     }
-    if (failed) throw new Error(`Team notification: ${failed.message}`)
+    // Markers first, so a retry never sends the ones that went out again.
+    await markAllDone(db, sentKeys)
+    teamSent += sentKeys.length
+    if (unexpected) throw unexpected
+    if (failed) throw new Error(`Team notification: ${(failed as MailError).message}`)
   }
   if (toOwner && teamSent) return 'both'
   if (teamSent) return 'team'

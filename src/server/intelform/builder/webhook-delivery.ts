@@ -1,7 +1,8 @@
 import type {Prisma} from '../../../generated/prisma/client';
 import {DontRetry, JobRejected, sendJob, type JobInfo} from '../../../platform/background';
-import {config} from '../../../platform/config';
 import {getDb} from '../../../platform/db';
+import {urlPolicy} from '../webhooks/deliver';
+import type {UrlPolicy} from '../webhooks/ssrf';
 import {BuilderError, formGone} from './errors';
 import {
   assertSafeUrl,
@@ -32,8 +33,11 @@ export const KEEP_PER_FORM = 100;
 
 type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
 
-/** Plain http only off production (a local receiver on a developer's machine). */
-export const allowHttpWebhooks = () => !config.production;
+/**
+ * What a webhook URL may point at on this site: https and public hosts live; plain http off
+ * production; private and local hosts on your own machine only (never in the deployed Preview).
+ */
+export const webhookUrlPolicy = (): UrlPolicy => urlPolicy();
 
 /** Replaces the form's secret and returns the new one (shown to the person once). */
 export async function rotateWebhookSecret(db: Db, formId: string): Promise<string> {
@@ -181,7 +185,7 @@ export interface DeliveryOutcome {
 export async function runDelivery(
   db: Db,
   deliveryId: string,
-  opts: {fetch?: typeof fetch; allowHttp?: boolean} = {}
+  opts: {fetch?: typeof fetch; policy?: Partial<UrlPolicy>} = {}
 ): Promise<DeliveryOutcome | null> {
   const [d] = await db.$queryRaw<DeliveryRow[]>`
     SELECT d.id::text AS id, d.form_id::text AS form_id, d.response_id::text AS response_id, d.webhook_id, d.url,
@@ -203,7 +207,7 @@ export async function runDelivery(
 
   if (error === null) {
     try {
-      assertSafeUrl(url, {allowHttp: opts.allowHttp ?? allowHttpWebhooks()});
+      assertSafeUrl(url, opts.policy ?? webhookUrlPolicy());
       const secret = await ensureWebhookSecret(db, d.form_id);
       if (!secret) return null; // the form was deleted meanwhile
       const webhookId = d.webhook_id ?? `msg_test_${crypto.randomUUID()}`;

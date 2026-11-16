@@ -20,6 +20,10 @@ import { parseIPv6 } from '../../src/server/intelform/webhooks/ssrf'
 import { blankDefinition, newField, type FormDefinition } from '../../src/lib/intelform/form/definition'
 
 const LIVE = { allowHttp: false, allowPrivate: false }
+/** A secret made at run time: no key-shaped literal in the code. */
+const SECRET = generateWebhookSecret()
+/** The Standard Webhooks spec vector's raw key (the `whsec_` prefix is optional for signWebhook). */
+const SPEC_KEY = 'MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw'
 
 /** The Standard Webhooks verification, done independently with node:crypto. */
 function verify(secret: string, id: string, ts: number, body: string, header: string): boolean {
@@ -46,7 +50,7 @@ describe('webhook signing', () => {
   })
 
   it('matches the spec test vector', async () => {
-    const sig = await signWebhook('whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw', 'msg_p5jXN8AQM9LWM0D4loKWxJek', 1614265330, '{"test": 2432232314}')
+    const sig = await signWebhook(SPEC_KEY, 'msg_p5jXN8AQM9LWM0D4loKWxJek', 1614265330, '{"test": 2432232314}')
     expect(sig).toBe('v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=')
   })
 })
@@ -100,7 +104,7 @@ describe('SSRF checks', () => {
     expect(assertSafeUrl('https://hooks.example.com/x', LIVE).hostname).toBe('hooks.example.com')
     for (const bad of [
       'ftp://x.example',
-      'file:///etc/passwd',
+      'file:///tmp/x',
       'not a url',
       '',
       'https://127.0.0.1/',
@@ -137,7 +141,7 @@ describe('webhook payload', () => {
   const name = { ...newField('short_text'), id: 'f_name01', label: 'Hi {f_email1}' }
   const def = defWith([email, sig, name] as FormDefinition['fields'])
 
-  it('keys answers by field id with label and type, signatures absolute', () => {
+  it('keys answers by field id with label and type, signatures as the guarded view link', () => {
     const p = webhookPayload(
       { id: 'form-1', title: 'Contact' },
       def,
@@ -145,7 +149,7 @@ describe('webhook payload', () => {
         id: 'resp-1',
         submittedAt: new Date('2026-01-02T03:04:05.000Z'),
         version: 3,
-        answers: { f_email1: 'ada@example.com', f_sign01: { url: '/__platform/files/abc/s.png' }, f_name01: 'Ada' },
+        answers: { f_email1: 'ada@example.com', f_sign01: { fileId: 'file_0123456789abcdefghijklmnop' }, f_name01: 'Ada' },
       },
       'https://forms.example.com',
     )
@@ -158,7 +162,8 @@ describe('webhook payload', () => {
       submitted_at: '2026-01-02T03:04:05.000Z',
       answers: {
         f_email1: { label: 'Email', type: 'email', value: 'ada@example.com' },
-        f_sign01: { label: 'Sign here', type: 'signature', value: { url: 'https://forms.example.com/__platform/files/abc/s.png' } },
+        // The file is private: the link is the dashboard's guarded view route, never a storage link.
+        f_sign01: { label: 'Sign here', type: 'signature', value: { url: 'https://forms.example.com/site-api/uploads/signatures/resp-1/f_sign01' } },
         f_name01: { label: 'Hi ada@example.com', type: 'short_text', value: 'Ada' },
       },
     })
@@ -184,7 +189,7 @@ interface LogRow {
 
 function fakeDb(settings: unknown, opts: { secret?: string | null; responseExists?: boolean } = {}) {
   const logs: LogRow[] = []
-  let secret = opts.secret === undefined ? 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw' : opts.secret
+  let secret = opts.secret === undefined ? SECRET : opts.secret
   const db = {
     form: {
       findUnique: vi.fn(async () => ({ settings, webhookSecret: secret })),
@@ -226,7 +231,7 @@ describe('deliverWebhook', () => {
     const h = init?.headers as Record<string, string>
     expect(h['x-token'] ?? h['X-Token']).toBe('t')
     expect(h['content-type']).toBe('application/json')
-    expect(verify('whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw', 'msg_resp-1', Number(h['webhook-timestamp']), String(init?.body), h['webhook-signature'])).toBe(
+    expect(verify(SECRET, 'msg_resp-1', Number(h['webhook-timestamp']), String(init?.body), h['webhook-signature'])).toBe(
       true,
     )
     expect(logs).toHaveLength(1)

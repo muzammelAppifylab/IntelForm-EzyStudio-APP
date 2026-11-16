@@ -62,6 +62,23 @@ function makeDb() {
   const query = async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const sql = strings.join('?');
     state.sql.push(sql.replace(/\s+/g, ' ').trim().slice(0, 60));
+    // The one insert statement: counter, close date and cap re-checked, auto-close, insert.
+    if (sql.includes('WITH f AS (') && sql.includes('INSERT INTO responses')) {
+      const s = state.settings as {responseCap: number | null; closeAt: string | null};
+      if (state.status !== 'live' || (s.closeAt && Date.parse(s.closeAt) <= NOW) || (s.responseCap !== null && state.responseCount >= s.responseCap)) {
+        return [];
+      }
+      // A failed insert undoes the whole statement (nothing counted).
+      if (state.failInsert) throw state.failInsert;
+      state.responseCount++;
+      if (s.responseCap !== null && state.responseCount >= s.responseCap) {
+        state.status = 'closed';
+        state.closedByCap = true;
+      }
+      const cols = ['form_version_id', 'answers', 'started_at', 'duration_ms', 'ttc', 'ip_hash', 'country', 'device', 'browser', 'browser_token', 'search_text', 'email_key'];
+      state.inserted.push({form_id: values[0], ...Object.fromEntries(cols.map((c, i) => [c, values[i + 2]]))});
+      return [{id: '00000000-0000-4000-8000-0000000000r1', submitted_at: new Date(NOW), settings: state.settings, status: state.status}];
+    }
     if (sql.includes('FROM forms f LEFT JOIN form_versions')) {
       return [
         {
@@ -212,6 +229,8 @@ describe('submit pipeline', () => {
     expect(row.search_text).toBe('Ada Lovelace\nada@example.com');
     expect(row.email_key).toBeNull();
     expect(state.responseCount).toBe(1);
+    // The form, the rate limit, the insert statement (no one-per checks are on): no interactive transaction.
+    expect(state.sql).toHaveLength(3);
     expect(queued).toEqual([{formId: FORM_ID, formTitle: 'Survey', responseId: '00000000-0000-4000-8000-0000000000r1', settings: state.settings}]);
   });
 

@@ -59,9 +59,12 @@ export const publicFormsRoutes = new Hono()
     try {
       const secret = requireSecret();
       const db = c.var.db;
-      await limitPublicGet(db, await callerKey(c, secret));
       const unlock = c.req.header(UNLOCK_HEADER);
-      const payload = await payloadForSlug(db, secret, c.req.param('slug'), unlock && unlock.length <= 400 ? unlock : null);
+      // The limit and the form in one trip; a 429 wins over whatever the form read found.
+      const [, payload] = await Promise.all([
+        limitPublicGet(db, await callerKey(c, secret)),
+        payloadForSlug(db, secret, c.req.param('slug'), unlock && unlock.length <= 400 ? unlock : null),
+      ]);
       if (!payload) throw notFound();
       return c.json(payload);
     } catch (err) {

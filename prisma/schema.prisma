@@ -81,6 +81,7 @@ model User {
   responseTablePrefs ResponseTablePref[]
   formPresence       FormPresence[]
   intelformSettings  IntelformSettings[]
+  intelformExports   IntelformExport[]
 
   @@index([status, id])
   @@map("users")
@@ -476,6 +477,8 @@ model Form {
   /// Kept on write by the submit and delete routes: the forms list never counts responses.
   responseCount      Int       @default(0) @map("response_count")
   lastResponseAt     DateTime? @map("last_response_at") @db.Timestamptz(3)
+  /// All-time starts, bumped with the form_event_counts upsert (respondent/events.ts).
+  startsTotal        Int       @default(0) @map("starts_total")
   createdById        Int?      @map("created_by")
   updatedById        Int?      @map("updated_by")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -493,6 +496,8 @@ model Form {
   userPrefs         UserFormPref[]
   tablePrefs        ResponseTablePref[]
   presence          FormPresence[]
+  responseHours     FormResponseHour[]
+  exports           IntelformExport[]
 
   @@index([updatedAt(sort: Desc), id(sort: Desc)])
   @@index([createdAt(sort: Desc), id(sort: Desc)])
@@ -611,6 +616,95 @@ model FormEventCount {
 
   @@id([formId, bucket])
   @@map("form_event_counts")
+}
+
+/// Responses per form per hour, kept by the responses_rollups_* triggers (SQL). The dashboard
+/// strip and "new this week" read these, never the responses table.
+model FormResponseHour {
+  formId String   @map("form_id") @db.Uuid
+  hour   DateTime @db.Timestamptz(3)
+  n      Int      @default(0)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([formId, hour])
+  @@index([hour])
+  @@map("form_response_hours")
+}
+
+/// One contact (responses grouped by contact_key), kept by the responses_rollups_* triggers
+/// (SQL). Lower-case name and search trigram indexes are expression indexes in the migration.
+model Contact {
+  key       String    @id @db.VarChar(260)
+  n         Int
+  firstSeen DateTime  @map("first_seen") @db.Timestamptz(3)
+  lastSeen  DateTime  @map("last_seen") @db.Timestamptz(3)
+  email     String?   @db.VarChar(254)
+  name      String?   @db.VarChar(200)
+  phone     String?   @db.VarChar(20)
+  country   String?   @db.VarChar(2)
+  formIds   String[]  @default([]) @map("form_ids") @db.Uuid
+  formCount Int       @default(0) @map("form_count")
+
+  @@index([lastSeen(sort: Desc), key], map: "contacts_last_seen_idx")
+  @@index([firstSeen(sort: Desc), lastSeen(sort: Desc), key], map: "contacts_first_seen_idx")
+  @@index([email, lastSeen(sort: Desc), key], map: "contacts_email_idx")
+  @@index([n(sort: Desc), lastSeen(sort: Desc), key], map: "contacts_n_idx")
+  @@index([country], map: "contacts_country_idx")
+  @@index([formIds], map: "contacts_form_ids_idx", type: Gin)
+  @@map("contacts")
+}
+
+/// A stored file (a signature) whose response is gone: the intelform-file-cleanup job removes
+/// it from storage. Filled by the responses delete trigger (SQL).
+model IntelformFileTrash {
+  fileId    String   @id @map("file_id") @db.VarChar(128)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  attempts  Int      @default(0)
+
+  @@index([createdAt])
+  @@map("intelform_file_trash")
+}
+
+/// An export built by the intelform-exports job: `responses` (one form's CSV), `all` (every
+/// form, a ZIP) or `contacts` (CSV). The file is kept in parts until a day after it is ready.
+model IntelformExport {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      Int       @map("user_id")
+  kind        String    @db.VarChar(16)
+  formId      String?   @map("form_id") @db.Uuid
+  params      Json      @default("{}") @db.JsonB
+  /// `running`, `ready` or `failed` (CHECK in SQL).
+  status      String    @default("running") @db.VarChar(10)
+  state       Json      @default("{}") @db.JsonB
+  rows        Int       @default(0)
+  bytes       BigInt    @default(0)
+  parts       Int       @default(0)
+  fileName    String    @map("file_name") @db.VarChar(200)
+  contentType String    @map("content_type") @db.VarChar(60)
+  error       String?   @db.VarChar(300)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  form      Form?                 @relation(fields: [formId], references: [id], onDelete: Cascade)
+  partsData IntelformExportPart[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt])
+  @@index([formId])
+  @@map("intelform_exports")
+}
+
+model IntelformExportPart {
+  exportId String @map("export_id") @db.Uuid
+  seq      Int
+  data     Bytes
+
+  export IntelformExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
+
+  @@id([exportId, seq])
+  @@map("intelform_export_parts")
 }
 
 /// One webhook POST (a response, a test send or a resend). Goes with its response.

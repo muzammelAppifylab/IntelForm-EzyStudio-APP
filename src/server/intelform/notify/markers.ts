@@ -29,6 +29,25 @@ export async function isDone(db: PrismaClient, key: string): Promise<boolean> {
   return !!row
 }
 
+/** Which of these markers exist: ONE query for a whole set (a job's recipients). */
+export async function doneSet(db: PrismaClient, keys: readonly string[]): Promise<Set<string>> {
+  if (!keys.length) return new Set()
+  const rows = await db.$queryRaw<{ key: string }[]>`
+    SELECT DISTINCT key FROM intelform_rate_limits WHERE key = ANY(${[...keys]}::text[])
+  `
+  return new Set(rows.map((r) => r.key))
+}
+
+/** Writes several markers in ONE statement. */
+export async function markAllDone(db: PrismaClient, keys: readonly string[]): Promise<void> {
+  if (!keys.length) return
+  await db.$executeRaw`
+    INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
+    SELECT k, now(), ${DONE_SECONDS}::int, 1 FROM unnest(${[...keys]}::text[]) AS k
+    ON CONFLICT (key, window_start) DO NOTHING
+  `
+}
+
 export async function markDone(db: PrismaClient, key: string): Promise<void> {
   await db.$executeRaw`
     INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
@@ -37,16 +56,34 @@ export async function markDone(db: PrismaClient, key: string): Promise<void> {
   `
 }
 
-/** Deletes ended windows (and old done-markers), at most `limit` rows a call. */
-export async function sweepWindows(db: PrismaClient, limit = 5000): Promise<number> {
-  return db.$executeRaw`
-    DELETE FROM intelform_rate_limits WHERE (key, window_start) IN (
-      SELECT key, window_start FROM intelform_rate_limits
-      WHERE window_start < now() - interval '1 hour'
-        AND window_start + make_interval(secs => window_seconds) < now()
-      LIMIT ${limit}
-    )
-  `
+/** Rows deleted per statement by the sweep. */
+export const SWEEP_BATCH = 5000
+
+/**
+ * Deletes ended windows (and old done-markers) in bounded batches of `batch` rows, until a
+ * batch comes back short or the time budget is spent (the hourly job keeps up however busy the
+ * public forms are). Returns how many rows went.
+ */
+export async function sweepWindows(
+  db: PrismaClient,
+  opts: { batch?: number; budgetMs?: number; now?: () => number } = {},
+): Promise<number> {
+  const batch = opts.batch ?? SWEEP_BATCH
+  const now = opts.now ?? Date.now
+  const until = now() + (opts.budgetMs ?? 25_000)
+  let total = 0
+  for (;;) {
+    const n = await db.$executeRaw`
+      DELETE FROM intelform_rate_limits WHERE (key, window_start) IN (
+        SELECT key, window_start FROM intelform_rate_limits
+        WHERE window_start < now() - interval '1 hour'
+          AND window_start + make_interval(secs => window_seconds) < now()
+        LIMIT ${batch}
+      )
+    `
+    total += n
+    if (n < batch || now() >= until) return total
+  }
 }
 
 export const doneKey = (step: string, responseId: string, extra?: string | number) =>

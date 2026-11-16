@@ -4,21 +4,24 @@ import {contactsCsvQuery, contactsListQuery, deleteContactsInput} from '../../sr
 import {contentDisposition, CSV_BOM, csvEscape, csvRow} from '../../src/server/intelform/contacts/csv';
 import {CSV_KEYS, LIST_KEYS, parseWith, rawQuery} from '../../src/server/intelform/contacts/input';
 import {
+  clearContactsOverview,
   contactDetail,
-  contactsCsvChunks,
+  contactsCsvBatch,
   contactsCsvFilename,
+  contactsCsvHeader,
   contactsOverview,
   deleteContacts,
   listContacts,
   toRow,
 } from '../../src/server/intelform/contacts/query';
 import {
-  contactsCte,
+  afterFragment,
   dayRange,
+  decodeContactCursor,
+  encodeContactCursor,
   filterFragment,
   likePattern,
   orderFragment,
-  platformFileId,
   searchPatterns,
 } from '../../src/server/intelform/contacts/sql';
 import {intlKnowsZone, safeTz, todayIn} from '../../src/server/intelform/contacts/tz';
@@ -111,34 +114,39 @@ describe('contacts sql pieces', () => {
     expect(dayRange(Prisma.sql`x`, undefined, undefined, 'UTC')).toEqual([]);
   });
 
-  it('orders from a fixed map, empty values last', () => {
-    expect(orderFragment('name', 'asc').sql).toBe('lower(c.name) ASC NULLS LAST, c.last_seen DESC, c.key ASC');
-    expect(orderFragment('responses', 'desc').sql).toBe('c.n DESC NULLS LAST, c.last_seen DESC, c.key ASC');
+  it('orders from a fixed map (one index each), empty values last, then latest activity, then the key', () => {
+    expect(orderFragment('name', 'asc').sql).toBe('(lower(c.name) IS NULL), lower(c.name) ASC, c.last_seen DESC, c.key ASC');
+    expect(orderFragment('responses', 'desc').sql).toBe('c.n DESC, c.last_seen DESC, c.key ASC');
     // An unknown sort (can't pass the schema, but just in case) falls back to last activity.
-    expect(orderFragment('nope' as never, 'desc').sql).toContain('c.last_seen DESC NULLS LAST');
+    expect(orderFragment('nope' as never, 'desc').sql).toBe('c.last_seen DESC, c.key ASC');
     expect(orderFragment('email', 'asc').values).toEqual([]);
   });
 
-  it('narrows the contacts CTE when asked', () => {
-    const cte = contactsCte(Prisma.sql`contact_key = ${'e:a@example.com'}`);
-    expect(cte.sql).toContain('GROUP BY contact_key');
-    expect(cte.values).toEqual(['e:a@example.com']);
-  });
-
-  it('reads platform file ids out of signature URLs', () => {
-    expect(platformFileId('/__platform/files/abc_123/signature.png')).toBe('abc_123');
-    expect(platformFileId('https://evil.example/__platform/files/x/y')).toBeNull();
-    expect(platformFileId('data:image/png;base64,AAA')).toBeNull();
-    expect(platformFileId(null)).toBeNull();
+  it('pages by keyset: after the cursor, empty values last', () => {
+    const T = '2026-01-01T00:00:00.000Z';
+    const after = afterFragment('last_seen', 'desc', {v: T, t: T, k: 'e:a@x.io'});
+    expect(after.sql).toBe('(c.last_seen < ?::timestamptz OR (c.last_seen = ?::timestamptz AND c.key > ?))');
+    expect(after.values).toEqual(['2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'e:a@x.io']);
+    const named = afterFragment('name', 'asc', {v: 'ada', t: T, k: 'e:a@x.io'});
+    expect(named.sql).toContain('lower(c.name) IS NULL OR lower(c.name) >');
+    expect(named.sql).toContain('c.last_seen < ?::timestamptz');
+    expect(afterFragment('name', 'asc', {v: null, t: T, k: 'k'}).sql).toBe(
+      '(lower(c.name) IS NULL AND (c.last_seen < ?::timestamptz OR (c.last_seen = ?::timestamptz AND c.key > ?)))'
+    );
+    // Names are any text: the cursor is UTF-8 safe.
+    const cursor = {v: 'zoë 李', t: T, k: 'e:ada@example.com'};
+    expect(decodeContactCursor(encodeContactCursor(cursor))).toEqual(cursor);
+    expect(decodeContactCursor('not-json')).toBeNull();
+    expect(decodeContactCursor(undefined)).toBeNull();
   });
 });
 
 describe('contacts query strings', () => {
   it('turns repeated keys into arrays and drops empty values', () => {
-    const raw = rawQuery({form: FORM, country: ['GB', 'FR'], q: '', has: ['', 'phone'], page: '2', extra: 'x'}, LIST_KEYS);
-    expect(raw).toEqual({form: [FORM], country: ['GB', 'FR'], has: ['phone'], page: '2'});
+    const raw = rawQuery({form: FORM, country: ['GB', 'FR'], q: '', has: ['', 'phone'], cursor: 'abc', extra: 'x'}, LIST_KEYS);
+    expect(raw).toEqual({form: [FORM], country: ['GB', 'FR'], has: ['phone'], cursor: 'abc'});
     const parsed = parseWith(contactsListQuery, raw);
-    expect(parsed.ok && parsed.data).toMatchObject({form: [FORM], page: 2, sort: 'last_seen', dir: 'desc', segment: 'all'});
+    expect(parsed.ok && parsed.data).toMatchObject({form: [FORM], cursor: 'abc', sort: 'last_seen', dir: 'desc', segment: 'all'});
   });
 
   it('refuses inverted ranges and bad values with field messages', () => {
@@ -229,31 +237,31 @@ describe('contacts queries (fake database)', () => {
     expect(row.forms.map(f => f.id)).toEqual(['f1', 'f2', 'f3']);
   });
 
-  it('lists one page with the total and each contact’s forms', async () => {
+  it('lists one page from the contacts table by keyset, with each contact’s forms and no count', async () => {
+    const many = Array.from({length: 51}, (_, i) => ({...ada, key: `e:p${i}@x.io`, sort_v: `p${i}`, sort_t: '2026-11-01T10:00:00.000Z'}));
     const {db, calls} = fakeDb([
-      [{...ada, total: 51}],
+      many,
       [
-        {key: ada.key, id: 'f2', title: 'Event signup', status: 'live', responses: 1},
-        {key: ada.key, id: 'f1', title: 'Survey', status: 'closed', responses: 1},
+        {key: 'e:p0@x.io', id: 'f2', title: 'Event signup', status: 'live', responses: 1},
+        {key: 'e:p0@x.io', id: 'f1', title: 'Survey', status: 'closed', responses: 1},
       ],
     ]);
-    const res = await listContacts(db, listQ({page: '2', sort: 'name', dir: 'asc'}), 'UTC');
-    expect(res).toMatchObject({total: 51, page: 2, pageSize: 50});
+    const res = await listContacts(db, listQ({sort: 'name', dir: 'asc'}), 'UTC');
+    expect(res.contacts).toHaveLength(50);
     expect(res.contacts[0]!.forms.map(f => f.title)).toEqual(['Event signup', 'Survey']);
-    expect(calls[0]!.sql).toContain('LIMIT');
-    expect(calls[0]!.values.slice(-2)).toEqual([50, 50]);
-    expect(calls[0]!.sql).toContain('lower(c.name) ASC NULLS LAST');
-  });
-
-  it('counts separately past the last page', async () => {
-    const {db, calls} = fakeDb([[], [{total: 7}]]);
-    const res = await listContacts(db, listQ({page: '9'}), 'UTC');
-    expect(res.total).toBe(7);
-    expect(res.contacts).toEqual([]);
-    expect(calls).toHaveLength(2);
+    expect(decodeContactCursor(res.nextCursor!)).toEqual({v: 'p49', t: '2026-11-01T10:00:00.000Z', k: 'e:p49@x.io'});
+    expect(calls[0]!.sql).toContain('FROM contacts c');
+    expect(calls[0]!.sql).not.toMatch(/count\(\*\) OVER|OFFSET|GROUP BY/);
+    expect(calls[0]!.values.at(-1)).toBe(51);
+    // The next page starts after that cursor.
+    const next = fakeDb([[], []]);
+    const last = await listContacts(next.db, listQ({sort: 'name', dir: 'asc', cursor: res.nextCursor}), 'UTC');
+    expect(last.nextCursor).toBeNull();
+    expect(next.calls[0]!.values).toContain('p49');
   });
 
   it('sums the strip and keeps the top 3 forms', async () => {
+    await clearContactsOverview();
     const forms = [5, 4, 3, 2].map((n, i) => ({id: `f${i}`, title: `F${i}`, status: 'live', contacts: n}));
     const {db} = fakeDb([[{total: 3, new_week: 2, returning: 1, with_phone: 2}], [{code: 'US', contacts: 2}], forms]);
     const o = await contactsOverview(db);
@@ -264,6 +272,7 @@ describe('contacts queries (fake database)', () => {
   });
 
   it('says 0% with a phone when there are no contacts', async () => {
+    await clearContactsOverview();
     const {db} = fakeDb([[{total: 0, new_week: 0, returning: 0, with_phone: 0}], [], []]);
     expect((await contactsOverview(db)).strip.withPhonePct).toBe(0);
   });
@@ -307,13 +316,14 @@ describe('contacts queries (fake database)', () => {
       [{form_id: 'f1'}, {form_id: 'f2'}],
       [{id: 'f1'}, {id: 'f2'}],
       [
-        {form_id: 'f1', key: ada.key, urls: '/__platform/files/sig1/signature.png'},
-        {form_id: 'f2', key: ada.key, urls: ''},
-        {form_id: 'f2', key: 'p:+15555550123', urls: null},
+        {form_id: 'f1', key: ada.key},
+        {form_id: 'f2', key: ada.key},
+        {form_id: 'f2', key: 'p:+15555550123'},
       ],
     ]);
     const res = await deleteContacts(db, [ada.key, ada.key, 'p:+15555550123', 'e:nobody@example.com']);
-    expect(res).toEqual({contacts: 2, responses: 3, fileIds: ['sig1']});
+    // Signature files go to the file trash in the delete trigger, not through this code.
+    expect(res).toEqual({contacts: 2, responses: 3});
     expect(calls[0]!.values[0]).toEqual([ada.key, 'p:+15555550123', 'e:nobody@example.com']);
     expect(calls[1]!.sql).toContain('FOR UPDATE');
     expect(calls[3]!.sql).toContain('UPDATE forms');
@@ -325,28 +335,20 @@ describe('contacts queries (fake database)', () => {
 
   it('deletes nothing for unknown contacts', async () => {
     const {db, calls} = fakeDb([[]]);
-    expect(await deleteContacts(db, ['e:nobody@example.com'])).toEqual({contacts: 0, responses: 0, fileIds: []});
+    expect(await deleteContacts(db, ['e:nobody@example.com'])).toEqual({contacts: 0, responses: 0});
     expect(calls).toHaveLength(1);
   });
 
-  it('streams the CSV in batches, BOM and header first', async () => {
-    const row = {name: 'Ada', email: 'ada@example.com', phone: '+447700900111', country: 'FR', n: 2, forms: 'A; B', first_txt: '2026-01-01 10:00:00', last_txt: '2026-11-01 10:00:00'};
+  it('writes the CSV a batch at a time (the export job), BOM and header first, titles joined in one query', async () => {
+    const row = {key: ada.key, sort_v: 'x', name: 'Ada', email: 'ada@example.com', phone: '+447700900111', country: 'FR', n: 2, forms: 'A; B', first_txt: '2026-01-01 10:00:00', last_txt: '2026-11-01 10:00:00'};
     const {db, calls} = fakeDb([[row]]);
     const q = contactsCsvQuery.parse({key: [ada.key]});
-    const chunks: string[] = [];
-    for await (const chunk of contactsCsvChunks(db, q, 'UTC')) chunks.push(chunk);
-    expect(chunks[0]).toBe(`${CSV_BOM}Name,Email,Phone,Country,Responses,Forms,First seen,Last active\r\n`);
-    expect(chunks[1]).toBe("Ada,ada@example.com,'+447700900111,FR,2,A; B,2026-01-01 10:00:00,2026-11-01 10:00:00\r\n");
+    expect(contactsCsvHeader()).toBe(`${CSV_BOM}Name,Email,Phone,Country,Responses,Forms,First seen,Last active\r\n`);
+    const b = await contactsCsvBatch(db, q, 'UTC', null);
+    expect(b.text).toBe("Ada,ada@example.com,'+447700900111,FR,2,A; B,2026-01-01 10:00:00,2026-11-01 10:00:00\r\n");
+    expect(b.next).toBeNull();
     expect(calls).toHaveLength(1);
     expect(calls[0]!.values).toContainEqual([ada.key]);
-  });
-
-  it('stops streaming when the download is aborted', async () => {
-    const {db, calls} = fakeDb([]);
-    const q = contactsCsvQuery.parse({});
-    const chunks: string[] = [];
-    for await (const chunk of contactsCsvChunks(db, q, 'UTC', {aborted: () => true})) chunks.push(chunk);
-    expect(chunks).toHaveLength(1);
-    expect(calls).toHaveLength(0);
+    expect(calls[0]!.sql).not.toContain('OFFSET');
   });
 });

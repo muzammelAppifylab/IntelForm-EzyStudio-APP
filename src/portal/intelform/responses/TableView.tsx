@@ -24,7 +24,8 @@ import {columnLabel, resolveColumns} from './columns';
 import {useConfirmDelete} from './ConfirmDelete';
 import {countryLabel, deviceLabel, formatDateTime, formatDuration, formatNumber} from './format';
 import {CalendarRange} from './RangePicker';
-import {CLEAR_TABLE_FILTERS, csvUrl, isTableFiltered, sortPatch, type SearchPatch, type TableState} from './state';
+import {CLEAR_TABLE_FILTERS, exportQuery, isTableFiltered, sortPatch, type SearchPatch, type TableState} from './state';
+import {useExport} from '../lib/exports';
 import {ColumnsMenu, FilterMenu} from './TableMenus';
 
 export interface TableViewProps {
@@ -77,6 +78,7 @@ export function TableView({formId, state, update, openResponse, activeResponseId
   const fields = first?.fields;
   const fieldMap = useMemo(() => new Map((fields ?? []).map(f => [f.id, f])), [fields]);
   const columns = useMemo(() => resolveColumns(fields ?? [], prefs.data?.columns ?? null), [fields, prefs.data?.columns]);
+  const exporter = useExport();
   // "View all" (?has=) always shows that question's column.
   const visible = columns.filter(c => c.visible || c.id === state.has);
 
@@ -169,10 +171,15 @@ export function TableView({formId, state, update, openResponse, activeResponseId
             onChange={cols => savePrefs.mutate(cols)}
             onReset={() => savePrefs.mutate(resolveColumns(first.fields, null))}
           />
-          <a className={buttonClass({variant: 'secondary', size: 'sm'})} href={csvUrl(formId, state)} download>
-            <Icon name="download" size={16} />
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="download"
+            pending={exporter.pending}
+            pendingLabel="Exporting…"
+            onClick={() => void exporter.run({kind: 'responses', formId, query: exportQuery(state)})}>
             Export CSV
-          </a>
+          </Button>
         </div>
       </div>
 
@@ -181,13 +188,18 @@ export function TableView({formId, state, update, openResponse, activeResponseId
       {selected.size > 0 && (
         <div role="region" aria-label="Selection" className="responses-selection">
           <span className="responses-selection-count">{formatNumber(selected.size)} selected</span>
-          <a className={buttonClass({variant: 'secondary', size: 'sm'})} href={csvUrl(formId, state, ids)} download>
-            <Icon name="download" size={16} />
+          <Button
+            variant="secondary"
+            size="sm"
+            icon="download"
+            pending={exporter.pending}
+            pendingLabel="Exporting…"
+            onClick={() => void exporter.run({kind: 'responses', formId, query: exportQuery(state, ids)})}>
             Export selected
-          </a>
+          </Button>
           {canDelete && (
             <Button
-              variant="secondary"
+              variant="danger"
               size="sm"
               icon="trash"
               onClick={() =>

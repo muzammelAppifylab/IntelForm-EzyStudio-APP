@@ -130,12 +130,21 @@ export function summaryQueryString(s: SummaryState) {
 
 export const formResponsesPath = (formId: string) => `${RESPONSES_API}/forms/${encodeURIComponent(formId)}`;
 
-/** The CSV download: the table's filters and sort, or only the selected rows (in the table's sort). */
-export function csvUrl(formId: string, t: TableState, ids: readonly string[] = []) {
-  const qs = ids.length
-    ? toQueryString({tz: browserTz, ids, sort: t.sort === 'submitted_at' ? undefined : t.sort, dir: t.dir === 'desc' ? undefined : t.dir})
-    : tableQueryString(t);
-  return `${formResponsesPath(formId)}/responses.csv${qs}`;
+/**
+ * The CSV export's query (POST /site-api/exports, kind `responses`): the table's filters, or only
+ * the selected rows. Exports are always newest first (the order the database keeps them in).
+ */
+export function exportQuery(t: TableState, ids: readonly string[] = []): Record<string, string | string[]> {
+  const raw: Record<string, string | readonly string[] | undefined> = ids.length
+    ? {tz: browserTz, ids}
+    : {q: t.q || undefined, from: t.from, to: t.to, tz: browserTz, filter: t.filter, has: t.has};
+  const out: Record<string, string | string[]> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (Array.isArray(v)) {
+      if (v.length) out[k] = [...v];
+    } else if (typeof v === 'string' && v !== '') out[k] = v;
+  }
+  return out;
 }
 
 /** Summary → table: the chart's date range is kept so the counts match; other table filters reset. */

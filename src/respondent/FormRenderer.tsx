@@ -1,19 +1,21 @@
-import {type ReactNode, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import type {FormDefinition} from '../lib/intelform/form/definition';
 import {validateSubmission} from '../lib/intelform/form/logic';
 import type {StepSound} from '../lib/intelform/form/settings';
 import type {FormTheme} from '../lib/intelform/form/theme-core';
 import {TtcClock, useFormEngine} from './engine';
-import {AllAtOnce} from './layouts/AllAtOnce';
 import type {FormErrorAction, LayoutContext, SubmitOutcome} from './layouts/context';
-import {OneAtATime} from './layouts/OneAtATime';
-import {Paged} from './layouts/Paged';
 import {redirectAfterSubmit} from './redirect';
 import {EndScreenView, StartScreen} from './screens';
 import {FormShell} from './Shell';
 import {playStepSound} from './sound';
 import {cx} from './util';
+
+// Each form uses one layout: only that one is downloaded.
+const AllAtOnce = lazy(() => import('./layouts/AllAtOnce').then(m => ({default: m.AllAtOnce})));
+const OneAtATime = lazy(() => import('./layouts/OneAtATime').then(m => ({default: m.OneAtATime})));
+const Paged = lazy(() => import('./layouts/Paged').then(m => ({default: m.Paged})));
 
 /**
  * Respondent renderer: one definition, three layouts (all at once, section by section, one at
@@ -202,9 +204,13 @@ export function FormRenderer(props: FormRendererProps) {
             }}
           />
         )}
-        {shownPhase === 'form' && def.layout === 'one_at_a_time' && <OneAtATime ctx={ctx} fixedNav={shellMode === 'page'} />}
-        {shownPhase === 'form' && def.layout === 'section_by_section' && <Paged ctx={ctx} />}
-        {shownPhase === 'form' && def.layout === 'all_at_once' && <AllAtOnce ctx={ctx} />}
+        {shownPhase === 'form' && (
+          <Suspense fallback={<div className="rf-field-loading" aria-busy="true" />}>
+            {def.layout === 'one_at_a_time' && <OneAtATime ctx={ctx} fixedNav={shellMode === 'page'} />}
+            {def.layout === 'section_by_section' && <Paged ctx={ctx} />}
+            {def.layout === 'all_at_once' && <AllAtOnce ctx={ctx} />}
+          </Suspense>
+        )}
         {shownPhase === 'end' && <EndScreenView screen={def.endScreen} labels={engine.labels} pipe={engine.pipe} center={center} embedded={!!embed} />}
         {props.footer}
       </div>

@@ -7,7 +7,8 @@ import {PipeInput} from '../pipe/PipeInput';
 import {useBuilder, useBuilderStore} from '../store';
 import {clip, endButtonFrom, endButtonUrlError, LAYOUT_HELP} from './model';
 import {PanelImage} from './PanelImage';
-import {Note, NumberRow, PanelSection, PipeLabel, SwitchRow, TextRow} from './parts';
+import {Note, NumberRow, PanelSection, PipeLabel, SwitchRow, TextRow} from '../controls';
+import './panel.css';
 
 /** With nothing selected: form-level options (layout), plus the start and end screens. */
 export function FormPanel({focus}: {focus: 'start' | 'end' | null}) {

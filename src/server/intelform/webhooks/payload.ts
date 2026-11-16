@@ -1,10 +1,11 @@
 import type { FormDefinition, FormField } from '../../../lib/intelform/form/definition'
 import { interpolate } from '../../../lib/intelform/form/logic'
-import { absoluteUrl, answeredFields } from '../notify/answers'
+import { answeredFields, signatureLinkText } from '../notify/answers'
 
 /**
  * The webhook body (PRD): form id, version, response id, submitted_at, and the answers keyed by
- * field id with label and type. Signature answers carry an absolute URL.
+ * field id with label and type. Signature answers carry an absolute link to the dashboard's
+ * guarded view route (the file is private; opening it needs a sign-in).
  */
 export interface WebhookAnswer {
   label: string
@@ -40,7 +41,9 @@ export function webhookPayload(form: PayloadForm, def: FormDefinition, r: Payloa
   for (const f of answeredFields(def, r.answers)) {
     let value = r.answers[f.id]
     if (f.type === 'signature' && value && typeof value === 'object') {
-      value = { url: absoluteUrl(String((value as { url?: unknown }).url ?? ''), origin) }
+      // The file is private: the link is the dashboard's guarded view route (a sign-in with
+      // site:response:read opens it), never a storage link anyone holding the payload could open.
+      value = { url: signatureLinkText(value, r.id, f.id, origin) }
     }
     answers[f.id] = { label: interpolate(f.label, def, r.answers), type: f.type, value }
   }

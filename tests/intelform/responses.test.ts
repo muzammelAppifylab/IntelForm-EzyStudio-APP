@@ -4,7 +4,7 @@ import type {SummaryQuery} from '../../src/lib/intelform/api-responses';
 import {buildCatalog, parseField, type FormCatalog} from '../../src/server/intelform/responses/catalog';
 import {csvFilename, dataRow, headerRow} from '../../src/server/intelform/responses/csv';
 import {contentDisposition, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
-import {buildSearchText, displayAnswer, fileIdFromUrl, storedSignatureUrl} from '../../src/server/intelform/responses/format';
+import {buildSearchText, displayAnswer, signatureLinkFor} from '../../src/server/intelform/responses/format';
 import {
   addDays,
   containment,
@@ -120,7 +120,8 @@ function catalog(): FormCatalog {
 }
 
 const field = (id: string) => catalog().byId.get(id)!;
-const SIG = '/__platform/files/fl_abc123/signature.png';
+const SIG_ID = 'file_0123456789abcdefghijklmnop';
+const SIG = `/__platform/files/${SIG_ID}/signature.png`;
 
 // ------------------------------------------------------------------ Catalog
 
@@ -169,25 +170,25 @@ describe('catalog', () => {
 // ------------------------------------------------------------------ Formatting
 
 describe('answers', () => {
-  it('links only files this site stored', () => {
+  it('links only files this site stored, through the guarded view route', () => {
     const sign = field(Q.sign).display;
-    expect(displayAnswer(sign, {url: SIG})).toEqual({
-      text: 'Signed',
-      url: SIG,
-    });
-    expect(storedSignatureUrl({url: SIG})).toBe(SIG);
+    const view = `/site-api/uploads/signatures/r1/${Q.sign}`;
+    // Stored as a private {fileId}; older answers as a {url} of a file this site stored.
+    expect(displayAnswer(sign, {fileId: SIG_ID}, 'r1')).toEqual({text: 'Signed', url: view});
+    expect(displayAnswer(sign, {url: SIG}, 'r1')).toEqual({text: 'Signed', url: view});
+    // Without a response id there is nothing to link: just "Signed", never the file.
+    expect(displayAnswer(sign, {fileId: SIG_ID})).toEqual({text: 'Signed'});
+    expect(signatureLinkFor({url: SIG}, 'r1', Q.sign)).toBe(view);
     for (const url of [
       'https://tracker.example/pixel.png',
       '/__platform/files/../x.png',
       'javascript:alert(1)',
       'data:image/png;base64,AA',
     ]) {
-      expect(displayAnswer(sign, {url}).url, url).toBeUndefined();
+      expect(displayAnswer(sign, {url}, 'r1').url, url).toBeUndefined();
     }
     // A text answer kept when the field's type changed to signature with the same id.
     expect(displayAnswer(sign, 'hello')).toEqual({text: 'hello'});
-    expect(fileIdFromUrl(SIG)).toBe('fl_abc123');
-    expect(fileIdFromUrl('https://x.example/__platform/files/a/b')).toBeNull();
   });
 
   it('formats every kind of answer as text', () => {
@@ -237,7 +238,9 @@ describe('csv', () => {
     expect(header.startsWith('Your name (first name),Your name (last name),Favourite fruit,')).toBe(true);
     expect(header).toContain('Removed question (deleted)');
     expect(header.endsWith('Submitted at,Completion time (seconds),Device,Browser,Country,Response ID\r\n')).toBe(true);
-    const row = dataRow(cat, {
+    const row = dataRow(
+      cat,
+      {
       id: 'r1',
       submitted: '2026-01-02 03:04:05',
       duration_ms: 12_345,
@@ -247,13 +250,17 @@ describe('csv', () => {
       answers: {
         [Q.name]: {first: 'Ada', last: 'Lovelace'},
         [Q.choice]: {option: OPT.c},
-        [Q.sign]: {url: SIG},
+        [Q.sign]: {fileId: SIG_ID},
         [Q.gone]: '=1+1',
       },
-    });
+      },
+      'https://forms.example.com'
+    );
     const cells = row.trimEnd().split(',');
     expect(cells.slice(0, 3)).toEqual(['Ada', 'Lovelace', 'Cherry']);
-    expect(row).toContain(SIG);
+    // The signature cell is the dashboard's guarded link (a sign-in opens it), never the file.
+    expect(row).toContain(`https://forms.example.com/site-api/uploads/signatures/r1/${Q.sign}`);
+    expect(row).not.toContain('__platform');
     expect(row).toContain("'=1+1");
     expect(row.endsWith('2026-01-02 03:04:05,12.3,desktop,Firefox,DE,r1\r\n')).toBe(true);
     // Same number of cells in the header and a row.

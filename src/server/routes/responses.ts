@@ -4,7 +4,6 @@ import * as z from 'zod';
 
 import {
   bulkDeleteInput,
-  responsesCsvQuery,
   responsesFilterQuery,
   summaryQuery,
   tablePrefsInput,
@@ -12,35 +11,31 @@ import {
   type TableColumnPref,
   type TablePrefsResponse,
 } from '../../lib/intelform/api-responses';
-import {deleteFile} from '../../platform/files';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
 import {GONE, loadCatalog} from '../intelform/responses/catalog';
-import {byteStream, csvFilename, formCsvChunks} from '../intelform/responses/csv';
-import {contentDisposition} from '../intelform/responses/csv-text';
-import {exportAllResponsesZip} from '../intelform/responses/export-all';
-import {decodeCursor, safeTz, todayIn} from '../intelform/responses/query';
-import {hitRateLimit} from '../intelform/responses/rate-limit';
-import {formSummary, SummaryRangeError} from '../intelform/responses/summary';
+import {decodeCursor} from '../intelform/responses/query';
+import {cachedFormSummary, clearSummaryCache, SummaryRangeError} from '../intelform/responses/summary';
 import {deleteResponses, listResponses, responseDetail} from '../intelform/responses/table';
+import {clearContactsOverview} from '../intelform/contacts/query';
+import {scheduleFileCleanup} from '../intelform/uploads/trash';
 
 /**
  * `/site-api/responses/*`: a form's responses (IntelForm's Responses tab).
  *
  *   GET    /forms/:id/responses              table page: filters, search, sort, keyset `cursor` (50 rows)
- *   GET    /forms/:id/responses.csv          CSV, streamed: the table's filters and sort, or `ids`
  *   GET    /forms/:id/responses/prefs        this user's table columns
  *   PUT    /forms/:id/responses/prefs
  *   POST   /forms/:id/responses/bulk-delete  {ids}
  *   GET    /forms/:id/responses/:rid         the drawer: answers as submitted, prev / next
  *   DELETE /forms/:id/responses/:rid
- *   GET    /forms/:id/summary                aggregates per question, funnel, daily series
- *   GET    /export-all.zip                   every form's CSV in one ZIP (Settings → Data)
+ *   GET    /forms/:id/summary                aggregates per question, funnel, daily series (cached 5 min)
+ *
+ * CSV and ZIP exports are built by a background job: POST /site-api/exports (routes/exports.ts).
  *
  * The paths are IntelForm's `/api/forms/:id/...` ones under this mount, so the portal swaps
  * `/api/` for `/site-api/responses/`. Query strings: see src/lib/intelform/api-responses.ts
- * (repeated keys for `filter` and `ids`). Reading needs RESPONSE_READ, deleting
- * RESPONSE_DELETE, the all-forms ZIP APP_SETTINGS (it was IntelForm's settings.manage).
+ * (repeated keys for `filter` and `ids`). Reading needs RESPONSE_READ, deleting RESPONSE_DELETE.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -100,21 +95,12 @@ const uuidParam = (c: Context, name: string): string | null => {
   return v && UUID.test(v) ? v.toLowerCase() : null;
 };
 
-/** Background work after the answer (file removals); runs inline where there is no execution context. */
-function afterResponse(c: Context, work: Promise<unknown>) {
-  const settled = work.catch(err => console.error(`responses: cleanup failed: ${err instanceof Error ? err.message : 'error'}`));
-  try {
-    c.executionCtx.waitUntil(settled);
-  } catch {
-    void settled;
-  }
-}
-
-/** Removes stored files, a few at a time. Best effort: a failure leaves an orphaned file, never a broken answer. */
-async function removeFiles(requestUrl: string, ids: readonly string[]) {
-  for (let i = 0; i < ids.length; i += 5) {
-    await Promise.allSettled(ids.slice(i, i + 5).map(id => deleteFile(requestUrl, id)));
-  }
+/**
+ * After responses were deleted: the cached summary and contacts strip go, and the cleanup job
+ * removes their signature files (the delete trigger put them in the file trash).
+ */
+async function afterDelete(c: Context, formId: string) {
+  await Promise.all([clearSummaryCache(formId), clearContactsOverview(), scheduleFileCleanup(c.req.url)]);
 }
 
 const gone = (c: Context) => c.json(problem('not_found', GONE), 404);
@@ -200,38 +186,6 @@ export const responsesRoutes = new Hono()
     }
   )
 
-  .get(
-    '/forms/:id/responses.csv',
-    query(responsesCsvQuery, [...FILTER_KEYS, 'ids']),
-    withViewer,
-    requireAuth,
-    requirePermission(PERMISSIONS.RESPONSE_READ),
-    withDb,
-    async c => {
-      const formId = uuidParam(c, 'id');
-      if (!formId) return gone(c);
-      const q = c.req.valid('query');
-      const db = c.var.db;
-      // Loaded before streaming so a missing form is a 404.
-      const cat = await loadCatalog(db, formId);
-      if (!cat) return gone(c);
-      const tz = safeTz(q.tz);
-      let aborted = false;
-      const body = byteStream(formCsvChunks(db, cat, q, {aborted: () => aborted}), err =>
-        console.error(`responses: csv export of ${formId} failed: ${err instanceof Error ? err.message : 'error'}`)
-      );
-      c.req.raw.signal?.addEventListener('abort', () => (aborted = true));
-      return new Response(body, {
-        headers: {
-          'Content-Type': 'text/csv; charset=utf-8',
-          'Content-Disposition': contentDisposition(csvFilename(cat.form, todayIn(tz))),
-          'Cache-Control': 'private, no-store',
-          'X-Content-Type-Options': 'nosniff',
-        },
-      });
-    }
-  )
-
   .post(
     '/forms/:id/responses/bulk-delete',
     json(bulkDeleteInput),
@@ -243,12 +197,9 @@ export const responsesRoutes = new Hono()
       const formId = uuidParam(c, 'id');
       if (!formId) return gone(c);
       const ids = [...new Set(c.req.valid('json').ids.map(id => id.toLowerCase()))];
-      const cat = await loadCatalog(c.var.db, formId);
-      if (!cat) return gone(c);
-      const signatureIds = cat.entries.filter(e => e.meta.type === 'signature').map(e => e.meta.id);
-      const result = await deleteResponses(c.var.db, formId, ids, signatureIds);
+      const result = await deleteResponses(c.var.db, formId, ids);
       if (!result.formFound) return gone(c);
-      if (result.fileIds.length) afterResponse(c, removeFiles(c.req.url, result.fileIds));
+      if (result.deleted) await afterDelete(c, formId);
       return c.json<BulkDeleteResponse>({deleted: result.deleted});
     }
   )
@@ -278,13 +229,10 @@ export const responsesRoutes = new Hono()
     if (!formId) return gone(c);
     const rid = uuidParam(c, 'rid');
     if (!rid) return c.json(problem('not_found', RESPONSE_GONE), 404);
-    const cat = await loadCatalog(c.var.db, formId);
-    if (!cat) return gone(c);
-    const signatureIds = cat.entries.filter(e => e.meta.type === 'signature').map(e => e.meta.id);
-    const result = await deleteResponses(c.var.db, formId, [rid], signatureIds);
+    const result = await deleteResponses(c.var.db, formId, [rid]);
     if (!result.formFound) return gone(c);
     if (!result.deleted) return c.json(problem('not_found', RESPONSE_GONE), 404);
-    if (result.fileIds.length) afterResponse(c, removeFiles(c.req.url, result.fileIds));
+    await afterDelete(c, formId);
     return c.json<BulkDeleteResponse>({deleted: result.deleted});
   })
 
@@ -302,7 +250,7 @@ export const responsesRoutes = new Hono()
       const cat = await loadCatalog(c.var.db, formId);
       if (!cat) return gone(c);
       try {
-        return c.json(await formSummary(c.var.db, cat, c.req.valid('query')));
+        return c.json(await cachedFormSummary(c.var.db, cat, c.req.valid('query')));
       } catch (err) {
         if (err instanceof SummaryRangeError) {
           return c.json(
@@ -316,28 +264,4 @@ export const responsesRoutes = new Hono()
         throw err;
       }
     }
-  )
-
-  // ---------------------------------------------------------------- Every form, one ZIP
-  .get('/export-all.zip', withViewer, requireAuth, requirePermission(PERMISSIONS.APP_SETTINGS), withDb, async c => {
-    const db = c.var.db;
-    if (!(await hitRateLimit(db, `export-all:${c.var.viewer.id}`, 5, 10 * 60))) {
-      return c.json(problem('rate_limited', 'You exported a lot just now. Try again in a few minutes.'), 429);
-    }
-    let aborted = false;
-    c.req.raw.signal?.addEventListener('abort', () => (aborted = true));
-    const body = byteStream(
-      exportAllResponsesZip(db, () => aborted),
-      err => console.error(`responses: export-all failed: ${err instanceof Error ? err.message : 'error'}`),
-      null
-    );
-    const today = new Date().toISOString().slice(0, 10);
-    return new Response(body, {
-      headers: {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': contentDisposition(`responses ${today}.zip`),
-        'Cache-Control': 'private, no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
-  });
+  );

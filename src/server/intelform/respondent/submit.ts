@@ -8,6 +8,8 @@ import {buildSearchText, redirectWithAnswers} from './answers';
 import {fieldErrors, RespondentError} from './errors';
 import {isClosed, parseSettings, requireForm, turnstileFor, type LoadedForm} from './load';
 import {queueResponseJobs} from '../notify';
+import {clearPublicSiteCache} from '../public-site/data';
+import {clearPublicFormCache} from './cache';
 import {rateLimit} from './rate-limit';
 import type {RequestMeta} from './request-meta';
 import {removeSignatures, storeSignatures} from './signatures';
@@ -25,9 +27,12 @@ import './validators';
  *  5. validateSubmission against the version the browser rendered (+ the one-per-email answer)
  *  6. Turnstile (when on and configured; skipped without TURNSTILE_SECRET_KEY)
  *  7. one per browser
- *  8. cheap pre-checks (still live, cap, one per email), then signature uploads (PNG only)
- *  9. one transaction: counter and cap (a conditional UPDATE locks the form row), insert (the
- *     unique email_key catches a repeat), auto-close at the cap
+ *  8. one per email (pre-check), then signature uploads (PNG only)
+ *  9. one statement: counter, close date and cap (a conditional UPDATE locks the form row),
+ *     auto-close at the cap, insert (the unique email_key catches a repeat)
+ *
+ * About 4 database round trips: the form; the rate limit beside the version; Turnstile key,
+ * one per browser and one per email together; the insert statement.
  * 10. after commit: the notify job (intelform-response-notify {responseId}: notification,
  *     confirmation and webhook; ../notify), never inside the transaction
  * 11. reply { ok, redirectUrl? }
@@ -42,7 +47,7 @@ const MAX_TTC_MS = 24 * 60 * 60 * 1000;
 /** A browser that rendered the version just replaced may still submit it for this long. */
 export const PREVIOUS_VERSION_GRACE_MS = 24 * 60 * 60 * 1000;
 
-export type SubmitDb = Pick<PrismaClient, '$queryRaw' | '$transaction' | 'intelformSettings'>;
+export type SubmitDb = Pick<PrismaClient, '$queryRaw' | 'intelformSettings'>;
 
 export interface SubmitContext {
   db: SubmitDb;
@@ -152,21 +157,19 @@ export function isEmailKeyViolation(err: unknown): boolean {
   return unique && /email_key/.test(text);
 }
 
-/** Still live and under the cap, and (one per email) not a known address. Not locked: step 9 is exact. */
-async function preCheck(db: Pick<PrismaClient, '$queryRaw'>, form: LoadedForm, emailKey: string | null, labels: Labels, now: number): Promise<void> {
+/** One per email: the address was already used on this form (a pre-check; the unique index is exact). */
+function emailDupe(db: Pick<PrismaClient, '$queryRaw'>, form: LoadedForm, emailKey: string | null): Promise<unknown[]> {
   const fieldId = form.settings.onePerEmailFieldId;
-  const [rows, dupes] = await Promise.all([
-    db.$queryRaw<{status: LoadedForm['status']; response_count: number; settings: unknown}[]>`
-      SELECT status, response_count, settings FROM forms WHERE id = ${form.id}::uuid
-    `,
-    emailKey && fieldId
-      ? db.$queryRaw<unknown[]>`SELECT 1 FROM responses WHERE form_id = ${form.id}::uuid AND email_key = ${emailKey} LIMIT 1`
-      : Promise.resolve([] as unknown[]),
-  ]);
-  const row = rows[0];
-  if (!row) throw closedError(form, labels);
-  if (isClosed({status: row.status, responseCount: Number(row.response_count), settings: parseSettings(row.settings)}, now)) throw closedError(form, labels);
-  if (dupes.length && fieldId) throw emailTakenError(fieldId, labels);
+  return emailKey && fieldId
+    ? db.$queryRaw<unknown[]>`SELECT 1 FROM responses WHERE form_id = ${form.id}::uuid AND email_key = ${emailKey} LIMIT 1`
+    : Promise.resolve([]);
+}
+
+/** One per browser (soft limit): a response with this browser's token. */
+function browserDupe(db: Pick<PrismaClient, '$queryRaw'>, form: LoadedForm, browserHash: string | null): Promise<unknown[]> {
+  return form.settings.onePerBrowser && browserHash
+    ? db.$queryRaw<unknown[]>`SELECT 1 FROM responses WHERE form_id = ${form.id}::uuid AND browser_token = ${browserHash} LIMIT 1`
+    : Promise.resolve([]);
 }
 
 export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: string): Promise<SubmitResponse> {
@@ -178,7 +181,7 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
   const input = parseSubmit(bodyText);
   assertAnswerSize(input.answers);
 
-  // 2. Form state
+  // 2. Form state (trip 1)
   const form = await requireForm(db, slug);
   if (isClosed(form, clock())) throw closedError(form, labels);
   const hash = form.settings.passwordHash;
@@ -186,8 +189,11 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     throw new RespondentError(401, 'locked', 'Enter the form password again, then submit.');
   }
 
-  // 3. Rate limit, before anything that costs (Turnstile, uploads)
-  await rateLimit(db, `respond:${ctx.ipKey}:${form.id}`, SUBMIT_RATE_LIMIT, 60, 'You sent several responses in a row. Wait a minute and try again.');
+  // 3. Rate limit, before anything that costs (Turnstile, uploads), beside the rendered version (trip 2)
+  const [, version] = await Promise.all([
+    rateLimit(db, `respond:${ctx.ipKey}:${form.id}`, SUBMIT_RATE_LIMIT, 60, 'You sent several responses in a row. Wait a minute and try again.'),
+    versionFor(db, form, input.formVersionId),
+  ]);
 
   // 4. Honeypot and minimum time: pretend it worked, keep nothing.
   const renderedAt = await readRenderToken(secret, input.renderToken, form.id, clock());
@@ -200,33 +206,34 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
   if (renderedAt === 'expired') throw new RespondentError(409, 'page_expired', labels.pageExpired);
 
   // 5. Validate against the version that was rendered (consent stamped with server time and version)
-  const version = await versionFor(db, form, input.formVersionId);
   const def = version.definition;
   const now = new Date(clock());
   const result = validateSubmission(def, input.answers, {context: {now, formVersion: version.version}, hidden: 'reject'});
   if (!result.ok) throw new RespondentError(422, 'validation_failed', labels.errorSummary, fieldErrors(result.errors));
   const answers = result.answers;
   const emailKey = onePerEmailKey(form, def, answers, labels);
+  const browserHash = input.browserToken ? await hashBrowserToken(secret, form.id, input.browserToken) : null;
 
-  // 6. Turnstile (after validation: a token works only once)
-  const turnstile = await turnstileFor(db, form.settings);
+  // 6–8. Turnstile (after validation: a token works only once; its site key from the cached app
+  // settings), one per browser and one per email, together (trip 3). Status and cap are not
+  // re-read: the insert statement below checks them exactly.
+  const [turnstile, seen, dupes] = await Promise.all([
+    turnstileFor(db, form.settings),
+    browserDupe(db, form, browserHash),
+    emailDupe(db, form, emailKey),
+  ]);
+  if (seen.length) throw new RespondentError(409, 'already_responded', labels.alreadyResponded);
+  const fieldId = form.settings.onePerEmailFieldId;
+  if (dupes.length && fieldId) throw emailTakenError(fieldId, labels);
   if (turnstile) await verifyTurnstile(turnstile.secret, input.turnstileToken, ctx.ip, new URL(ctx.requestUrl).hostname);
 
-  // 7. One response per browser (soft limit)
-  const browserHash = input.browserToken ? await hashBrowserToken(secret, form.id, input.browserToken) : null;
-  if (form.settings.onePerBrowser && browserHash) {
-    const seen = await db.$queryRaw<unknown[]>`
-      SELECT 1 FROM responses WHERE form_id = ${form.id}::uuid AND browser_token = ${browserHash} LIMIT 1
-    `;
-    if (seen.length) throw new RespondentError(409, 'already_responded', labels.alreadyResponded);
-  }
-
-  // 8. Cheap checks the transaction repeats exactly, so a doomed submit stores nothing.
-  await preCheck(db, form, emailKey, labels, now.getTime());
-  // Signatures were uploaded by the browser; claim them (token, PNG check) → {url}.
+  // Signatures were uploaded by the browser; claim them (token, PNG check) → {fileId}.
   const stored = await storeSignatures(ctx.requestUrl, form.id, def, answers, labels);
 
-  // 9. One transaction (if it fails, the signatures just stored are deleted again)
+  // 9. ONE statement (trip 4, atomic without an interactive transaction): the counter UPDATE
+  // locks the form row and re-checks live, close date and cap exactly; it closes the form when
+  // this response reaches the cap; the insert runs only if it passed. A unique violation
+  // (responses_email_key: the same address committed since the pre-check) undoes all of it.
   const meta = await ctx.meta();
   const startedAt =
     input.startedAt && input.startedAt <= now.getTime() && now.getTime() - input.startedAt < MAX_STARTED_AGO_MS ? new Date(input.startedAt) : null;
@@ -236,44 +243,44 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
   const answersJson = JSON.stringify(answers);
   const ttcJson = ttc ? JSON.stringify(ttc) : null;
 
-  let saved: {id: string; submittedAt: Date; settings: ReturnType<typeof parseSettings>};
+  let saved: {id: string; submittedAt: Date; settings: ReturnType<typeof parseSettings>; closedNow: boolean};
   try {
-    saved = await db.$transaction(async tx => {
-      // The counter update locks the form row: the cap check below is exact.
-      const counted = await tx.$queryRaw<{response_count: number; settings: unknown}[]>`
-        UPDATE forms SET response_count = response_count + 1, last_response_at = now()
+    // contact_* are filled by the responses_contact_fill trigger: never written here.
+    const rows = await db.$queryRaw<{id: string; submitted_at: Date; settings: unknown; status: string}[]>`
+      WITH f AS (
+        UPDATE forms SET
+          response_count = response_count + 1,
+          last_response_at = now(),
+          status = CASE WHEN jsonb_typeof(settings->'responseCap') = 'number'
+                         AND response_count + 1 >= (settings->>'responseCap')::numeric THEN 'closed' ELSE status END,
+          updated_at = CASE WHEN jsonb_typeof(settings->'responseCap') = 'number'
+                         AND response_count + 1 >= (settings->>'responseCap')::numeric THEN now() ELSE updated_at END
         WHERE id = ${form.id}::uuid AND status = 'live'
-        RETURNING response_count, settings
-      `;
-      const row = counted[0];
-      if (!row) throw closedError(form, labels);
-      const fresh = parseSettings(row.settings);
-      const count = Number(row.response_count);
-      if (fresh.closeAt && Date.parse(fresh.closeAt) <= now.getTime()) throw closedError(form, labels);
-      if (fresh.responseCap !== null && count > fresh.responseCap) throw closedError(form, labels);
-
-      // contact_* are filled by the responses_contact_fill trigger: never written here.
-      const inserted = await tx.$queryRaw<{id: string; submitted_at: Date}[]>`
+          AND (intelform_try_timestamptz(settings->>'closeAt') IS NULL OR intelform_try_timestamptz(settings->>'closeAt') > ${now})
+          AND (jsonb_typeof(settings->'responseCap') IS DISTINCT FROM 'number' OR response_count < (settings->>'responseCap')::numeric)
+        RETURNING id, settings, status
+      ),
+      ins AS (
         INSERT INTO responses (form_id, form_version_id, answers, started_at, duration_ms, ttc, ip_hash, country, device, browser, browser_token, search_text, email_key)
-        VALUES (${form.id}::uuid, ${input.formVersionId}::uuid, ${answersJson}::jsonb, ${startedAt}, ${durationMs}::int, ${ttcJson}::jsonb,
-                ${meta.ipHash}, ${meta.country}, ${meta.device}, ${meta.browser}, ${browserHash}, ${search}, ${emailKey})
-        RETURNING id::text AS id, submitted_at
-      `;
-      if (fresh.responseCap !== null && count >= fresh.responseCap) {
-        await tx.$queryRaw`UPDATE forms SET status = 'closed', updated_at = now() WHERE id = ${form.id}::uuid RETURNING 1`;
-      }
-      const r = inserted[0]!;
-      return {id: r.id, submittedAt: r.submitted_at, settings: fresh};
-    });
+        SELECT f.id, ${input.formVersionId}::uuid, ${answersJson}::jsonb, ${startedAt}, ${durationMs}::int, ${ttcJson}::jsonb,
+               ${meta.ipHash}, ${meta.country}, ${meta.device}, ${meta.browser}, ${browserHash}, ${search}, ${emailKey}
+        FROM f
+        RETURNING id, submitted_at
+      )
+      SELECT ins.id::text AS id, ins.submitted_at, f.settings, f.status FROM ins, f
+    `;
+    const row = rows[0];
+    if (!row) throw closedError(form, labels);
+    saved = {id: row.id, submittedAt: row.submitted_at, settings: parseSettings(row.settings), closedNow: row.status === 'closed'};
   } catch (err) {
     await removeSignatures(ctx.requestUrl, stored);
-    // responses_email_key: a submit with the same address committed since the pre-check.
-    const fieldId = form.settings.onePerEmailFieldId;
     if (emailKey && fieldId && isEmailKeyViolation(err)) throw emailTakenError(fieldId, labels);
     throw err;
   }
 
-  // 10. Later work, after commit
+  // 10. Later work, after commit. A response that reached the cap closed the form: the public
+  // forms list and the cached form page must stop offering it.
+  if (saved.closedNow) await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]).catch(() => undefined);
   await queueResponseJobs(ctx.requestUrl, {formId: form.id, formTitle: form.title, responseId: saved.id, settings: saved.settings});
 
   // 11. Reply

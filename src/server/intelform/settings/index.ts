@@ -8,7 +8,6 @@
  *   getTurnstileKeys(db)        {siteKey, secret, enabled}: both are owner secrets
  *   getEmailDefaults(db)        {appName, fromName, replyTo, enabled} for an email sent now
  *   clearAppSettingsCache()     after ANY write to `intelform_settings`
- *   applyRetention(db)          the daily retention job
  */
 export {
   clearAppSettingsCache,
@@ -25,6 +24,6 @@ export {
   turnstileSecretSet,
   type CachedAppSettings,
 } from './settings';
-export {applyRetention, retentionCutoff} from './retention';
+export {retentionCutoff} from './retention';
 export {hitRateLimit} from './rate-limit';
 export {APP_SETTINGS_API, type AppSettingsResponse} from './view';

@@ -10,7 +10,8 @@ import {useBuilder, useBuilderStore} from '../store';
 import type {FieldSettingsComponent} from '../type-ui';
 import {LogicEditor} from './LogicEditor';
 import {clip, questionNumber} from './model';
-import {PanelSection, PipeLabel, SwitchRow, TextRow} from './parts';
+import {PanelSection, PipeLabel, SwitchRow, TextRow} from '../controls';
+import './panel.css';
 
 type PanelTab = 'settings' | 'logic';
 

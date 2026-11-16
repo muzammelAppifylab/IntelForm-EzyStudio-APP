@@ -6,7 +6,8 @@ import {hashPassword} from '../../../platform/auth/password';
 import {normalizeDraft, parseTheme, readSettings} from './draft';
 import {BuilderError, formGone, isUniqueViolation, zodFields} from './errors';
 import {assertSafeUrl, UnsafeWebhookUrl} from './webhook-core';
-import {allowHttpWebhooks} from './webhook-delivery';
+import {webhookUrlPolicy} from './webhook-delivery';
+import type {UrlPolicy} from '../webhooks/ssrf';
 
 /**
  * Autosave: PATCH a form's title, slug, draft, theme and settings (only what was sent).
@@ -34,7 +35,7 @@ export interface PreparedPatch {
   passwordHash?: string | null;
 }
 
-export async function preparePatch(input: FormPatchInput, opts: {allowHttp?: boolean} = {}): Promise<PreparedPatch> {
+export async function preparePatch(input: FormPatchInput, opts: {policy?: Partial<UrlPolicy>} = {}): Promise<PreparedPatch> {
   const out: PreparedPatch = {};
   if (input.title !== undefined) out.title = input.title;
   if (input.slug !== undefined) out.slug = input.slug;
@@ -45,7 +46,7 @@ export async function preparePatch(input: FormPatchInput, opts: {allowHttp?: boo
     // SSRF: refuse private, loopback and local-name targets when saving, not only when sending.
     if (rest.webhook?.url) {
       try {
-        assertSafeUrl(rest.webhook.url, {allowHttp: opts.allowHttp ?? allowHttpWebhooks()});
+        assertSafeUrl(rest.webhook.url, opts.policy ?? webhookUrlPolicy());
       } catch (err) {
         if (err instanceof UnsafeWebhookUrl) {
           throw new BuilderError(422, 'invalid_input', err.message, {'settings.webhook.url': [err.message]});

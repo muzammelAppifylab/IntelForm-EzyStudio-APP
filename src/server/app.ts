@@ -12,6 +12,7 @@ import {abilitiesFor, CATALOGUE} from './permissions';
 import {appSettingsRoutes} from './routes/app-settings';
 import {builderRoutes} from './routes/builder';
 import {contactsRoutes} from './routes/contacts';
+import {exportsRoutes} from './routes/exports';
 import {formsRoutes} from './routes/forms';
 import {publicFormsRoutes} from './routes/public-forms';
 import {publicSiteRoutes} from './routes/public-site';
@@ -109,6 +110,7 @@ export const app = new Hono()
   // of this site), so they stay behind sameOrigin + csrf like every write (siteFetch sends the token).
   .route('/public/forms', publicFormsRoutes)
   .route('/contacts', contactsRoutes)
+  .route('/exports', exportsRoutes)
   .route('/uploads', uploadsRoutes)
   .route('/app-settings', appSettingsRoutes)
   .route('/public-site', publicSiteRoutes)

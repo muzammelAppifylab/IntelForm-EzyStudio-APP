@@ -7,6 +7,8 @@ import {defaultFormSettings, formSettings, publicSettings, type FormSettings} fr
 import {defaultTheme, formTheme, type FormTheme} from '../../../lib/intelform/form/theme';
 import {notFound} from './errors';
 import {checkUnlockToken, renderToken} from './tokens';
+import {loadPublishedBySlug} from './cache';
+import {getTurnstileKeys} from '../settings/settings';
 
 /** A form as the respondent routes see it: the published version, parsed settings and status. */
 export interface LoadedForm {
@@ -134,20 +136,20 @@ export function isClosed(form: Pick<LoadedForm, 'status' | 'settings' | 'respons
 export const TURNSTILE_SECRET_NAME = 'TURNSTILE_SECRET_KEY';
 
 /**
- * Turnstile keys when this form uses it AND the owner configured both: the site key in
- * App settings (intelform_settings), the secret as the owner secret TURNSTILE_SECRET_KEY.
- * Either missing → null: Turnstile is skipped (honeypot, fill time and rate limits still apply).
+ * Turnstile keys when this form uses it AND the owner configured both: the site key (owner
+ * secret TURNSTILE_SITE_KEY, else App settings, read through the cached `getAppSettings`), the
+ * secret as the owner secret TURNSTILE_SECRET_KEY. Either missing → null: Turnstile is skipped
+ * (honeypot, fill time and rate limits still apply). No database read on a cache hit.
  */
 export async function turnstileFor(
-  db: Pick<PrismaClient, 'intelformSettings'>,
+  db: Pick<PrismaClient, '$queryRaw'>,
   settings: Pick<FormSettings, 'turnstile'>
 ): Promise<{siteKey: string; secret: string} | null> {
   if (!settings.turnstile) return null;
-  const secret = config.ownerSecret(TURNSTILE_SECRET_NAME);
-  if (!secret) return null;
-  const row = await db.intelformSettings.findUnique({where: {id: 1}, select: {turnstileSiteKey: true}});
-  const siteKey = row?.turnstileSiteKey?.trim();
-  return siteKey ? {siteKey, secret} : null;
+  if (!config.ownerSecret(TURNSTILE_SECRET_NAME)) return null;
+  const keys = await getTurnstileKeys(db as PrismaClient);
+  const siteKey = keys.siteKey?.trim();
+  return siteKey && keys.secret ? {siteKey, secret: keys.secret} : null;
 }
 
 /**
@@ -182,9 +184,13 @@ export async function publicPayload(
   };
 }
 
-/** Full GET answer for a slug, or null for a 404. Shared by the API route and the /f/[slug] page. */
+/**
+ * Full GET answer for a slug, or null for a 404. Shared by the API route and the /f/[slug] page.
+ * The published shape comes from the Site Cache when it can (./cache.ts); the render token,
+ * the Turnstile key and "closed now" are worked out per request.
+ */
 export async function payloadForSlug(db: Db, secret: string, slug: string, unlock?: string | null): Promise<PublicFormResponse | null> {
-  const r = await loadBySlug(db, slug);
+  const r = await loadPublishedBySlug(db, slug);
   if (r.kind === 'missing') return null;
   if (r.kind === 'moved') return {status: 'moved', redirectTo: r.slug};
   return publicPayload(db, secret, r.form, unlock);

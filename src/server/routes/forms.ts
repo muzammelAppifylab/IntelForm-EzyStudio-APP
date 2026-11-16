@@ -39,15 +39,18 @@ import {fail, formIdParam, zodJson} from '../intelform/forms/http';
 import {
   closeForm,
   formsStrip,
+  clearFormsStrip,
   insertForm,
   listForms,
   newFormDefaults,
   reopenForm,
 } from '../intelform/forms/store';
 import {clearPublicSiteCache} from '../intelform/public-site/data';
+import {clearPublicFormCache} from '../intelform/respondent/cache';
 import {findBuiltinTemplate} from '../intelform/templates/builtins';
-import {formSignatureFileIds} from '../intelform/uploads/signatures';
-import {deleteStoredFiles} from '../intelform/uploads/storage';
+import {scheduleFileCleanup} from '../intelform/uploads/trash';
+import {clearSummaryCache} from '../intelform/responses/summary';
+import {clearContactsOverview} from '../intelform/contacts/query';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -245,7 +248,7 @@ export const formsRoutes = new Hono()
     try {
       const {id} = c.req.valid('param');
       const result = await closeForm(c.var.db, id, c.var.viewer.id!);
-      await clearPublicSiteCache();
+      await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
       return fail(c, err);
@@ -256,7 +259,7 @@ export const formsRoutes = new Hono()
     try {
       const {id} = c.req.valid('param');
       const result = await reopenForm(c.var.db, id, c.var.viewer.id!);
-      await clearPublicSiteCache();
+      await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
       return fail(c, err);
@@ -352,20 +355,19 @@ export const formsRoutes = new Hono()
           new FormsError(422, 'validation_failed', 'Type the form title to confirm', {confirmTitle: ['Type the form title exactly as shown']})
         );
       }
-      // Signature files live in platform storage, not in the rows: collect them first.
-      const fileIds = await formSignatureFileIds(db, id);
-      // Cascades to versions, responses, events, webhook deliveries, old slugs, prefs and presence.
+      // ONE statement, in the database: it cascades to versions, responses, events, webhook
+      // deliveries, old slugs, prefs, presence and exports. The responses delete trigger keeps the
+      // contacts and hourly counts right and puts their signature files in the file trash, which
+      // the cleanup job empties a few at a time: no file fan-out and no answer scan in this request.
       await db.form.deleteMany({where: {id}});
-      await clearPublicSiteCache();
-      // Best effort, after the response (a very large form's files may outlast waitUntil).
-      if (fileIds.length) {
-        const work = deleteStoredFiles(c.req.url, fileIds);
-        try {
-          c.executionCtx.waitUntil(work);
-        } catch {
-          await work;
-        }
-      }
+      await Promise.all([
+        clearPublicSiteCache(),
+        clearPublicFormCache(),
+        clearSummaryCache(id),
+        clearContactsOverview(),
+        clearFormsStrip(),
+        scheduleFileCleanup(c.req.url),
+      ]);
       return c.body(null, 204);
     }
   );

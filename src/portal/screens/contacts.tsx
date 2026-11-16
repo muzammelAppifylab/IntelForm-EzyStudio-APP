@@ -27,12 +27,13 @@ import {
 import {COLUMN_LABEL, COLUMNS, type ColumnId, useHiddenColumns} from '../intelform/contacts/prefs';
 import {Strip} from '../intelform/contacts/Strip';
 import {useCan} from '../intelform/lib/can';
+import {useExport} from '../intelform/lib/exports';
 import {
   type AdvancedFilters,
   advancedCount,
   clearFilters,
   type ContactsState,
-  contactsCsvUrl,
+  contactsExportQuery,
   contactsListQuery,
   contactsOverviewQuery,
   DEFAULT_CONTACTS_STATE,
@@ -82,7 +83,10 @@ export function Contacts() {
   const [state, setState] = useState<ContactsState>(DEFAULT_CONTACTS_STATE);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [hidden, setHidden] = useHiddenColumns();
-  const canDelete = useCan('editContacts');
+  // Erasing deletes the contact's responses, so the server asks for both.
+  const canEditContacts = useCan('editContacts');
+  const canDeleteResponses = useCan('deleteResponses');
+  const canDelete = canEditContacts && canDeleteResponses;
   const del = useDeleteContacts();
   const confirm = useConfirm();
   const toast = useToast();
@@ -103,7 +107,8 @@ export function Contacts() {
   const overview = useQuery(contactsOverviewQuery);
   const strip = overview.data?.strip;
   const facets = overview.data?.facets;
-  const total = list.data?.pages.at(-1)?.total;
+  const more = !!list.data?.pages.at(-1)?.nextCursor;
+  const exporter = useExport();
   // A contact can move between pages while paging (a new response): show it once.
   const rows = useMemo(() => {
     if (!list.data) return undefined;
@@ -130,7 +135,10 @@ export function Contacts() {
     });
   }, []);
 
-  const csvFor = useCallback((keys: string[]) => contactsCsvUrl(state, keys), [state]);
+  const exportKeys = useCallback(
+    (keys: string[]) => void exporter.run({kind: 'contacts', query: contactsExportQuery(state, keys)}),
+    [exporter, state]
+  );
 
   const askDelete = (target: DeleteTarget) => {
     const one = target.keys.length === 1;
@@ -250,7 +258,7 @@ export function Contacts() {
       cell: r => {
         const items: MenuItem[] = [{label: 'View details', icon: 'eye', onSelect: () => setOpenKey(r.key)}];
         if (r.email) items.push({label: 'Copy email', icon: 'copy', onSelect: () => void copy(r.email!, 'Email copied.')});
-        items.push({label: 'Export CSV', icon: 'download', onSelect: () => download(csvFor([r.key]))});
+        items.push({label: 'Export CSV', icon: 'download', onSelect: () => exportKeys([r.key])});
         if (deleteRows) items.push('separator', {label: 'Delete', icon: 'trash', danger: true, onSelect: () => deleteRows([r])});
         return <Menu label={`Actions for ${contactTitle(r)}`} items={items} />;
       },
@@ -267,10 +275,14 @@ export function Contacts() {
         description="Everyone who answered your forms, in one place."
         actions={
           rows && !noContacts ? (
-            <a className={buttonClass({variant: 'secondary'})} href={contactsCsvUrl(state)} download>
-              <Icon name="download" size={18} />
+            <Button
+              variant="secondary"
+              icon="download"
+              pending={exporter.pending}
+              pendingLabel="Exporting…"
+              onClick={() => void exporter.run({kind: 'contacts', query: contactsExportQuery(state)})}>
               Export CSV
-            </a>
+            </Button>
           ) : (
             <Button variant="secondary" icon="download" disabled>
               Export CSV
@@ -399,10 +411,15 @@ export function Contacts() {
           {selected.size > 0 && (
             <div role="region" aria-label="Selection" className="contacts-bulk">
               <span className="contacts-bulk-count">{formatNumber(selected.size)} selected</span>
-              <a className={buttonClass({variant: 'secondary', size: 'sm'})} href={csvFor([...selected.keys()])} download>
-                <Icon name="download" size={16} />
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="download"
+                pending={exporter.pending}
+                pendingLabel="Exporting…"
+                onClick={() => exportKeys([...selected.keys()])}>
                 Export CSV
-              </a>
+              </Button>
               {deleteRows && (
                 <Button variant="danger" size="sm" icon="trash" onClick={() => deleteRows([...selected.values()])}>
                   Delete
@@ -415,7 +432,7 @@ export function Contacts() {
           )}
 
           <p className="visually-hidden" role="status">
-            {total !== undefined ? `${plural(total, 'contact')} ${filtered ? 'found' : 'in total'}` : ''}
+            {rows ? `${plural(rows.length, 'contact')}${more ? '+' : ''} ${filtered ? 'found' : 'shown'}` : ''}
           </p>
         </>
       )}
@@ -423,7 +440,8 @@ export function Contacts() {
       <ContactDrawer
         contactKey={openKey}
         onClose={() => setOpenKey(null)}
-        csvFor={csvFor}
+        onExport={exportKeys}
+        exporting={exporter.pending}
         onDelete={
           canDelete
             ? d => askDelete({keys: [d.contact.key], responses: d.contact.responseCount, name: contactTitle(d.contact)})
@@ -432,16 +450,6 @@ export function Contacts() {
       />
     </div>
   );
-}
-
-/** Starts a same-origin download (the CSV) from a menu item. */
-function download(href: string) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = '';
-  document.body.append(a);
-  a.click();
-  a.remove();
 }
 
 /** One removable chip per active advanced filter. */

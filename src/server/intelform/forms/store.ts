@@ -12,6 +12,8 @@ import {formDefinition, type FormDefinition, type Layout} from '../../../lib/int
 import {lintLogic, lintOnePerEmail} from '../../../lib/intelform/form/logic';
 import {clientSettings, type FormSettings, type FormSettingsPatch} from '../../../lib/intelform/form/settings';
 import {defaultTheme, themePreset, type FormTheme} from '../../../lib/intelform/form/theme';
+import {cache} from '../../../platform/cache';
+import {getAppSettings} from '../settings/settings';
 import {
   completionRate,
   countFields,
@@ -65,10 +67,9 @@ export async function newFormDefaults(db: Db): Promise<{theme: FormTheme; timezo
   return {theme, timezone};
 }
 
-/** The app's timezone (dashboard dates, the strip's calendar days). */
+/** The app's timezone (dashboard dates), from the cached app settings. */
 export async function appTimezone(db: Db): Promise<string> {
-  const row = await db.intelformSettings.findUnique({where: {id: 1}, select: {timezone: true}});
-  return row?.timezone || 'UTC';
+  return (await getAppSettings(db as PrismaClient)).timezone || 'UTC';
 }
 
 // ---------------------------------------------------------------------------
@@ -160,12 +161,13 @@ export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | n
     ${query.q ? Prisma.sql`AND f.title ILIKE ${likePattern(query.q)}` : Prisma.empty}`;
   const order = ORDER[query.sort];
 
-  // All-time starts from the 15-minute rollup: raw form_events are purged after 30 days.
+  // All-time starts and this week's responses from counters kept on write (forms.starts_total,
+  // form_response_hours: at most 168 rows per form by its primary key), never a count of responses.
   const [rows, counts] = await Promise.all([
     db.$queryRaw<ListRow[]>`
       WITH paged AS (
         SELECT f.id, f.title, f.slug, f.status, f.draft->>'layout' AS layout, f.response_count,
-          f.has_unpublished, f.published_version_id, f.created_at, f.updated_at
+          f.has_unpublished, f.published_version_id, f.created_at, f.updated_at, f.starts_total
         FROM forms f
         WHERE ${matches} AND ${after(cursor)}
         ORDER BY ${order}
@@ -174,14 +176,14 @@ export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | n
       SELECT f.id::text AS id, f.title, f.slug, f.status,
         COALESCE(f.layout, 'all_at_once') AS layout,
         f.response_count AS "responseCount",
-        e.n AS starts,
+        f.starts_total AS starts,
         w.n AS "newThisWeek",
         (f.has_unpublished AND f.published_version_id IS NOT NULL) AS "hasUnpublished",
         f.created_at AS "createdAt", f.updated_at AS "updatedAt"
       FROM paged f
-      CROSS JOIN LATERAL (SELECT COALESCE(sum(starts), 0)::int AS n FROM form_event_counts WHERE form_id = f.id) e
       CROSS JOIN LATERAL (
-        SELECT count(*)::int AS n FROM responses WHERE form_id = f.id AND submitted_at >= now() - interval '7 days'
+        SELECT COALESCE(sum(n), 0)::int AS n FROM form_response_hours
+        WHERE form_id = f.id AND hour >= date_trunc('hour', now()) - interval '7 days'
       ) w
       ORDER BY ${order}
     `,
@@ -218,54 +220,92 @@ export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | n
 // The weekly strip
 // ---------------------------------------------------------------------------
 
-/** The weekly strip above the list: workspace-wide, so it ignores search, filter and paging. */
+/**
+ * Site Cache (docs/agent/cache.md):
+ *   report:forms-strip   5 min   the dashboard's weekly strip: workspace-wide, the same for every
+ *                                FORM_READ viewer, built only from counters kept on write (time-based;
+ *                                also cleared when a form is deleted)
+ */
+export const FORMS_STRIP_KEY = 'report:forms-strip';
+const FORMS_STRIP_TTL = 5 * 60;
+
+export async function clearFormsStrip(): Promise<void> {
+  await cache.del(FORMS_STRIP_KEY);
+}
+
+/** The weekly strip above the list: workspace-wide, so it ignores search, filter and paging. Cached. */
 export async function formsStrip(db: Db): Promise<FormsStrip> {
-  const timezone = await appTimezone(db);
+  return cache.getOrSet(FORMS_STRIP_KEY, FORMS_STRIP_TTL, () => loadFormsStrip(db as PrismaClient));
+}
+
+/** The calendar day of an hour bucket in `timezone` (YYYY-MM-DD). */
+export function localDay(hour: Date, timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit'}).format(hour);
+}
+
+/**
+ * Every read in ONE round trip, from counters kept on write: forms.response_count and
+ * starts_total, and form_response_hours (responses per form per hour, kept by the responses
+ * triggers), never the responses or form_event_counts tables. The app's time zone comes from
+ * the cached app settings; the last 8 days of hourly counts are put into local days here.
+ */
+export async function loadFormsStrip(db: PrismaClient): Promise<FormsStrip> {
   type Counts = {all: number; live: number; draft: number; closed: number; avg_completion: number | null};
   type MostActive = {id: string; title: string; status: FormStatus; count: number; responses: number; starts: number};
-  const [[counts], [week], mostActive, days] = await Promise.all([
+  const [settings, [counts], [week], mostActive, hours] = await Promise.all([
+    getAppSettings(db),
+    // A workspace's own forms (tens to hundreds of rows, made by hand).
     db.$queryRaw<Counts[]>`
       SELECT count(*)::int AS "all",
-        count(*) FILTER (WHERE f.status = 'live')::int AS live,
-        count(*) FILTER (WHERE f.status = 'draft')::int AS draft,
-        count(*) FILTER (WHERE f.status = 'closed')::int AS closed,
-        (avg(LEAST(1, f.response_count::float8 / e.n)) FILTER (WHERE e.n > 0))::float8 AS avg_completion
-      FROM forms f
-      LEFT JOIN (SELECT form_id, sum(starts) AS n FROM form_event_counts GROUP BY form_id) e ON e.form_id = f.id
+        count(*) FILTER (WHERE status = 'live')::int AS live,
+        count(*) FILTER (WHERE status = 'draft')::int AS draft,
+        count(*) FILTER (WHERE status = 'closed')::int AS closed,
+        (avg(LEAST(1, response_count::float8 / starts_total)) FILTER (WHERE starts_total > 0))::float8 AS avg_completion
+      FROM forms
     `,
     db.$queryRaw<{this_week: number; last_week: number}[]>`
-      SELECT
-        count(*) FILTER (WHERE submitted_at >= now() - interval '7 days')::int AS this_week,
-        count(*) FILTER (WHERE submitted_at < now() - interval '7 days')::int AS last_week
-      FROM responses WHERE submitted_at >= now() - interval '14 days'
+      SELECT coalesce(sum(n) FILTER (WHERE hour >= date_trunc('hour', now()) - interval '7 days'), 0)::int AS this_week,
+        coalesce(sum(n) FILTER (WHERE hour < date_trunc('hour', now()) - interval '7 days'), 0)::int AS last_week
+      FROM form_response_hours WHERE hour >= date_trunc('hour', now()) - interval '14 days'
     `,
     db.$queryRaw<MostActive[]>`
-      SELECT f.id::text AS id, f.title, f.status, f.count, f.response_count AS responses, e.n AS starts
+      SELECT f.id::text AS id, f.title, f.status, top.count, f.response_count AS responses, f.starts_total AS starts
       FROM (
-        SELECT f.id, f.title, f.status, f.response_count, top.count
-        FROM (
-          SELECT form_id, count(*)::int AS count FROM responses
-          WHERE submitted_at >= now() - interval '7 days' GROUP BY form_id
-        ) top
-        JOIN forms f ON f.id = top.form_id
-        ORDER BY top.count DESC, f.title
-        LIMIT 3
-      ) f
-      CROSS JOIN LATERAL (SELECT COALESCE(sum(starts), 0)::int AS n FROM form_event_counts WHERE form_id = f.id) e
-      ORDER BY f.count DESC, f.title
+        SELECT form_id, sum(n)::int AS count FROM form_response_hours
+        WHERE hour >= date_trunc('hour', now()) - interval '7 days'
+        GROUP BY form_id HAVING sum(n) > 0
+      ) top
+      JOIN forms f ON f.id = top.form_id
+      ORDER BY top.count DESC, f.title
+      LIMIT 3
     `,
-    // Calendar days in the app's timezone, today last: one pass over the last 8 days.
-    db.$queryRaw<{date: string; count: number}[]>`
-      SELECT to_char(d.day, 'YYYY-MM-DD') AS date, COALESCE(r.n, 0)::int AS count
-      FROM generate_series((now() AT TIME ZONE ${timezone})::date - 6, (now() AT TIME ZONE ${timezone})::date, interval '1 day') AS d(day)
-      LEFT JOIN (
-        SELECT (submitted_at AT TIME ZONE ${timezone})::date AS day, count(*) AS n
-        FROM responses WHERE submitted_at >= now() - interval '8 days'
-        GROUP BY 1
-      ) r ON r.day = d.day::date
-      ORDER BY d.day
+    db.$queryRaw<{hour: Date; n: number}[]>`
+      SELECT hour, sum(n)::int AS n FROM form_response_hours
+      WHERE hour >= now() - interval '9 days'
+      GROUP BY hour
     `,
   ]);
+
+  // Calendar days in the app's timezone, today last.
+  const timezone = settings.timezone || 'UTC';
+  let tz = timezone;
+  try {
+    localDay(new Date(), tz);
+  } catch {
+    tz = 'UTC';
+  }
+  const today = localDay(new Date(), tz);
+  const dayList: string[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - i);
+    dayList.push(d.toISOString().slice(0, 10));
+  }
+  const byDay = new Map(dayList.map(d => [d, 0]));
+  for (const h of hours) {
+    const day = localDay(h.hour instanceof Date ? h.hour : new Date(h.hour), tz);
+    if (byDay.has(day)) byDay.set(day, byDay.get(day)! + Number(h.n));
+  }
 
   return {
     responsesThisWeek: week?.this_week ?? 0,
@@ -277,7 +317,7 @@ export async function formsStrip(db: Db): Promise<FormsStrip> {
       status: f.status,
       completionRate: completionRate(f.responses, f.starts),
     })),
-    days: days.map(d => ({date: d.date, count: d.count})),
+    days: dayList.map(date => ({date, count: byDay.get(date) ?? 0})),
     counts: {all: counts?.all ?? 0, live: counts?.live ?? 0, draft: counts?.draft ?? 0, closed: counts?.closed ?? 0},
     avgCompletion: counts?.avg_completion ?? null,
   };

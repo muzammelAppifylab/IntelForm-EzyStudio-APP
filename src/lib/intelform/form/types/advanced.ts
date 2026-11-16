@@ -7,8 +7,9 @@ import { BOOL_OPS, PRESENCE_OPS, base, defineType, isRecord, str, type AnswerCon
 /**
  * In the browser the pad's answer is `{ url: "data:image/png;base64,…" }`. At submit the browser
  * uploads the PNG straight to storage (src/respondent/upload.ts) and sends `{ fileId, token }`;
- * the server verifies the token, checks the stored PNG and stores
- * `{ url: "/__platform/files/<id>/signature.png" }` (src/server/intelform/uploads/signatures.ts).
+ * the server verifies the token, checks the stored PNG and stores `{ fileId }`: a PRIVATE file,
+ * shown only through the dashboard's guarded view route (src/server/intelform/uploads/signatures.ts).
+ * Answers stored before that hold `{ url: "/__platform/files/<id>/signature.png" }`.
  * Only those two shapes validate here: a client-supplied URL would let a respondent point a
  * stored answer (and the owner's emails) at any image.
  */
@@ -44,8 +45,10 @@ export function signatureBytes(dataUrl: string): Uint8Array {
 function signatureUrl(v: unknown): string {
   if (!isRecord(v)) return ''
   if (typeof v.url === 'string') return v.url
-  // Submitted, not yet stored: present, but no link to show.
-  return typeof v.fileId === 'string' && v.fileId ? 'pending:' + v.fileId : ''
+  if (typeof v.fileId !== 'string' || !v.fileId) return ''
+  // Submitted, not yet stored ({fileId, token}): present, but no link to show. Stored
+  // ({fileId}): a private file, never a link here (the server makes the guarded one).
+  return (typeof v.token === 'string' ? 'pending:' : 'stored:') + v.fileId
 }
 
 const signatureProps = z.object({})
@@ -74,7 +77,10 @@ export const signature = defineType({
   pipe: () => '',
   csvColumns: () => [''],
   // Data URLs never reach a stored response; guard anyway so a CSV never carries one.
-  csv: (v) => [/^(data|pending):/.test(signatureUrl(v)) ? '' : signatureUrl(v)],
+  csv: (v) => {
+    const u = signatureUrl(v)
+    return [/^(data|pending):/.test(u) ? '' : u.startsWith('stored:') ? 'Signed' : u]
+  },
 })
 
 // ------------------------------------------------------------------ Consent: { accepted: true, at, text, version? }

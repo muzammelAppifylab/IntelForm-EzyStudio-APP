@@ -607,4 +607,9 @@ FROM (
 ) AS s
 WHERE f."id" = s."id" AND (f."response_count" <> s.n OR f."last_response_at" IS DISTINCT FROM s.last);
 
+-- All-time starts (forms.starts_total), from the 15-minute rollup above.
+UPDATE "forms" f SET "starts_total" = e.n
+FROM (SELECT "form_id", sum("starts")::int AS n FROM "form_event_counts" GROUP BY "form_id") AS e
+WHERE f."id" = e."form_id" AND f."starts_total" <> e.n;
+
 COMMIT;

@@ -278,6 +278,18 @@ export function SelectRow<T extends string>({
   );
 }
 
+/**
+ * A label for a `PipeInput` (a contentEditable, which `<label for>` cannot point at): clicking it
+ * focuses the editor, and the editor takes the same words as its `ariaLabel`.
+ */
+export function PipeLabel({htmlFor, children}: {htmlFor: string; children: ReactNode}) {
+  return (
+    <span className="if-panel-label" onClick={() => document.getElementById(htmlFor)?.focus()}>
+      {children}
+    </span>
+  );
+}
+
 /** A short message inside a panel (the kit's `Notice`). */
 export function Note({tone = 'info', children, className}: {tone?: 'info' | 'warning' | 'danger'; children: ReactNode; className?: string}) {
   const notice = <Notice tone={tone}>{children}</Notice>;

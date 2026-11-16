@@ -8,8 +8,8 @@ import {RespondentError} from './errors';
  * Signature answers at submit. The browser has already uploaded each drawn PNG straight to
  * storage (src/respondent/upload.ts → POST /site-api/uploads/signature, files.md: bytes never
  * pass through the Worker) and sends `{fileId, token}`. `claimSignatures` verifies the token,
- * completes the upload, re-checks the PNG and rewrites the answer to
- * `{url: "/__platform/files/<id>/signature.png"}` (src/server/intelform/uploads/signatures.ts).
+ * completes the upload, re-checks the PNG and rewrites the answer to `{fileId}`: a private
+ * file, shown only through the guarded view route (src/server/intelform/uploads/signatures.ts).
  */
 
 export interface SignatureStorage {

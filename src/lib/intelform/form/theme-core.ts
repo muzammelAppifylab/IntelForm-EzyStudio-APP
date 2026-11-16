@@ -35,13 +35,6 @@ export function fontStack(font: ThemeFont): string {
   return `"${font} Variable", "${font}", ${fallback}`
 }
 
-/** npm package that holds the font, for the lazy CSS import in the renderer. */
-export function fontPackage(font: ThemeFont): string {
-  // Instrument Serif has no variable build: it ships as the static @fontsource package.
-  if (font === 'Instrument Serif') return '@fontsource/instrument-serif'
-  return `@fontsource-variable/${font.toLowerCase().replace(/\s+/g, '-')}`
-}
-
 export const FONT_SIZES = ['s', 'm', 'l'] as const
 export const BUTTON_RADII = ['square', 'rounded', 'pill'] as const
 export const ALIGNMENTS = ['left', 'center'] as const

@@ -15,7 +15,7 @@ import {parseHidden} from '../../src/portal/intelform/contacts/prefs';
 import {
   advancedCount,
   clearFilters,
-  contactsCsvUrl,
+  contactsExportQuery,
   contactsListQuery,
   DEFAULT_CONTACTS_STATE,
   defaultDir,
@@ -82,21 +82,23 @@ describe('contacts list state', () => {
     expect(p).toMatchObject({segment: undefined, has: ['email', 'phone'], tz: 'Europe/London', sort: 'last_seen', dir: 'desc'});
   });
 
-  it('links the CSV to the filters, or to the picked contacts only', () => {
+  it('exports the filters, or the picked contacts only', () => {
     const s = {...DEFAULT_CONTACTS_STATE, form: [FORM], q: 'ada'};
-    expect(contactsCsvUrl(s, [], 'UTC')).toBe(`/site-api/contacts/export.csv?q=ada&form=${FORM}&tz=UTC&sort=last_seen&dir=desc`);
-    expect(contactsCsvUrl(s, ['e:ada@example.com', 'p:+15555550123'], 'UTC')).toBe(
-      '/site-api/contacts/export.csv?key=e%3Aada%40example.com&key=p%3A%2B15555550123&tz=UTC&sort=last_seen&dir=desc'
-    );
+    expect(contactsExportQuery(s, [], 'UTC')).toEqual({q: 'ada', form: [FORM], tz: 'UTC', sort: 'last_seen', dir: 'desc'});
+    expect(contactsExportQuery(s, ['e:ada@example.com', 'p:+15555550123'], 'UTC')).toEqual({
+      key: ['e:ada@example.com', 'p:+15555550123'],
+      tz: 'UTC',
+      sort: 'last_seen',
+      dir: 'desc',
+    });
   });
 
-  it('asks for the next page while the total says there is one', () => {
+  it('asks for the rows after the last one while there is a next cursor', () => {
     const q = contactsListQuery(DEFAULT_CONTACTS_STATE);
-    const page = (p: number, total: number): ContactsListResponse => ({contacts: [], total, page: p, pageSize: 50});
+    const page = (nextCursor: string | null): ContactsListResponse => ({contacts: [], pageSize: 50, nextCursor});
     const next = q.getNextPageParam!;
-    expect(next(page(1, 120), [], 1, [])).toBe(2);
-    expect(next(page(3, 120), [], 3, [])).toBeUndefined();
-    expect(next(page(1, 50), [], 1, [])).toBeUndefined();
+    expect(next(page('abc'), [], null, [])).toBe('abc');
+    expect(next(page(null), [], 'abc', [])).toBeUndefined();
     expect(q.queryKey).toEqual(['intelform', 'contacts', 'list', DEFAULT_CONTACTS_STATE]);
   });
 });

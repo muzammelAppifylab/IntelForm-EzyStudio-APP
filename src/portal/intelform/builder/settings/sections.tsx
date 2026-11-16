@@ -4,7 +4,7 @@ import {useMemo, useState} from 'react';
 import type {FormStatusResponse} from '../../../../lib/intelform/api-forms';
 import {formSettingsPatch, STEP_SOUNDS, type StepSound} from '../../../../lib/intelform/form/settings';
 import {playStepSound} from '../../../../respondent/sound';
-import {Button, Checkbox, Field, Notice, PasswordInput, RadioCards, Switch, useToast} from '../../../ui';
+import {Button, Checkbox, Field, Notice, PasswordInput, RadioCards, Switch, useConfirm, useToast} from '../../../ui';
 import {api, errorMessage} from '../../lib/api';
 import {fieldName} from '../ops';
 import {PipeInput} from '../pipe/PipeInput';
@@ -180,6 +180,25 @@ function PasswordSetting() {
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const confirm = useConfirm();
+
+  async function remove() {
+    setRemoving(true);
+    try {
+      await confirm({
+        title: 'Remove the password?',
+        body: 'Anyone with the link will be able to respond.',
+        confirmLabel: 'Remove password',
+        pendingLabel: 'Removing…',
+        action: async () => {
+          if (!(await save({password: null}, 'Password removed'))) throw new Error('The password wasn’t removed. Try again.');
+        },
+      });
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   async function submit() {
     const parsed = formSettingsPatch.shape.password.safeParse(value);
@@ -206,11 +225,11 @@ function PasswordSetting() {
         </div>
         {!readOnly && !editing && (
           <div className="if-row-actions">
-            <Button size="sm" variant="secondary" icon="key" onClick={() => setEditing(true)}>
+            <Button size="sm" variant="secondary" icon="key" disabled={removing} onClick={() => setEditing(true)}>
               {hasPassword ? 'Change' : 'Set password'}
             </Button>
             {hasPassword && (
-              <Button size="sm" variant="ghost" onClick={() => void save({password: null}, 'Password removed')}>
+              <Button size="sm" variant="danger" pending={removing} pendingLabel="Removing…" onClick={() => void remove()}>
                 Remove
               </Button>
             )}
@@ -224,7 +243,7 @@ function PasswordSetting() {
             e.preventDefault();
             void submit();
           }}>
-          <PasswordField value={value} error={error ?? errors.password ?? null}onChange={v => (setValue(v), setError(null))} />
+          <PasswordField value={value} error={error ?? errors.password ?? null} onChange={v => (setValue(v), setError(null))} />
           <div className="if-row-actions">
             <Button type="submit" pending={busy} pendingLabel="Saving…">
               Save password

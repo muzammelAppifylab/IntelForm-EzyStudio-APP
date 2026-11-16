@@ -18,6 +18,10 @@ export interface SignatureContext {
   formId: string;
   /** The signature field's id. */
   fieldId: string;
+  /** The page's render token (the form as the server handed it out). */
+  renderToken: string;
+  /** The unlock token of a password-protected form. */
+  unlockToken?: string | null;
   signal?: AbortSignal;
 }
 
@@ -53,7 +57,14 @@ export async function uploadSignature(blob: Blob, ctx: SignatureContext): Promis
       method: 'POST',
       credentials: 'same-origin',
       headers: {'content-type': 'application/json'},
-      body: JSON.stringify({formId: ctx.formId, fieldId: ctx.fieldId, contentType: file.type, size: file.size}),
+      body: JSON.stringify({
+        formId: ctx.formId,
+        fieldId: ctx.fieldId,
+        contentType: file.type,
+        size: file.size,
+        renderToken: ctx.renderToken,
+        ...(ctx.unlockToken ? {unlockToken: ctx.unlockToken} : {}),
+      }),
       signal: ctx.signal,
     });
   } catch (err) {
@@ -100,6 +111,7 @@ export async function prepareSignatureAnswers(
   fields: readonly {id: string; type: string}[],
   answers: Record<string, unknown>,
   formId: string,
+  tokens: {renderToken: string; unlockToken?: string | null},
   signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const out = {...answers};
@@ -107,7 +119,7 @@ export async function prepareSignatureAnswers(
     if (f.type !== 'signature') continue;
     const v = answers[f.id] as {url?: unknown} | undefined;
     if (!v || typeof v !== 'object' || !isPngDataUrl(v.url)) continue;
-    out[f.id] = await uploadSignature(dataUrlToBlob(v.url), {formId, fieldId: f.id, signal});
+    out[f.id] = await uploadSignature(dataUrlToBlob(v.url), {formId, fieldId: f.id, ...tokens, signal});
   }
   return out;
 }

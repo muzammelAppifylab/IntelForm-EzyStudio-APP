@@ -1,0 +1,358 @@
+/*
+ * The site's tokens and element base (colours, type, shape, reset, headings): the part every
+ * page needs. global.css imports it; the public form page (src/pages/f/[slug].astro) loads only
+ * this, not the website's layout, header, blog and portal styles.
+ */
+
+/*
+ * One plain stylesheet, no UI library.
+ * Colours are tokens on :root; the dark set is the same tokens redefined under
+ * prefers-color-scheme so every surface flips together.
+ */
+
+/*
+ * THE colour, type and shape tokens of the whole site: the website, the
+ * sign-in pages and the dashboard (`app.css`). Change the brand here, once:
+ * `--accent` is the brand colour (buttons, links, the active nav item), and
+ * every other token is derived from or paired with it.
+ *
+ * Light by default, dark under prefers-color-scheme; `data-theme="light" |
+ * "dark"` on <html> (the dashboard's theme menu) forces one or the other.
+ */
+:root {
+  color-scheme: light;
+
+  /* IntelForm "paper & ink" (legacy/docs/DESIGN.md v2.1): an oat paper canvas, warm
+     violet-black ink, periwinkle actions edged in 2px ink, pine green confirmations and
+     one persimmon live accent. Shadowless: borders and fills separate surfaces; only
+     menus, popovers and dialogs float (`--shadow-lg`). */
+  --bg: #f5f2ea;
+  --surface: #f5f2ea;
+  --card: #fdfcf9;
+  --ink: #211d2a;
+  --muted: #5a5851;
+  --subtle: #716e67;
+  --line: #dad8d2;
+  --line-strong: #8b8881;
+  --hover: #eae8e3;
+
+  /* Strong brand (periwinkle 600): focus rings, links, checked controls, chart lines. */
+  --accent: #6c48ca;
+  --accent-hover: #5737a8;
+  --accent-ink: #ffffff;
+  --accent-soft: #e5e2fe;
+  --accent-text: #5737a8;
+  --ring: var(--accent);
+
+  /* The primary button and selected tiles: soft periwinkle, label and 2px edge in ink. */
+  --primary: #c9c0ff;
+  --primary-hover: #b4a5fe;
+  --primary-ink: #211d2a;
+  --edge: #211d2a;
+
+  --success: #2f5d46;
+  --success-soft: #e3f0e8;
+  --warning: #8c5e02;
+  --warning-soft: #fdedd6;
+  --danger: #a12144;
+  --danger-hover: #7d1633;
+  --danger-ink: #ffffff;
+  --danger-soft: #fee6e9;
+  --info: #432984;
+  --info-soft: #eeebfd;
+
+  /* IntelForm's own: the live accent (persimmon, once per screen), the dark "chamber"
+     panel, ratings, NPS groups, the respondent progress bar and chart series. */
+  --highlight: #e8613f;
+  --highlight-ink: #211d2a;
+  --pine: #2f5d46;
+  --pine-ink: #f5f2ea;
+  --chamber: #211d2a;
+  --chamber-ink: #f5f2ea;
+  --chamber-muted: #c3c0ba;
+  --field: #fdfcf9;
+  --option-selected: #c9c0ff;
+  --option-selected-ink: #211d2a;
+  --progress-fill: #211d2a;
+  --progress-track: #dad8d2;
+  --rating: #eaad4f;
+  --rating-empty: #a6a39c;
+  --nps-detractor: #e55071;
+  --nps-passive: #eaad4f;
+  --nps-promoter: #42765c;
+  --chart-1: #6c48ca;
+  --chart-2: #42765c;
+  --chart-3: #e8613f;
+  --chart-4: #d9961a;
+  --chart-5: #1361d6;
+  --chart-6: #8b8881;
+
+  --shadow-sm: 0 0 0 transparent;
+  --shadow-md: 0 0 0 transparent;
+  --shadow-lg: 0 12px 32px color-mix(in oklab, #211d2a 12%, transparent);
+  --overlay: rgb(33 29 42 / 0.5);
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  --radius-full: 9999px;
+
+  /* Figtree for every control, Instrument Serif (regular weight only) for titles and big
+     numbers. Self-hosted when the @fontsource packages are installed (see app.css);
+     until then the fallbacks below are used. */
+  --font-sans: Figtree, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #17151d;
+  --surface: #17151d;
+  --card: #221f2a;
+  --ink: #f5f2ea;
+  --muted: #c3c0ba;
+  --subtle: #a6a39c;
+  --line: #34304a;
+  --line-strong: #8b8881;
+  --hover: #2a2638;
+
+  --accent: #b4a5fe;
+  --accent-hover: #c9c0ff;
+  --accent-ink: #211d2a;
+  --accent-soft: #3a2a5c;
+  --accent-text: #b4a5fe;
+
+  --primary: #c9c0ff;
+  --primary-hover: #b4a5fe;
+  --primary-ink: #211d2a;
+  --edge: #f5f2ea;
+
+  --success: #a6ccb7;
+  --success-soft: #0e2b27;
+  --warning: #f8c883;
+  --warning-soft: #33240a;
+  --danger: #fd758e;
+  --danger-hover: #ffa9b5;
+  --danger-ink: #211d2a;
+  --danger-soft: #3a1018;
+  --info: #b4a5fe;
+  --info-soft: #2a2140;
+
+  --highlight: #e8613f;
+  --highlight-ink: #211d2a;
+  --pine: #a6ccb7;
+  --pine-ink: #211d2a;
+  --chamber: #0e0c15;
+  --chamber-ink: #f5f2ea;
+  --chamber-muted: #c3c0ba;
+  --field: #17151d;
+  --option-selected: #3a2a5c;
+  --option-selected-ink: #f5f2ea;
+  --progress-fill: #b4a5fe;
+  --progress-track: #34304a;
+  --rating: #eaad4f;
+  --rating-empty: #716e67;
+  --nps-detractor: #fd758e;
+  --nps-passive: #eaad4f;
+  --nps-promoter: #7eaf94;
+  --chart-1: #b4a5fe;
+  --chart-2: #7eaf94;
+  --chart-3: #e8613f;
+  --chart-4: #eaad4f;
+  --chart-5: #639fff;
+  --chart-6: #8b8881;
+
+  --shadow-sm: 0 0 0 transparent;
+  --shadow-md: 0 0 0 transparent;
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
+  --overlay: rgb(0 0 0 / 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #17151d;
+    --surface: #17151d;
+    --card: #221f2a;
+    --ink: #f5f2ea;
+    --muted: #c3c0ba;
+    --subtle: #a6a39c;
+    --line: #34304a;
+    --line-strong: #8b8881;
+    --hover: #2a2638;
+
+    --accent: #b4a5fe;
+    --accent-hover: #c9c0ff;
+    --accent-ink: #211d2a;
+    --accent-soft: #3a2a5c;
+    --accent-text: #b4a5fe;
+
+    --primary: #c9c0ff;
+    --primary-hover: #b4a5fe;
+    --primary-ink: #211d2a;
+    --edge: #f5f2ea;
+
+    --success: #a6ccb7;
+    --success-soft: #0e2b27;
+    --warning: #f8c883;
+    --warning-soft: #33240a;
+    --danger: #fd758e;
+    --danger-hover: #ffa9b5;
+    --danger-ink: #211d2a;
+    --danger-soft: #3a1018;
+    --info: #b4a5fe;
+    --info-soft: #2a2140;
+
+    --highlight: #e8613f;
+    --highlight-ink: #211d2a;
+    --pine: #a6ccb7;
+    --pine-ink: #211d2a;
+    --chamber: #0e0c15;
+    --chamber-ink: #f5f2ea;
+    --chamber-muted: #c3c0ba;
+    --field: #17151d;
+    --option-selected: #3a2a5c;
+    --option-selected-ink: #f5f2ea;
+    --progress-fill: #b4a5fe;
+    --progress-track: #34304a;
+    --rating: #eaad4f;
+    --rating-empty: #716e67;
+    --nps-detractor: #fd758e;
+    --nps-passive: #eaad4f;
+    --nps-promoter: #7eaf94;
+    --chart-1: #b4a5fe;
+    --chart-2: #7eaf94;
+    --chart-3: #e8613f;
+    --chart-4: #eaad4f;
+    --chart-5: #639fff;
+    --chart-6: #8b8881;
+
+    --shadow-sm: 0 0 0 transparent;
+    --shadow-md: 0 0 0 transparent;
+    --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
+    --overlay: rgb(0 0 0 / 0.6);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* The pages hide sections until their data arrives; keep that stronger than
+   any display rule below. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+picture {
+  display: block;
+}
+
+a {
+  color: inherit;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* "Skip to content" (layouts/Base.astro): hidden until focused; it moves focus to <main id="main">. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip-link:focus {
+  left: 16px;
+  top: 16px;
+  z-index: 100;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+main:focus {
+  outline: none;
+}
+
+/* The portal moves focus to the screen title after each navigation
+   (src/portal/routes.tsx): a place to start reading, not a control. */
+.app-title:focus {
+  outline: none;
+}
+
+/* Page to page on the public site: a short cross-fade instead of a white
+   flash, with no JavaScript (every page stays a real HTML page). The header
+   holds still. Browsers without it simply load the next page. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition {
+    navigation: auto;
+  }
+
+  .site-header {
+    view-transition-name: site-header;
+  }
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.15;
+  margin: 0 0 0.4em;
+  letter-spacing: -0.02em;
+}
+
+/* Titles in Instrument Serif, which has ONE weight: never bold it. */
+h1,
+h2 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+h1 {
+  font-size: clamp(30px, 5vw, 48px);
+}
+
+h2 {
+  font-size: clamp(22px, 3vw, 30px);
+}
+
+h3 {
+  font-size: 18px;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 24px 0;
+}
+

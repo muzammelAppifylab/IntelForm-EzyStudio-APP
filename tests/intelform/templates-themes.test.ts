@@ -84,6 +84,9 @@ function fakeDb() {
     };
   const db = {
     calls,
+    $queryRaw: rec('$queryRaw', [
+      {id: SAVED_ID, slug: 'saved-abc', name: 'My template', category: 'Saved', description: '', created_at: new Date('2026-01-02T03:04:05.000Z'), layout: 'one_at_a_time', field_count: 2, created_by: 'Ada'},
+    ]),
     template: {
       findMany: rec('template.findMany', [savedRow()]),
       findUnique: rec('template.findUnique', (a: {where: {id?: string; slug?: string}}) =>

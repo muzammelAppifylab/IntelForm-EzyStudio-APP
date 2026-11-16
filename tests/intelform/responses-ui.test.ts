@@ -8,7 +8,7 @@ import {
   applySearchPatch,
   browserTz,
   CLEAR_TABLE_FILTERS,
-  csvUrl,
+  exportQuery,
   deleteCopy,
   isTableFiltered,
   navKey,
@@ -76,10 +76,10 @@ describe('responses-ui: URL state', () => {
     expect(summaryQueryString({range: 'custom', from: '2026-01-01', to: '2026-01-02'})).toBe(`?range=custom&from=2026-01-01&to=2026-01-02&tz=${tz}`);
   });
 
-  it('points the CSV at the filters, or at the selected rows only', () => {
+  it('exports the filters, or the selected rows only (always newest first)', () => {
     const t = readTableState({q: 'x', sort: 'device', dir: 'asc'});
-    expect(csvUrl(FID, t)).toBe(`/site-api/responses/forms/${FID}/responses.csv?q=x&tz=${tz}&sort=device&dir=asc`);
-    expect(csvUrl(FID, t, ['a', 'b'])).toBe(`/site-api/responses/forms/${FID}/responses.csv?tz=${tz}&ids=a&ids=b&sort=device&dir=asc`);
+    expect(exportQuery(t)).toEqual({q: 'x', tz: browserTz});
+    expect(exportQuery(t, ['a', 'b'])).toEqual({tz: browserTz, ids: ['a', 'b']});
   });
 
   it('opens the table from the summary with the chart range and nothing else', () => {

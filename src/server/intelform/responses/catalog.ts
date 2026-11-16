@@ -101,6 +101,34 @@ type CatalogRow = {
   versions: VersionFields[] | null;
 };
 
+/** Catalogs of several forms in ONE query (the all-forms export reads a batch at a time). */
+export async function loadCatalogs(db: PrismaClient, formIds: readonly string[]): Promise<Map<string, FormCatalog>> {
+  const out = new Map<string, FormCatalog>();
+  if (!formIds.length) return out;
+  const rows = await db.$queryRaw<CatalogRow[]>`
+    SELECT f.id, f.title, f.slug, f.published_version_id, f.response_count,
+      (SELECT jsonb_agg(jsonb_build_object('id', v.id, 'version', v.version, 'fields', v.definition->'fields') ORDER BY v.version DESC)
+       FROM (SELECT id, version, definition FROM form_versions WHERE form_id = f.id ORDER BY version DESC LIMIT ${MAX_VERSIONS}) v) AS versions
+    FROM forms f WHERE f.id = ANY(${[...formIds]}::uuid[])
+  `;
+  for (const row of rows) out.set(String(row.id), catalogOf(row));
+  return out;
+}
+
+function catalogOf(row: CatalogRow): FormCatalog {
+  const built = buildCatalog(row.versions ?? [], row.published_version_id);
+  return {
+    form: {
+      id: row.id,
+      title: row.title,
+      slug: row.slug,
+      publishedVersionId: row.published_version_id,
+      responseCount: Number(row.response_count),
+    },
+    ...built,
+  };
+}
+
 /** Loads the form and its catalog; null when the form is gone. One query. */
 export async function loadCatalog(db: PrismaClient, formId: string): Promise<FormCatalog | null> {
   const [row] = await db.$queryRaw<CatalogRow[]>`

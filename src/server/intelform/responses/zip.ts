@@ -46,13 +46,15 @@ export function dosDateTime(d: Date): {time: number; date: number} {
   };
 }
 
-const LIMIT = 0xffffffff;
+/** ZIP (no ZIP64) offsets and sizes stop here. */
+export const ZIP_LIMIT = 0xffffffff;
+const LIMIT = ZIP_LIMIT;
 // Bit 3: sizes and CRC in a data descriptor after the data. Bit 11: the name is UTF-8.
 const FLAGS = 0x0808;
 
 const encoder = new TextEncoder();
 
-interface DirEntry {
+export interface DirEntry {
   name: Uint8Array;
   crc: number;
   size: number;
@@ -61,7 +63,7 @@ interface DirEntry {
   date: number;
 }
 
-function localHeader(name: Uint8Array, time: number, date: number): Uint8Array {
+export function localHeader(name: Uint8Array, time: number, date: number): Uint8Array {
   const b = new Uint8Array(30 + name.length);
   const v = new DataView(b.buffer);
   v.setUint32(0, 0x04034b50, true);
@@ -77,7 +79,7 @@ function localHeader(name: Uint8Array, time: number, date: number): Uint8Array {
   return b;
 }
 
-function dataDescriptor(crc: number, size: number): Uint8Array {
+export function dataDescriptor(crc: number, size: number): Uint8Array {
   const b = new Uint8Array(16);
   const v = new DataView(b.buffer);
   v.setUint32(0, 0x08074b50, true);
@@ -87,7 +89,7 @@ function dataDescriptor(crc: number, size: number): Uint8Array {
   return b;
 }
 
-function centralEntry(e: DirEntry): Uint8Array {
+export function centralEntry(e: DirEntry): Uint8Array {
   const b = new Uint8Array(46 + e.name.length);
   const v = new DataView(b.buffer);
   v.setUint32(0, 0x02014b50, true);
@@ -107,7 +109,7 @@ function centralEntry(e: DirEntry): Uint8Array {
   return b;
 }
 
-function endOfDirectory(count: number, size: number, offset: number): Uint8Array {
+export function endOfDirectory(count: number, size: number, offset: number): Uint8Array {
   const b = new Uint8Array(22);
   const v = new DataView(b.buffer);
   v.setUint32(0, 0x06054b50, true);

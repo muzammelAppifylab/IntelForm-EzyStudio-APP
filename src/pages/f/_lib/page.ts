@@ -53,9 +53,11 @@ export async function loadFormPage({db, secret, slug, ip, now = Date.now()}: Loa
   if (!SLUG_RE.test(clean)) return {kind: 'missing'};
   if (!db || !secret) return {kind: 'unavailable'};
   try {
-    const count = await hit(db, publicGetKey(await ipKeyFor(secret, ip)), PUBLIC_GET_WINDOW);
+    // The limit and the form in one trip (the form usually comes from the Site Cache).
+    const ipKey = await ipKeyFor(secret, ip);
+    const [count, payload] = await Promise.all([hit(db, publicGetKey(ipKey), PUBLIC_GET_WINDOW), payloadForSlug(db, secret, clean)]);
     if (count > PUBLIC_GET_RATE_LIMIT) return {kind: 'limited', retryAfter: retryAfter(PUBLIC_GET_WINDOW, now)};
-    return stateOf(await payloadForSlug(db, secret, clean));
+    return stateOf(payload);
   } catch {
     return {kind: 'unavailable'};
   }

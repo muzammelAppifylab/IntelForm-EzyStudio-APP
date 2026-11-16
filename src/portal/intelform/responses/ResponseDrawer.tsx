@@ -1,9 +1,9 @@
-import {useQuery} from '@tanstack/react-query';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {useEffect, useRef} from 'react';
 
 import {Button, DefinitionList, Drawer, ErrorNote, IconButton, LoadingBlock, Tooltip} from '../../ui';
 import {useCan} from '../lib/can';
-import {responseDetailQuery} from '../queries/responses';
+import {responseDetailQuery, responsesListQuery} from '../queries/responses';
 import {useConfirmDelete} from './ConfirmDelete';
 import {countryLabel, deviceLabel, formatDateTime, formatDuration, formatNumber} from './format';
 import {navKey, type TableState} from './state';
@@ -33,6 +33,13 @@ export function ResponseDrawer({
   const confirming = useRef(false);
   // While the next response loads, the previous one stays on screen (aria-busy).
   const detail = open ? data : undefined;
+  // "3 of 120" from the table rows already loaded (the server no longer counts per open).
+  const qc = useQueryClient();
+  const list = qc.getQueryData(responsesListQuery(formId, table).queryKey);
+  const first = list?.pages[0];
+  const index = detail && list ? list.pages.flatMap(p => p.rows).findIndex(r => r.id === detail.id) : -1;
+  const position =
+    index >= 0 && first ? `${formatNumber(index + 1)} of ${formatNumber(first.total)}${first.totalCapped ? '+' : ''} · ` : '';
 
   useEffect(() => {
     if (!open || !detail) return;
@@ -70,7 +77,7 @@ export function ResponseDrawer({
       onClose={onClose}
       title="Response"
       description={
-        detail ? `${formatNumber(detail.position)} of ${formatNumber(detail.total)} · ${formatDateTime(detail.submittedAt)}` : 'Loading…'
+        detail ? `${position}${formatDateTime(detail.submittedAt)}` : 'Loading…'
       }
       footer={
         <div className="responses-drawer-nav">
@@ -97,7 +104,7 @@ export function ResponseDrawer({
             />
           </Tooltip>
           {canDelete && detail && (
-            <Button variant="ghost" size="sm" icon="trash" className="responses-drawer-delete" onClick={() => void remove()}>
+            <Button variant="danger" size="sm" icon="trash" className="responses-drawer-delete" onClick={() => void remove()}>
               Delete
             </Button>
           )}

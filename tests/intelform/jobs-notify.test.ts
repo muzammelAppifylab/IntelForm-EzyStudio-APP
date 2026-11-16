@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { blankDefinition, newField, type FormDefinition } from '../../src/lib/intelform/form/definition'
 import { defaultFormSettings } from '../../src/lib/intelform/form/settings'
 import { DontRetry, JobRejected } from '../../src/platform/background'
+import { generateWebhookSecret } from '../../src/server/intelform/webhooks/sign'
 import {
   answersAsText,
   CONFIRM_EMAIL_LIMIT,
@@ -189,7 +190,7 @@ function world(settings: Record<string, unknown>, opts: { users?: User[]; answer
       ),
     },
     form: {
-      findUnique: vi.fn(async () => ({ settings: { ...defaultFormSettings(), ...settings }, webhookSecret: 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw' })),
+      findUnique: vi.fn(async () => ({ settings: { ...defaultFormSettings(), ...settings }, webhookSecret: generateWebhookSecret() })),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
     intelformSettings: { findUnique: vi.fn(async () => ({ appName: 'IntelForm', emailFromName: null, emailReplyTo: 'help@acme.test' })) },
@@ -208,11 +209,17 @@ function world(settings: Record<string, unknown>, opts: { users?: User[]; answer
     intelformRateLimit: { findFirst: vi.fn(async ({ where }: { where: { key: string } }) => (markers.has(where.key) ? { key: where.key } : null)) },
     webhookDelivery: { findFirst: vi.fn(async () => null) },
     $executeRaw: vi.fn(async (_s: TemplateStringsArray, ...values: unknown[]) => {
-      markers.add(String(values[0]))
+      // markAllDone sends the keys as one array value; markDone as the first value.
+      const list = values.find(Array.isArray) as unknown[] | undefined
+      if (list) for (const k of list) markers.add(String(k))
+      else markers.add(String(values[0]))
       return 1
     }),
     $queryRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
       const text = s.join('?')
+      if (text.includes('SELECT DISTINCT key FROM intelform_rate_limits')) {
+        return (values[0] as string[]).filter((k) => markers.has(k)).map((key) => ({ key }))
+      }
       if (text.includes('intelform_rate_limits')) {
         const key = String(values[0])
         windows.set(key, (windows.get(key) ?? 0) + 1)

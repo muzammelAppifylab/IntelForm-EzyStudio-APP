@@ -21,7 +21,6 @@ import {api} from '../lib/api';
 export const contactsKey = ['intelform', 'contacts'] as const;
 
 export const CONTACTS_PATH = '/site-api/contacts';
-export const CONTACTS_CSV_PATH = `${CONTACTS_PATH}/export.csv`;
 
 export const browserTz = (() => {
   try {
@@ -95,14 +94,14 @@ export function filterParams(s: ContactsState, tz = browserTz) {
   };
 }
 
-/** The list, 50 a page; "Load more" asks for the next page while the total says there is one. */
+/** The list, 50 a page by keyset; "Load more" asks for the rows after the last one. */
 export const contactsListQuery = (s: ContactsState) =>
   infiniteQueryOptions({
     queryKey: [...contactsKey, 'list', s],
     queryFn: ({pageParam, signal}) =>
-      api<ContactsListResponse>(`${CONTACTS_PATH}${toQueryString({...filterParams(s), page: pageParam > 1 ? pageParam : undefined})}`, {signal}),
-    initialPageParam: 1,
-    getNextPageParam: last => (last.page * last.pageSize < last.total ? last.page + 1 : undefined),
+      api<ContactsListResponse>(`${CONTACTS_PATH}${toQueryString({...filterParams(s), cursor: pageParam ?? undefined})}`, {signal}),
+    initialPageParam: null as string | null,
+    getNextPageParam: last => last.nextCursor ?? undefined,
     placeholderData: keepPreviousData,
   });
 
@@ -119,10 +118,16 @@ export const contactDetailQuery = (key: string) =>
     queryFn: ({signal}) => api<ContactDetailResponse>(`${CONTACTS_PATH}/detail${toQueryString({key})}`, {signal}),
   });
 
-/** CSV of the current filters, or of just these contacts (in the list's order). */
-export function contactsCsvUrl(s: ContactsState, keys: string[] = [], tz = browserTz): string {
-  const qs = keys.length ? toQueryString({key: keys.slice(0, 1000), tz, sort: s.sort, dir: s.dir}) : toQueryString(filterParams(s, tz));
-  return `${CONTACTS_CSV_PATH}${qs}`;
+/** The contacts export's query: the current filters, or just these contacts (in the list's order). */
+export function contactsExportQuery(s: ContactsState, keys: string[] = [], tz = browserTz): Record<string, string | string[]> {
+  const raw: Record<string, unknown> = keys.length ? {key: keys.slice(0, 1000), tz, sort: s.sort, dir: s.dir} : filterParams(s, tz);
+  const out: Record<string, string | string[]> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (Array.isArray(v)) {
+      if (v.length) out[k] = v.map(String);
+    } else if (v !== undefined && v !== null && v !== '') out[k] = String(v);
+  }
+  return out;
 }
 
 /** Erase contacts (every response they sent). Refreshes contacts, forms and responses. */

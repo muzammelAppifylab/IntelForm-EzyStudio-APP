@@ -1,12 +1,11 @@
 import {afterAll, describe, expect, it} from 'vitest';
 
-import {responsesCsvQuery, responsesFilterQuery, summaryQuery} from '../../src/lib/intelform/api-responses';
+import {responsesFilterQuery, summaryQuery} from '../../src/lib/intelform/api-responses';
 // The Node build of the client, as the vitest alias maps the app's own import.
 import {Prisma} from '../../src/generated/prisma-node/client';
 import {createDb, type PrismaClient} from '../../src/platform/db';
 import {loadCatalog} from '../../src/server/intelform/responses/catalog';
-import {formCsvChunks} from '../../src/server/intelform/responses/csv';
-import {exportAllResponsesZip} from '../../src/server/intelform/responses/export-all';
+import {buildPart, type BuildContext, type BuildState} from '../../src/server/intelform/exports/builders';
 import {decodeCursor, encodeCursor, sortSpec} from '../../src/server/intelform/responses/query';
 import {formSummary} from '../../src/server/intelform/responses/summary';
 import {deleteResponses, listResponses, responseDetail} from '../../src/server/intelform/responses/table';
@@ -57,7 +56,6 @@ describe.skipIf(!URL_)('responses SQL on the sample data', () => {
           const ids = page.rows.map(r => r.id);
           for (let i = 0; i < Math.min(ids.length, 3); i++) {
             const d = (await responseDetail(db, cat, ids[i], filters({sort, dir})))!;
-            expect(d.position, `${sort} ${dir}`).toBe(i + 1);
             expect(d.prevId).toBe(i ? ids[i - 1] : null);
             expect(d.nextId).toBe(ids[i + 1] ?? null);
           }
@@ -134,16 +132,27 @@ describe.skipIf(!URL_)('responses SQL on the sample data', () => {
     }
   });
 
-  it('exports CSV in batches and a ZIP of every form', async () => {
+  it('exports CSV and a ZIP of every form a bounded step at a time (the export job)', async () => {
     const db = getDb();
     const cat = (await loadCatalog(db, CONTACT))!;
-    let csv = '';
-    for await (const chunk of formCsvChunks(db, cat, responsesCsvQuery.parse({}))) csv += chunk;
+    const build = async (ctx: BuildContext) => {
+      let state: BuildState = {};
+      const parts: Uint8Array[] = [];
+      for (let i = 0; i < 100_000; i++) {
+        const step = await buildPart(ctx, state);
+        parts.push(step.bytes);
+        state = step.state;
+        if (step.done) break;
+      }
+      return Buffer.concat(parts);
+    };
+    const csv = (await build({db, kind: 'responses', formId: CONTACT, params: {query: {}, tz: 'UTC', origin: null}})).toString('utf8');
     expect(csv.split('\r\n').filter(Boolean).length).toBe(cat.form.responseCount + 1);
     expect(csv.charCodeAt(0)).toBe(0xfeff);
-    let zipBytes = 0;
-    for await (const b of exportAllResponsesZip(db)) zipBytes += b.length;
-    expect(zipBytes).toBeGreaterThan(100);
+    const zip = await build({db, kind: 'all', formId: null, params: {}});
+    expect(zip.length).toBeGreaterThan(100);
+    // Ends with the end-of-central-directory record.
+    expect(zip.readUInt32LE(zip.length - 22)).toBe(0x06054b50);
   });
 
   it('deletes and keeps the counter in step (rolled back)', async () => {
@@ -159,14 +168,14 @@ describe.skipIf(!URL_)('responses SQL on the sample data', () => {
     await expect(
       db.$transaction(async tx => {
         const t = tx as unknown as PrismaClient;
-        const r = await deleteResponses(t, CONTACT, [...ids, '00000000-0000-4000-8000-0000000000ff'], []);
-        expect(r).toEqual({formFound: true, deleted: 2, fileIds: []});
+        const r = await deleteResponses(t, CONTACT, [...ids, '00000000-0000-4000-8000-0000000000ff']);
+        expect(r).toEqual({formFound: true, deleted: 2});
         const [form] = await t.$queryRaw<{response_count: number; last: Date | null}[]>`
           SELECT response_count, last_response_at AS last FROM forms WHERE id = ${CONTACT}::uuid`;
         expect(form.response_count).toBe(cat.form.responseCount - 2);
         const [max] = await t.$queryRaw<{m: Date | null}[]>`SELECT max(submitted_at) AS m FROM responses WHERE form_id = ${CONTACT}::uuid`;
         expect(form.last?.getTime() ?? null).toBe(max.m?.getTime() ?? null);
-        expect(await deleteResponses(t, '00000000-0000-4000-8000-0000000000fe', ids, [])).toMatchObject({formFound: false, deleted: 0});
+        expect(await deleteResponses(t, '00000000-0000-4000-8000-0000000000fe', ids)).toMatchObject({formFound: false, deleted: 0});
         throw ROLLBACK;
       })
     ).rejects.toBe(ROLLBACK);

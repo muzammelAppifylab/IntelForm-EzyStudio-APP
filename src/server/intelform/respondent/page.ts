@@ -48,15 +48,19 @@ export async function loadPublicForm(
 ): Promise<PublicFormPage> {
   const secret = config.jwtSecret;
   if (!secret) return {status: 503, payload: null, noindex: true, head: null};
-  try {
-    await limitPublicGet(db, await ipKeyFor(secret, opts.ip ?? null));
-  } catch (err) {
-    if (err instanceof RespondentError && err.status === 429) {
-      return {status: 429, payload: null, noindex: true, retryAfter: Number(err.headers?.['Retry-After'] ?? 60), head: null};
-    }
-    throw err;
-  }
-  const payload = await payloadForSlug(db, secret, slug, opts.unlock ?? null);
+  const ipKey = await ipKeyFor(secret, opts.ip ?? null);
+  // The limit and the form in one trip.
+  const [limited, payload] = await Promise.all([
+    limitPublicGet(db, ipKey).then(
+      () => null,
+      (err: unknown) => {
+        if (err instanceof RespondentError && err.status === 429) return Number(err.headers?.['Retry-After'] ?? 60);
+        throw err;
+      }
+    ),
+    payloadForSlug(db, secret, slug, opts.unlock ?? null),
+  ]);
+  if (limited !== null) return {status: 429, payload: null, noindex: true, retryAfter: limited, head: null};
   if (!payload) return {status: 404, payload: null, noindex: true, head: null};
   if (payload.status === 'moved') return {status: 301, payload, noindex: true, head: null};
   const s = payload.settings;

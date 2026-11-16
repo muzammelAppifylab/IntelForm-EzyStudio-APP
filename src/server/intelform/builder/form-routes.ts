@@ -5,6 +5,8 @@ import {problem, requireAuth, requirePermission, withDb, withViewer} from '../..
 import {IdempotencyConflict, idempotencyKeyOf, idempotent} from '../../../platform/idempotency';
 import {PERMISSIONS} from '../../permissions';
 import {clearPublicSiteCache} from '../public-site/data';
+import {clearPublicFormCache} from '../respondent/cache';
+import {clearSummaryCache} from '../responses/summary';
 import {ifMatchRevision} from './draft';
 import {builderError, GONE, uuidOrNull} from './errors';
 import {publishInTx, type VersionDetail, type VersionsResponse} from './publish';
@@ -42,9 +44,10 @@ export const formDraftRoutes = new Hono()
           expected: ifMatchRevision(c.req.header('if-match')),
           userId: c.var.viewer.id!,
         });
-        // A live form's title, slug or listing settings may have changed what the public site shows.
-        if (result.status === 'live' && (patch.title !== undefined || patch.slug !== undefined || patch.settingsPatch !== undefined)) {
-          await clearPublicSiteCache();
+        // The title, slug or settings may have changed what the public site and the form page show.
+        if (patch.title !== undefined || patch.slug !== undefined || patch.settingsPatch !== undefined || patch.passwordHash !== undefined) {
+          if (result.status === 'live') await clearPublicSiteCache();
+          if (result.status !== 'draft') await clearPublicFormCache();
         }
         return c.json<FormPatchResponse>(result);
       } catch (err) {
@@ -66,7 +69,7 @@ export const formDraftRoutes = new Hono()
             )
           ).value
         : await c.var.db.$transaction(tx => publishInTx(tx, formId, userId));
-      await clearPublicSiteCache();
+      await Promise.all([clearPublicSiteCache(), clearPublicFormCache(), clearSummaryCache(formId)]);
       return c.json<PublishResponse>(result);
     } catch (err) {
       if (err instanceof IdempotencyConflict) return c.json(problem(err.code, 'Reload the page and publish again.'), 409);

@@ -1,5 +1,4 @@
-import type {PrismaClient} from '../../../generated/prisma/client';
-import {completeUpload, fileUrl, getFile, publicFileUrl} from '../../../platform/files';
+import {completeUpload, getFile} from '../../../platform/files';
 import {config} from '../../../platform/config';
 import {validatePng, PngError} from './png';
 import {
@@ -27,15 +26,19 @@ import {verifyUploadToken} from './token';
  *   4. a submit that never happens leaves a pending file, which the platform deletes after about
  *      an hour: no orphan signatures.
  *
- * Signatures are PUBLIC files with an unguessable id, as in the old app, stored as
- * `{url: "/__platform/files/<id>/signature.png"}`. That is the shape the responses table, CSV,
- * contacts, retention and notification code read. A respondent never chooses the file: only one
- * this site created for this form's field (signed token) and that passed the PNG check is kept.
+ * Signatures are PRIVATE files (personal data, docs/agent/files.md), stored as `{fileId}`.
+ * They are only ever shown through GET /site-api/uploads/signatures/:responseId/:fieldId, which
+ * checks site:response:read and redirects to a 5-minute link (`signatureViewPath`): the
+ * responses table, drawer, CSV, notification emails and webhooks all carry that path, never a
+ * storage link. Answers saved before this change hold `{url: "/__platform/files/<id>/…"}`;
+ * every reader also takes the file id from that shape. A respondent never chooses the file:
+ * only one this site created for this form's field (signed token) and that passed the PNG
+ * check is kept.
  */
 
 /** The stored answer of a signature field. */
 export interface StoredSignature {
-  url: string;
+  fileId: string;
 }
 
 /** The submitted answer of a signature field (before `claimSignatures`). */
@@ -69,42 +72,6 @@ export function signatureViewPath(responseId: string, fieldId: string): string {
   return `/site-api/uploads/signatures/${encodeURIComponent(responseId)}/${encodeURIComponent(fieldId)}`;
 }
 
-/**
- * A link to a signature for a webhook or a notification email (no sign-in on the other end).
- * Lasts `expiresIn` seconds (default 7 days, the platform's maximum); null when storage fails.
- */
-export async function signatureLink(
-  requestUrl: string | URL,
-  fileId: string,
-  expiresIn = 7 * 24 * 60 * 60
-): Promise<string | null> {
-  if (!isFileId(fileId)) return null;
-  const res = await guarded(() => fileUrl(requestUrl, fileId, {expiresIn}));
-  return res.ok ? res.data.url : null;
-}
-
-/** Stored signature file ids of some responses (before deleting them). Tagged SQL only. */
-export async function responsesSignatureFileIds(db: PrismaClient, responseIds: readonly string[]): Promise<string[]> {
-  if (!responseIds.length) return [];
-  const rows = await db.$queryRaw<{file_id: string}[]>`
-    SELECT DISTINCT substring(e.value->>'url' from '^/__platform/files/([^/?#]+)/') AS file_id
-    FROM responses r, jsonb_each(r.answers) e
-    WHERE r.id = ANY(${responseIds as string[]}::uuid[])
-      AND jsonb_typeof(e.value) = 'object' AND starts_with(e.value->>'url', '/__platform/files/')
-  `;
-  return rows.map(r => r.file_id).filter(isFileId);
-}
-
-/** Stored signature file ids of every response of a form (before deleting the form). */
-export async function formSignatureFileIds(db: PrismaClient, formId: string): Promise<string[]> {
-  const rows = await db.$queryRaw<{file_id: string}[]>`
-    SELECT DISTINCT substring(e.value->>'url' from '^/__platform/files/([^/?#]+)/') AS file_id
-    FROM responses r, jsonb_each(r.answers) e
-    WHERE r.form_id = ${formId}::uuid
-      AND jsonb_typeof(e.value) = 'object' AND starts_with(e.value->>'url', '/__platform/files/')
-  `;
-  return rows.map(r => r.file_id).filter(isFileId);
-}
 
 export type ClaimResult =
   | {ok: true; fileIds: string[]}
@@ -169,7 +136,7 @@ export async function claimSignatures(requestUrl: string | URL, input: ClaimInpu
     }
     if (
       info.data.status !== 'pending' ||
-      info.data.visibility !== 'public' ||
+      info.data.visibility !== 'private' ||
       info.data.name !== SIGNATURE_NAME ||
       info.data.contentType !== SIGNATURE_TYPE
     ) {
@@ -207,7 +174,7 @@ export async function claimSignatures(requestUrl: string | URL, input: ClaimInpu
       if (!(err instanceof PngError)) throw err;
       return fail(invalid(fieldId));
     }
-    input.answers[fieldId] = {url: publicFileUrl(done.data)} satisfies StoredSignature;
+    input.answers[fieldId] = {fileId} satisfies StoredSignature;
   }
   return {ok: true, fileIds: claimed};
 }

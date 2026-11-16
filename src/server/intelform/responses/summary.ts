@@ -13,6 +13,7 @@ import type {FieldType} from '../../../lib/intelform/form/field-types';
 import {countryName} from '../../../lib/intelform/form/types/registry';
 import {Prisma} from '../../../generated/prisma/client';
 import type {PrismaClient} from '../../../platform/db';
+import {cache} from '../../../platform/cache';
 import type {CatalogEntry, FormCatalog} from './catalog';
 import {displayAnswer} from './format';
 import {addDays, rangeFragment, safeTz, todayIn} from './query';
@@ -80,7 +81,95 @@ type NumbersRow = {
   median: number | null;
 };
 
-export async function formSummary(db: PrismaClient, cat: FormCatalog, q: SummaryQuery): Promise<SummaryResponse> {
+/**
+ * Site Cache (docs/agent/cache.md):
+ *   report:summary:<formId>:<range>:<from>:<to>:<tz>   5 min   the Summary tab (aggregates over
+ *   every response in range). The same for every RESPONSE_READ viewer of the form. Cleared with
+ *   `clearSummaryCache` when responses are deleted (one, a selection, a contact erase, retention)
+ *   and on publish (the questions changed); a new response just shows within 5 minutes.
+ */
+const SUMMARY_PREFIX = 'report:summary:';
+const SUMMARY_TTL = 5 * 60;
+const KEY_SAFE = /^[A-Za-z0-9_.\/:-]{0,64}$/;
+
+/**
+ * formSummary through the cache (a key from ids, the range and the zone only). Only the
+ * aggregates are cached: the latest text answers and "Other" answers are what respondents typed
+ * (names, emails…), never put in the cache, so they are read fresh beside it (two LIMIT 10 reads).
+ */
+export async function cachedFormSummary(db: PrismaClient, cat: FormCatalog, q: SummaryQuery): Promise<SummaryResponse> {
+  const tz = safeTz(q.tz);
+  const parts = [q.range, q.from ?? '', q.to ?? '', tz];
+  if (!parts.every(p => KEY_SAFE.test(p))) return formSummary(db, cat, q);
+  const agg = await cache.getOrSet(`${SUMMARY_PREFIX}${cat.form.id}:${parts.join(':')}`, SUMMARY_TTL, () =>
+    formSummary(db, cat, q, {answers: false})
+  );
+  const [latest, others] = await answerQueries(db, cat, sql`form_id = ${cat.form.id}::uuid AND ${rangeFragment(agg.range.from, agg.range.to, agg.range.tz)}`);
+  return withAnswers(agg, cat, latest, others);
+}
+
+/** Puts the latest and "Other" answers into a summary built without them. */
+export function withAnswers(s: SummaryResponse, cat: FormCatalog, latest: LatestRow[], others: LatestRow[]): SummaryResponse {
+  const latestBy = groupByField(latest);
+  const othersBy = groupByField(others);
+  return {
+    ...s,
+    questions: s.questions.map(question => {
+      const e = cat.byId.get(question.fieldId);
+      if (!e) return question;
+      if (question.data.kind === 'latest') return {...question, data: {kind: 'latest', items: latestItems(e, latestBy.get(e.meta.id) ?? [])}};
+      if (question.data.kind === 'choice' && othersBy.has(e.meta.id)) {
+        return {...question, data: {...question.data, other: otherItems(othersBy.get(e.meta.id) ?? [])}};
+      }
+      return question;
+    }),
+  };
+}
+
+function groupByField<T extends {field_id: string}>(rows: readonly T[]): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const r of rows) m.set(r.field_id, [...(m.get(r.field_id) ?? []), r]);
+  return m;
+}
+
+/** The 10 latest answers per text-like question, and per choice question with "Other", in range. */
+function answerQueries(db: PrismaClient, cat: FormCatalog, inForm: Prisma.Sql): Promise<[LatestRow[], LatestRow[]]> {
+  const latestIds = cat.entries.filter(e => LATEST.has(e.meta.type)).map(e => e.meta.id);
+  const otherIds = cat.entries
+    .filter(e => ['single_choice', 'multiple_choice'].includes(e.meta.type) && e.meta.options?.some(o => o.id === OTHER_OPTION_ID))
+    .map(e => e.meta.id);
+  const latestQ = latestIds.length
+    ? db.$queryRaw<LatestRow[]>`
+        SELECT f.id AS field_id, t.* FROM unnest(${latestIds}::text[]) f(id) CROSS JOIN LATERAL (
+          SELECT id, submitted_at, answers->f.id AS val FROM responses
+          WHERE ${inForm} AND answers ? f.id
+          ORDER BY submitted_at DESC, id DESC LIMIT 10) t
+      `
+    : Promise.resolve([] as LatestRow[]);
+  const othersQ = otherIds.length
+    ? db.$queryRaw<LatestRow[]>`
+        SELECT f.id AS field_id, t.* FROM unnest(${otherIds}::text[]) f(id) CROSS JOIN LATERAL (
+          SELECT id, submitted_at, answers->f.id AS val FROM responses
+          WHERE ${inForm}
+            AND (answers @> jsonb_build_object(f.id, jsonb_build_object('option', ${OTHER_OPTION_ID}::text))
+              OR answers @> jsonb_build_object(f.id, jsonb_build_array(jsonb_build_object('option', ${OTHER_OPTION_ID}::text))))
+          ORDER BY submitted_at DESC, id DESC LIMIT 10) t
+      `
+    : Promise.resolve([] as LatestRow[]);
+  return Promise.all([latestQ, othersQ]);
+}
+
+/** After responses of a form (or, without an id, of any form) were deleted, or it was published. */
+export async function clearSummaryCache(formId?: string): Promise<void> {
+  await cache.delPrefix(formId ? `${SUMMARY_PREFIX}${formId}:` : SUMMARY_PREFIX);
+}
+
+export async function formSummary(
+  db: PrismaClient,
+  cat: FormCatalog,
+  q: SummaryQuery,
+  opts: {answers?: boolean} = {}
+): Promise<SummaryResponse> {
   const formId = cat.form.id;
   const tz = safeTz(q.tz);
   const today = todayIn(tz);
@@ -96,10 +185,6 @@ export async function formSummary(db: PrismaClient, cat: FormCatalog, q: Summary
   const ids = (pred: (t: FieldType) => boolean) => cat.entries.filter(e => pred(e.meta.type)).map(e => e.meta.id);
   const countedIds = ids(t => COUNTED.has(t));
   const numericIds = ids(t => NUMERIC.has(t));
-  const latestIds = ids(t => LATEST.has(t));
-  const otherIds = cat.entries
-    .filter(e => ['single_choice', 'multiple_choice'].includes(e.meta.type) && e.meta.options?.some(o => o.id === OTHER_OPTION_ID))
-    .map(e => e.meta.id);
   const inForm = sql`form_id = ${formId}::uuid AND ${range}`;
 
   const topQ = db.$queryRaw<{responses: number; avg_ms: number | null; median_ms: number | null}[]>`
@@ -138,24 +223,7 @@ export async function formSummary(db: PrismaClient, cat: FormCatalog, q: Summary
         GROUP BY 1
       `
     : Promise.resolve([]);
-  const latestQ = latestIds.length
-    ? db.$queryRaw<LatestRow[]>`
-        SELECT f.id AS field_id, t.* FROM unnest(${latestIds}::text[]) f(id) CROSS JOIN LATERAL (
-          SELECT id, submitted_at, answers->f.id AS val FROM responses
-          WHERE ${inForm} AND answers ? f.id
-          ORDER BY submitted_at DESC, id DESC LIMIT 10) t
-      `
-    : Promise.resolve([]);
-  const othersQ = otherIds.length
-    ? db.$queryRaw<LatestRow[]>`
-        SELECT f.id AS field_id, t.* FROM unnest(${otherIds}::text[]) f(id) CROSS JOIN LATERAL (
-          SELECT id, submitted_at, answers->f.id AS val FROM responses
-          WHERE ${inForm}
-            AND (answers @> jsonb_build_object(f.id, jsonb_build_object('option', ${OTHER_OPTION_ID}::text))
-              OR answers @> jsonb_build_object(f.id, jsonb_build_array(jsonb_build_object('option', ${OTHER_OPTION_ID}::text))))
-          ORDER BY submitted_at DESC, id DESC LIMIT 10) t
-      `
-    : Promise.resolve([]);
+  const personalQ = opts.answers === false ? Promise.resolve([[], []] as [LatestRow[], LatestRow[]]) : answerQueries(db, cat, inForm);
   const funnelQ = db.$queryRaw<{views: number; starts: number}[]>`
     SELECT coalesce(sum(views), 0)::int AS views, coalesce(sum(starts), 0)::int AS starts FROM form_event_counts
     WHERE form_id = ${formId}::uuid AND bucket >= (${from}::date::timestamp AT TIME ZONE ${tz})
@@ -168,14 +236,13 @@ export async function formSummary(db: PrismaClient, cat: FormCatalog, q: Summary
       AND jsonb_typeof(e.value) = 'number'
     GROUP BY 1
   `;
-  const [top, series, choices, answered, numbers, latest, others, funnel, ttc] = await Promise.all([
+  const [top, series, choices, answered, numbers, [latest, others], funnel, ttc] = await Promise.all([
     topQ,
     seriesQ,
     choicesQ,
     answeredQ,
     numbersQ,
-    latestQ,
-    othersQ,
+    personalQ,
     funnelQ,
     ttcQ,
   ]);
@@ -254,6 +321,16 @@ function latestItems(e: CatalogEntry, rows: {id: string; submitted_at: Date; val
     .filter(r => r.text !== '');
 }
 
+function otherItems(rows: {id: string; submitted_at: Date; val: unknown}[]) {
+  return rows
+    .map(r => ({
+      responseId: r.id,
+      submittedAt: (r.submitted_at instanceof Date ? r.submitted_at : new Date(r.submitted_at)).toISOString(),
+      text: otherText(r.val),
+    }))
+    .filter(r => r.text !== '');
+}
+
 function otherText(val: unknown): string {
   const list = Array.isArray(val) ? val : [val];
   for (const x of list) {
@@ -316,14 +393,7 @@ export function questionData(
           });
         }
       }
-      const other = others
-        .map(r => ({
-          responseId: r.id,
-          submittedAt: r.submitted_at.toISOString(),
-          text: otherText(r.val),
-        }))
-        .filter(r => r.text !== '');
-      return {kind: 'choice', options, other};
+      return {kind: 'choice', options, other: otherItems(others)};
     }
     case 'country': {
       const options = [...counts]

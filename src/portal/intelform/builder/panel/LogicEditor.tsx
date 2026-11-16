@@ -19,7 +19,8 @@ import {
   withOperator,
   withValue,
 } from './model';
-import {Note} from './parts';
+import {Note} from '../controls';
+import './panel.css';
 
 /**
  * Show/hide rule on the selected question (PRD "Logic"): one rule, conditions joined by ALL or

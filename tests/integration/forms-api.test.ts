@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
+import {clearFormsStrip} from '../../src/server/intelform/forms/store';
 import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -159,6 +160,8 @@ describe.skipIf(!DATABASE_URL)('forms API (integration, real Postgres)', () => {
     await owner.post(`/site-api/forms/${zeta.id}/publish`);
     await addResponse(zeta.id);
     await db.$executeRaw`INSERT INTO form_event_counts (form_id, bucket, views, starts) VALUES (${zeta.id}::uuid, now() - interval '90 days', 0, 3), (${zeta.id}::uuid, now(), 0, 1)`;
+    // The all-time counter the events route bumps with each start (respondent/events.ts).
+    await db.$executeRaw`UPDATE forms SET starts_total = starts_total + 4 WHERE id = ${zeta.id}::uuid`;
 
     const search = (await viewer.get('/site-api/forms?q=zeta')).json as Json;
     expect(search.forms[0]).toMatchObject({title: 'Zeta poll', responseCount: 1, completionRate: 0.25, newThisWeek: 1});
@@ -172,6 +175,7 @@ describe.skipIf(!DATABASE_URL)('forms API (integration, real Postgres)', () => {
     expect(p2).toMatchObject({page: 2, nextCursor: null});
     expect(new Set([...p1.forms, ...p2.forms].map((f: Json) => f.id)).size).toBe(30);
 
+    await clearFormsStrip();
     const strip = (await owner.get('/site-api/forms/strip')).json as Json;
     expect(strip.days).toHaveLength(7);
     expect(strip.mostActive.find((f: Json) => f.id === zeta.id)).toMatchObject({completionRate: 0.25});

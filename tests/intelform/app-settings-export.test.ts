@@ -1,77 +1,74 @@
 import {describe, expect, it, vi} from 'vitest';
 
-import {EXPORT_ALL_PATH, EXPORT_FAILED, fetchAllResponsesZip, zipFileName} from '../../src/portal/intelform/settings/data';
-import {OFFLINE_MESSAGE} from '../../src/portal/intelform/lib/api';
+/** The browser helpers siteFetch needs aren't here: exports are tested against a fake server. */
+const siteFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
+vi.mock('../../src/platform/browser', () => ({siteFetch: (...a: Parameters<typeof siteFetch>) => siteFetch(...a)}));
 
-describe('Settings → Data: export every response (ZIP)', () => {
-  it('asks the server route the Data card links to', async () => {
-    const fetcher = vi.fn(async () => new Response(new Uint8Array([80, 75, 3, 4]), {headers: {'Content-Type': 'application/zip'}}));
-    await fetchAllResponsesZip(fetcher);
-    expect(EXPORT_ALL_PATH).toBe('/site-api/responses/export-all.zip');
-    expect(fetcher).toHaveBeenCalledWith(EXPORT_ALL_PATH, {credentials: 'same-origin'});
-  });
+const {runExport, EXPORTS_PATH} = await import('../../src/portal/intelform/lib/exports');
+const {OFFLINE_MESSAGE} = await import('../../src/portal/intelform/lib/api');
 
-  it('returns the ZIP and the file name the server gave', async () => {
-    const fetcher = async () =>
-      new Response(new Uint8Array([80, 75, 3, 4]), {
-        headers: {
-          'Content-Type': 'application/zip',
-          'Content-Disposition': `attachment; filename="responses 2026-11-16.zip"; filename*=UTF-8''responses%202026-11-16.zip`,
-        },
-      });
-    const result = await fetchAllResponsesZip(fetcher);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.name).toBe('responses 2026-11-16.zip');
-    expect(result.blob.size).toBe(4);
-  });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+const status = (over: Record<string, unknown> = {}) => ({
+  id: 'e1',
+  kind: 'all',
+  status: 'running',
+  rows: 0,
+  fileName: 'responses 2026-11-16.zip',
+  error: null,
+  createdAt: '2026-11-16T00:00:00.000Z',
+  ...over,
+});
 
-  it('shows the 429 "try again" message instead of downloading an error', async () => {
-    const fetcher = async () =>
-      Response.json({error: 'rate_limited', message: 'You exported a lot just now. Try again in a few minutes.'}, {status: 429});
-    const result = await fetchAllResponsesZip(fetcher);
-    expect(result).toEqual({ok: false, status: 429, message: 'You exported a lot just now. Try again in a few minutes.'});
-  });
-
-  it('a 403 / 5xx without a readable body falls back to a plain message', async () => {
-    const result = await fetchAllResponsesZip(async () => new Response('oops', {status: 500}));
-    expect(result).toEqual({ok: false, status: 500, message: EXPORT_FAILED});
-    const forbidden = await fetchAllResponsesZip(async () =>
-      Response.json({error: 'forbidden', message: 'You don’t have permission to do that.'}, {status: 403})
+describe('exports (a background job: start, wait, download)', () => {
+  it('starts the export, asks until it is ready, then saves the file under its name', async () => {
+    siteFetch.mockReset();
+    const answers = [json(status(), 202), json(status()), json(status({status: 'ready', rows: 12}))];
+    siteFetch.mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/download') ? new Response(new Uint8Array([80, 75, 3, 4])) : answers.shift()!
     );
-    expect(forbidden).toMatchObject({ok: false, status: 403, message: 'You don’t have permission to do that.'});
+    const save = vi.fn();
+    const sleep = vi.fn(async () => undefined);
+    const out = await runExport({kind: 'all'}, {save, sleep});
+    expect(out).toEqual({ok: true, name: 'responses 2026-11-16.zip'});
+    const calls = siteFetch.mock.calls.map(c => [String(c[0]), (c[1] as RequestInit | undefined)?.method ?? 'GET']);
+    expect(calls[0]).toEqual([EXPORTS_PATH, 'POST']);
+    expect(calls[1]).toEqual([`${EXPORTS_PATH}/e1`, 'GET']);
+    expect(calls.at(-1)).toEqual([`${EXPORTS_PATH}/e1/download`, 'GET']);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenCalledWith(expect.any(Blob), 'responses 2026-11-16.zip');
+    expect((save.mock.calls[0]![0] as Blob).size).toBe(4);
+  });
+
+  it('shows why an export did not finish, and the 429 "try again" message', async () => {
+    siteFetch.mockReset();
+    siteFetch.mockResolvedValueOnce(json(status({status: 'failed', error: 'This export is too large for one ZIP file.'}), 202));
+    expect(await runExport({kind: 'all'}, {save: vi.fn()})).toEqual({ok: false, message: 'This export is too large for one ZIP file.'});
+    siteFetch.mockResolvedValueOnce(json({error: 'rate_limited', message: 'You exported a lot just now. Try again in a few minutes.'}, 429));
+    expect(await runExport({kind: 'all'}, {save: vi.fn()})).toEqual({
+      ok: false,
+      message: 'You exported a lot just now. Try again in a few minutes.',
+    });
   });
 
   it('offline: the connection message', async () => {
-    const result = await fetchAllResponsesZip(async () => {
-      throw new TypeError('Failed to fetch');
-    });
-    expect(result).toEqual({ok: false, status: 0, message: OFFLINE_MESSAGE});
+    siteFetch.mockReset();
+    siteFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+    expect(await runExport({kind: 'contacts', query: {}}, {save: vi.fn()})).toEqual({ok: false, message: OFFLINE_MESSAGE});
   });
 
-  it('a stream that breaks part way is a failed export, not a partial file', async () => {
-    const body = new ReadableStream<Uint8Array>({
+  it('a download that breaks part way is a failed export, not a partial file', async () => {
+    siteFetch.mockReset();
+    siteFetch.mockResolvedValueOnce(json(status({status: 'ready'}), 202));
+    const body = new ReadableStream({
       start(controller) {
-        controller.enqueue(new Uint8Array([80, 75]));
-        controller.error(new Error('dropped'));
+        controller.enqueue(new Uint8Array([1]));
+        controller.error(new Error('reset'));
       },
     });
-    const result = await fetchAllResponsesZip(async () => new Response(body, {headers: {'Content-Type': 'application/zip'}}));
-    expect(result).toEqual({ok: false, status: 200, message: EXPORT_FAILED});
-  });
-});
-
-describe('zipFileName', () => {
-  it('prefers filename*, decoded', () => {
-    expect(zipFileName(`attachment; filename="r_sum_.zip"; filename*=UTF-8''r%C3%A9sum%C3%A9.zip`)).toBe('résumé.zip');
-  });
-  it('falls back to the quoted, then the bare name', () => {
-    expect(zipFileName('attachment; filename="a b.zip"')).toBe('a b.zip');
-    expect(zipFileName('attachment; filename=plain.zip')).toBe('plain.zip');
-    expect(zipFileName(`attachment; filename*=UTF-8''%E0%A4%A; filename="safe.zip"`)).toBe('safe.zip');
-  });
-  it('no header: a dated default', () => {
-    expect(zipFileName(null, '2026-01-02')).toBe('responses 2026-01-02.zip');
-    expect(zipFileName('attachment', '2026-01-02')).toBe('responses 2026-01-02.zip');
+    siteFetch.mockResolvedValueOnce(new Response(body));
+    const save = vi.fn();
+    const out = await runExport({kind: 'responses', formId: '00000000-0000-4000-8000-000000000001', query: {}}, {save});
+    expect(out.ok).toBe(false);
+    expect(save).not.toHaveBeenCalled();
   });
 });

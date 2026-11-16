@@ -10,12 +10,24 @@ import {
   type ContactsOverviewResponse,
   type DeleteContactsResponse,
 } from '../../../lib/intelform/api-contacts';
+import {cache} from '../../../platform/cache';
 import {CSV_BOM, csvRow} from './csv';
-import {contactsCte, filterFragment, orderFragment, platformFileId} from './sql';
+import {
+  afterFragment,
+  CONTACT_COLUMNS,
+  decodeContactCursor,
+  encodeContactCursor,
+  filterFragment,
+  LAST_SEEN_TEXT,
+  orderFragment,
+  sortValue,
+  type ContactCursor,
+} from './sql';
 
 /**
- * Contacts: responses grouped by `responses.contact_key`. Every query aggregates responses on the
- * fly (ported from legacy/server/contacts/query.ts onto Prisma's tagged `$queryRaw`).
+ * Contacts: one row per `responses.contact_key` in the `contacts` table, which triggers on
+ * `responses` keep in the same statement as every insert and delete (sql.ts). Lists page by
+ * keyset in the chosen sort (one index each); the strip and filter choices are cached.
  */
 
 type Db = Pick<PrismaClient, '$queryRaw' | '$transaction'>;
@@ -48,8 +60,8 @@ interface DbContactForm {
 
 type FormWithResponses = ContactFormRef & {responses: number};
 
-/** Each contact's forms with response counts, most recently answered first. */
-async function formsByKey(db: Reader, keys: string[]): Promise<Map<string, FormWithResponses[]>> {
+/** Each contact's forms with response counts, most recently answered first (by index, these keys only). */
+export async function formsByKey(db: Reader, keys: string[]): Promise<Map<string, FormWithResponses[]>> {
   const out = new Map<string, FormWithResponses[]>();
   if (!keys.length) return out;
   const rows = await db.$queryRaw<DbContactForm[]>`
@@ -83,33 +95,47 @@ export function toRow(c: DbContact, forms: ContactFormRef[]): ContactRow {
   };
 }
 
-// ------------------------------------------------------------------ List, strip, facets
+// ------------------------------------------------------------------ Strip and filter choices
 
-/** Workspace-wide numbers and filter choices, ignoring every filter. */
+/**
+ * Site Cache (docs/agent/cache.md):
+ *   report:contacts-overview   10 min   the strip and filter choices: workspace-wide, the same for
+ *                                       every CONTACT_READ viewer; cleared when contacts are erased
+ *                                       (a new response just shows within 10 minutes)
+ */
+export const OVERVIEW_KEY = 'report:contacts-overview';
+const OVERVIEW_TTL = 10 * 60;
+
+export async function clearContactsOverview(): Promise<void> {
+  await cache.del(OVERVIEW_KEY);
+}
+
+/** Workspace-wide numbers and filter choices, ignoring every filter. Cached; three reads on a miss, together. */
 export async function contactsOverview(db: Reader): Promise<ContactsOverviewResponse> {
+  return cache.getOrSet(OVERVIEW_KEY, OVERVIEW_TTL, () => loadOverview(db));
+}
+
+async function loadOverview(db: Reader): Promise<ContactsOverviewResponse> {
   const [[s], countries, forms] = await Promise.all([
     db.$queryRaw<{total: number; new_week: number; returning: number; with_phone: number}[]>`
-      WITH ${contactsCte()}
       SELECT count(*)::int AS total,
         count(*) FILTER (WHERE first_seen >= now() - interval '7 days')::int AS new_week,
         count(*) FILTER (WHERE n >= 2)::int AS returning,
         count(*) FILTER (WHERE phone IS NOT NULL)::int AS with_phone
-      FROM c
+      FROM contacts
     `,
     db.$queryRaw<{code: string; contacts: number}[]>`
-      WITH ${contactsCte()}
       SELECT country AS code, count(*)::int AS contacts
-      FROM c WHERE country IS NOT NULL
+      FROM contacts WHERE country IS NOT NULL
       GROUP BY country
       ORDER BY contacts DESC, code
       LIMIT 300
     `,
     db.$queryRaw<{id: string; title: string; status: string; contacts: number}[]>`
-      SELECT f.id::text AS id, f.title, f.status, count(DISTINCT r.contact_key)::int AS contacts
-      FROM responses r JOIN forms f ON f.id = r.form_id
-      WHERE r.contact_key IS NOT NULL
-      GROUP BY f.id
-      ORDER BY contacts DESC, f.title, f.id
+      SELECT f.id::text AS id, f.title, f.status, x.contacts
+      FROM (SELECT fid, count(*)::int AS contacts FROM contacts, unnest(form_ids) AS fid GROUP BY fid) x
+      JOIN forms f ON f.id = x.fid
+      ORDER BY x.contacts DESC, f.title, f.id
       LIMIT 1000
     `,
   ]);
@@ -128,33 +154,32 @@ export async function contactsOverview(db: Reader): Promise<ContactsOverviewResp
   };
 }
 
-/** One page of contacts (50) matching the filters, with the matching total. `tz` is already safe. */
+// ------------------------------------------------------------------ List
+
+/**
+ * One page of contacts (50) matching the filters, by keyset in the chosen sort: the page and
+ * its contacts' forms, two reads. No total (no count per request): `nextCursor` says there is more.
+ */
 export async function listContacts(db: Reader, q: ContactsListQuery, tz: string): Promise<ContactsListResponse> {
+  const cursor = decodeContactCursor(q.cursor);
   const where = filterFragment(q, tz);
-  const offset = (q.page - 1) * CONTACTS_PAGE_SIZE;
-  const rows = await db.$queryRaw<(DbContact & {total: number})[]>`
-    WITH ${contactsCte()}
-    SELECT c.key, c.n, c.first_seen, c.last_seen, c.email, c.name, c.phone, c.country, c.form_count,
-      count(*) OVER ()::int AS total
-    FROM c WHERE ${where}
+  const after = cursor ? afterFragment(q.sort, q.dir, cursor) : Prisma.sql`true`;
+  const rows = await db.$queryRaw<(DbContact & {sort_v: string | null; sort_t: string})[]>`
+    SELECT ${CONTACT_COLUMNS}, ${sortValue(q.sort)} AS sort_v, ${LAST_SEEN_TEXT} AS sort_t
+    FROM contacts c WHERE ${where} AND ${after}
     ORDER BY ${orderFragment(q.sort, q.dir)}
-    LIMIT ${CONTACTS_PAGE_SIZE} OFFSET ${offset}
+    LIMIT ${CONTACTS_PAGE_SIZE + 1}
   `;
-  let total = Number(rows[0]?.total ?? 0);
-  if (!rows.length && q.page > 1) {
-    // Past the last page: the window count saw no rows, so count separately.
-    const [r] = await db.$queryRaw<{total: number}[]>`WITH ${contactsCte()} SELECT count(*)::int AS total FROM c WHERE ${where}`;
-    total = Number(r?.total ?? 0);
-  }
+  const page = rows.slice(0, CONTACTS_PAGE_SIZE);
   const forms = await formsByKey(
     db,
-    rows.map(r => r.key)
+    page.map(r => r.key)
   );
+  const last = page.at(-1);
   return {
-    contacts: rows.map(r => toRow(r, forms.get(r.key) ?? [])),
-    total,
-    page: q.page,
+    contacts: page.map(r => toRow(r, forms.get(r.key) ?? [])),
     pageSize: CONTACTS_PAGE_SIZE,
+    nextCursor: rows.length > CONTACTS_PAGE_SIZE && last ? encodeContactCursor({v: last.sort_v, t: last.sort_t, k: last.key}) : null,
   };
 }
 
@@ -164,10 +189,7 @@ export const DETAIL_RESPONSES = 200;
 
 export async function contactDetail(db: Reader, key: string): Promise<ContactDetailResponse | null> {
   const [contacts, forms, responses] = await Promise.all([
-    db.$queryRaw<DbContact[]>`
-      WITH ${contactsCte(Prisma.sql`contact_key = ${key}`)}
-      SELECT key, n, first_seen, last_seen, email, name, phone, country, form_count FROM c LIMIT 1
-    `,
+    db.$queryRaw<DbContact[]>`SELECT ${CONTACT_COLUMNS} FROM contacts c WHERE c.key = ${key}`,
     formsByKey(db, [key]),
     db.$queryRaw<
       {id: string; submitted_at: Date; duration_ms: number | null; device: string | null; country: string | null; form_id: string; title: string; status: string}[]
@@ -198,51 +220,37 @@ export async function contactDetail(db: Reader, key: string): Promise<ContactDet
 
 // ------------------------------------------------------------------ Delete
 
-export interface DeleteContactsResult extends DeleteContactsResponse {
-  /** Platform file ids of the deleted responses' signatures, to remove after commit. */
-  fileIds: string[];
-}
-
 /**
  * Erases contacts: every response they sent, on every form, in one transaction (all or
- * nothing). forms.response_count / last_response_at stay right. The caller removes the
- * signature files (`fileIds`) once this has committed.
+ * nothing). forms.response_count / last_response_at stay right; the contacts rows and the
+ * signature files' trash entries follow from the responses delete trigger. The caller sends
+ * the file cleanup job and clears the cached strip.
  */
-export async function deleteContacts(db: Db, keys: string[]): Promise<DeleteContactsResult> {
+export async function deleteContacts(db: Db, keys: string[]): Promise<DeleteContactsResponse> {
   const unique = [...new Set(keys)];
   return db.$transaction(async tx => {
     const forms = await tx.$queryRaw<{form_id: string}[]>`
       SELECT DISTINCT form_id::text AS form_id FROM responses WHERE contact_key = ANY(${unique}::text[]) LIMIT 10000
     `;
-    if (!forms.length) return {contacts: 0, responses: 0, fileIds: []};
+    if (!forms.length) return {contacts: 0, responses: 0};
     // Lock every form involved in id order, so two deletes (or a delete and a submit) can't deadlock.
     const locked = await tx.$queryRaw<{id: string}[]>`
       SELECT id::text AS id FROM forms WHERE id = ANY(${forms.map(f => f.form_id)}::uuid[]) ORDER BY id FOR UPDATE
     `;
     // A form deleted meanwhile took its responses with it.
-    if (!locked.length) return {contacts: 0, responses: 0, fileIds: []};
+    if (!locked.length) return {contacts: 0, responses: 0};
     const lockedIds = locked.map(f => f.id);
-    // Signature URLs come back as one newline-joined text (raw SQL arrays don't survive every driver).
-    const deleted = await tx.$queryRaw<{form_id: string; key: string; urls: string | null}[]>`
+    const deleted = await tx.$queryRaw<{form_id: string; key: string}[]>`
       DELETE FROM responses
       WHERE contact_key = ANY(${unique}::text[]) AND form_id = ANY(${lockedIds}::uuid[])
-      RETURNING form_id::text AS form_id, contact_key AS key,
-        array_to_string(ARRAY(
-          SELECT v->>'url' FROM jsonb_each(answers) e(k, v)
-          WHERE jsonb_typeof(v) = 'object' AND left(v->>'url', 17) = '/__platform/files'
-        ), E'\n') AS urls
+      RETURNING form_id::text AS form_id, contact_key AS key
     `;
-    if (!deleted.length) return {contacts: 0, responses: 0, fileIds: []};
+    if (!deleted.length) return {contacts: 0, responses: 0};
     const perForm = new Map<string, number>();
     const found = new Set<string>();
-    const fileIds = new Set<string>();
     for (const r of deleted) {
       perForm.set(r.form_id, (perForm.get(r.form_id) ?? 0) + 1);
       found.add(r.key);
-      for (const url of (r.urls ?? '').split('\n')) {
-        const id = platformFileId(url);
-        if (id) fileIds.add(id);
-      }
     }
     const ids = [...perForm.keys()];
     const counts = ids.map(id => perForm.get(id)!);
@@ -254,17 +262,15 @@ export async function deleteContacts(db: Db, keys: string[]): Promise<DeleteCont
       FROM unnest(${ids}::uuid[], ${counts}::int[]) AS d(id, n)
       WHERE f.id = d.id
     `;
-    return {contacts: found.size, responses: deleted.length, fileIds: [...fileIds]};
+    return {contacts: found.size, responses: deleted.length};
   });
 }
 
-// ------------------------------------------------------------------ CSV
+// ------------------------------------------------------------------ CSV (the export job)
 
 export const CSV_HEADERS = ['Name', 'Email', 'Phone', 'Country', 'Responses', 'Forms', 'First seen', 'Last active'];
-/** Contacts per query while streaming the CSV. */
-export const CSV_BATCH = 2000;
-/** The most contacts one export holds (a Worker request has a CPU budget). */
-export const CSV_MAX_ROWS = 100_000;
+/** Contacts per batch of the export job. */
+export const CSV_BATCH = 1000;
 
 interface CsvDbRow {
   name: string | null;
@@ -281,36 +287,54 @@ export function csvLine(r: CsvDbRow): string {
   return csvRow([r.name, r.email, r.phone, r.country, Number(r.n), r.forms, r.first_txt, r.last_txt]);
 }
 
+export function contactsCsvHeader(): string {
+  return CSV_BOM + csvRow(CSV_HEADERS);
+}
+
 /**
- * The CSV of the filtered contacts (or just `q.key`), BOM and header first, in the list's order,
- * one batch of rows per chunk. `tz` is already safe.
+ * One batch of the contacts CSV after `cursor`, in the list's order (or just `q.key`), read by
+ * keyset from the contacts table; every contact's form titles come from ONE joined query for
+ * the batch. `tz` is already safe.
  */
-export async function* contactsCsvChunks(
+export async function contactsCsvBatch(
   db: Reader,
   q: ContactsCsvQuery,
   tz: string,
-  opts: {aborted?: () => boolean} = {}
-): AsyncGenerator<string> {
-  const cte = q.key.length ? contactsCte(Prisma.sql`contact_key = ANY(${q.key}::text[])`) : contactsCte();
-  const where = q.key.length ? Prisma.sql`true` : filterFragment(q, tz);
-  yield CSV_BOM + csvRow(CSV_HEADERS);
-  for (let offset = 0; offset < CSV_MAX_ROWS; offset += CSV_BATCH) {
-    if (opts.aborted?.()) return;
-    const rows = await db.$queryRaw<CsvDbRow[]>`
-      WITH ${cte}
-      SELECT c.name, c.email, c.phone, c.country, c.n,
-        (SELECT string_agg(x.title, '; ' ORDER BY x.last DESC)
-         FROM (SELECT f.title, max(r.submitted_at) AS last FROM responses r JOIN forms f ON f.id = r.form_id
-               WHERE r.contact_key = c.key GROUP BY f.id, f.title) x) AS forms,
-        to_char(c.first_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS first_txt,
-        to_char(c.last_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS last_txt
-      FROM c WHERE ${where}
+  cursor: ContactCursor | null
+): Promise<{text: string; rows: number; next: ContactCursor | null}> {
+  const where = q.key.length ? Prisma.sql`c.key = ANY(${q.key}::text[])` : filterFragment(q, tz);
+  const after = cursor ? afterFragment(q.sort, q.dir, cursor) : Prisma.sql`true`;
+  const rows = await db.$queryRaw<(CsvDbRow & {key: string; sort_v: string | null; sort_t: string})[]>`
+    WITH page AS (
+      SELECT c.key, c.name, c.email, c.phone, c.country, c.n, c.first_seen, c.last_seen, ${sortValue(q.sort)} AS sort_v,
+        ${LAST_SEEN_TEXT} AS sort_t,
+        row_number() OVER (ORDER BY ${orderFragment(q.sort, q.dir)}) AS pos
+      FROM contacts c WHERE ${where} AND ${after}
       ORDER BY ${orderFragment(q.sort, q.dir)}
-      LIMIT ${CSV_BATCH} OFFSET ${offset}
-    `;
-    if (rows.length) yield rows.map(csvLine).join('');
-    if (rows.length < CSV_BATCH) return;
-  }
+      LIMIT ${CSV_BATCH}
+    ),
+    titles AS (
+      SELECT x.key, string_agg(x.title, '; ' ORDER BY x.last DESC) AS forms
+      FROM (
+        SELECT r.contact_key AS key, f.title, max(r.submitted_at) AS last
+        FROM responses r JOIN forms f ON f.id = r.form_id
+        WHERE r.contact_key IN (SELECT key FROM page)
+        GROUP BY r.contact_key, f.id, f.title
+      ) x
+      GROUP BY x.key
+    )
+    SELECT p.key, p.sort_v, p.sort_t, p.name, p.email, p.phone, p.country, p.n, t.forms,
+      to_char(p.first_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS first_txt,
+      to_char(p.last_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS last_txt
+    FROM page p LEFT JOIN titles t ON t.key = p.key
+    ORDER BY p.pos
+  `;
+  const last = rows.at(-1);
+  return {
+    text: rows.map(csvLine).join(''),
+    rows: rows.length,
+    next: rows.length === CSV_BATCH && last ? {v: last.sort_v, t: last.sort_t, k: last.key} : null,
+  };
 }
 
 export function contactsCsvFilename(today: string): string {

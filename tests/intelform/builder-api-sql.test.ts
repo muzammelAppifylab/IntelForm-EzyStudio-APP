@@ -53,7 +53,7 @@ describe.skipIf(!url)('builder SQL (rolled back)', () => {
               draft: {layout: 'all_at_once', fields: [{id: 'f_name0001', type: 'short_text', label: 'Name', props: {}}]},
               settings: {closedMessage: 'Shut', password: 'open sesame'},
             },
-            {allowHttp: false}
+            {policy: {allowHttp: false}}
           );
           const saved = await saveInTx(tx, {formId, patch, expected: 0, userId});
           expect(saved).toMatchObject({revision: 1, overwrote: false, slug: 'spring-survey-sql', hasUnpublished: false});
@@ -117,7 +117,7 @@ describe.skipIf(!url)('builder SQL (rolled back)', () => {
           expect(s2).not.toBe(s1);
           await tx.$executeRaw`UPDATE forms SET settings = settings || '{"webhook":{"enabled":true,"url":"https://hooks.example.com/x","headers":[]}}'::jsonb WHERE id = ${formId}::uuid`;
           const q = await insertDelivery(tx, {formId, responseId: null, payload: {type: 'response.test'}, isTest: true, url: 'https://hooks.example.com/x'});
-          const result = await runDelivery(tx, q.deliveryId, {fetch: (async () => new Response('ok', {status: 202})) as never, allowHttp: false});
+          const result = await runDelivery(tx, q.deliveryId, {fetch: (async () => new Response('ok', {status: 202})) as never, policy: {allowHttp: false}});
           expect(result).toMatchObject({ok: true, statusCode: 202});
           expect(await runDelivery(tx, q.deliveryId, {fetch: (async () => new Response('again')) as never})).toBeNull();
           const [d] = await tx.$queryRaw<{status_code: number; response_body: string}[]>`

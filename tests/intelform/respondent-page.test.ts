@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 
-import {describe, expect, it, vi} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {
   allowFraming,
@@ -18,6 +18,7 @@ import {
 } from '../../src/pages/f/_lib/page';
 import type {PublicFormClosed, PublicFormLive, PublicFormLocked} from '../../src/lib/intelform/api-public';
 import {blankDefinition} from '../../src/lib/intelform/form/definition';
+import {clearPublicFormCache} from '../../src/server/intelform/respondent/cache';
 import {defaultFormSettings, publicSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme, type FormTheme} from '../../src/lib/intelform/form/theme-core';
 import {normalizeFields, PublicApiError, readCookieValue} from '../../src/respondent/api';
@@ -97,6 +98,8 @@ describe('theme <style>', () => {
 });
 
 describe('page state', () => {
+  // The published form is cached by slug (respondent/cache.ts): every case starts from the database.
+  beforeEach(() => clearPublicFormCache());
   /** A fake db: the rate-limit upsert answers `count`, the form read answers `rows`. */
   const dbOf = (rows: unknown[], count = 1, fail = false) => {
     const calls: string[] = [];
@@ -155,7 +158,8 @@ describe('page state', () => {
     const {db, calls} = dbOf([row], PUBLIC_GET_RATE_LIMIT + 1);
     const s = await loadFormPage({db, secret: SECRET, slug: 'contact-us', ip: '203.0.113.5', now: 30_000});
     expect(s).toEqual({kind: 'limited', retryAfter: 30});
-    expect(calls).toHaveLength(1);
+    // The limit and the form read go together (one round trip); the 429 wins.
+    expect(calls).toHaveLength(2);
     expect(statusOf(s)).toBe(429);
   });
 
