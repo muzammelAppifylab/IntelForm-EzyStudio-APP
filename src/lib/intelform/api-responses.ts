@@ -3,14 +3,15 @@ import type { FieldType } from './form/field-types'
 
 /**
  * Request schemas and response shapes for the Responses tab (Agent G):
- *   GET    /api/forms/:id/responses             table page (filters, search, sort, 50 per page)
- *   GET    /api/forms/:id/responses/:rid        drawer (labels as submitted, prev / next)
- *   DELETE /api/forms/:id/responses/:rid
- *   POST   /api/forms/:id/responses/bulk-delete
- *   GET    /api/forms/:id/responses.csv         streamed CSV, same filters (+ ids)
- *   GET    /api/forms/:id/summary               aggregates, funnel, time series
- *   GET    /api/forms/:id/responses/prefs       table columns for this user
- *   PUT    /api/forms/:id/responses/prefs
+ *   GET    /site-api/responses/forms/:id/responses   table page (filters, search, sort, keyset cursor)
+ *   GET    /site-api/responses/forms/:id/responses/:rid        drawer (labels as submitted, prev / next)
+ *   DELETE /site-api/responses/forms/:id/responses/:rid
+ *   POST   /site-api/responses/forms/:id/responses/bulk-delete
+ *   GET    /site-api/responses/forms/:id/responses.csv         streamed CSV, same filters (+ ids)
+ *   GET    /site-api/responses/forms/:id/summary               aggregates, funnel, time series
+ *   GET    /site-api/responses/forms/:id/responses/prefs       table columns for this user
+ *   GET    /site-api/responses/export-all.zip  one CSV per form (app settings)
+ *   PUT    /site-api/responses/forms/:id/responses/prefs
  */
 
 export const RESPONSES_PAGE_SIZE = 50
@@ -67,7 +68,10 @@ export const responsesFilterQuery = z.object({
 export type ResponsesFilterQuery = z.infer<typeof responsesFilterQuery>
 
 export const responsesListQuery = responsesFilterQuery.extend({
+  /** Echoed back only: paging is by `cursor`. */
   page: z.coerce.number().int().min(1).max(100_000).default(1),
+  /** The previous page's `nextCursor`. */
+  cursor: z.string().max(1000).optional(),
 })
 export type ResponsesListQuery = z.infer<typeof responsesListQuery>
 
@@ -161,6 +165,10 @@ export interface ResponsesListResponse {
   formTotal: number
   page: number
   pageSize: number
+  /** Pass as `cursor` for the next page; null on the last one. */
+  nextCursor: string | null
+  /** A filtered total stops at 10,000: show "10,000+". */
+  totalCapped: boolean
 }
 
 export interface DrawerAnswer {
@@ -190,6 +198,8 @@ export interface ResponseDetail {
   /** 1-based position within the filter, and the filter's total. */
   position: number
   total: number
+  /** The filter's total stopped at 10,000. */
+  totalCapped: boolean
 }
 
 export interface BulkDeleteResponse {

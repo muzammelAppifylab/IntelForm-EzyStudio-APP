@@ -1,0 +1,98 @@
+---
+/**
+ * /forms/: every form listed on the public site, searchable (legacy AllFormsPage.tsx). A list
+ * page: a static shell (built once, served as a file, what search engines read) with its rows
+ * from `GET /site-api/public-site/forms` as JSON (docs/agent/performance.md "List pages"). A
+ * search or "More forms" fetches only the data, and the search stays in the URL.
+ *
+ * Each form's own page is `/f/<slug>`; the open ones that allow search engines are in /sitemap.xml.
+ */
+import '../../components/public-site/public-site.css';
+
+import FormCard from '../../components/public-site/FormCard.astro';
+import SiteIcon from '../../components/public-site/SiteIcon.astro';
+import {FORMS, withName} from '../../content/site';
+import Base from '../../layouts/Base.astro';
+import {SEARCH_MAX} from '../../server/intelform/public-site/common';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+const name = site?.name ?? 'My site';
+---
+
+<Base
+  site={site}
+  viewer={viewer}
+  isStatic
+  preloadData="/site-api/public-site/forms"
+  title="Forms"
+  description={withName(FORMS.description, name)}>
+  <main id="main" tabindex="-1" class="wrap section ps" data-public-forms>
+    <div class="ps-intro">
+      <p class="eyebrow" data-brand-text="{name}">{name}</p>
+      <h1>{FORMS.title}</h1>
+      <p class="lede" data-forms-count aria-live="polite">{withName(FORMS.description, name)}</p>
+    </div>
+
+    <form class="ps-search" action="/forms/" method="get" role="search" novalidate data-list-filters>
+      <label class="ps-search-field">
+        <span class="ps-sr-only">{FORMS.search}</span>
+        <SiteIcon name="search" size={18} class="ps-search-icon" />
+        <input type="search" name="search" placeholder={FORMS.search} maxlength={SEARCH_MAX} autocomplete="off" />
+      </label>
+      <button class="button ghost" type="submit">Search</button>
+      <a class="small" href="/forms/" data-list-clear hidden>Clear</a>
+    </form>
+
+    <ul class="ps-cards ps-skeleton" data-list-skeleton aria-hidden="true">
+      {Array.from({length: 6}, () => <li class="ps-skeleton-card"><span /><span /><span /></li>)}
+    </ul>
+    <noscript><p class="notice">Turn on JavaScript to see the forms.</p></noscript>
+
+    <ul class="ps-cards" data-list-items></ul>
+    <p class="ps-empty" data-list-empty role="status" hidden>Nothing is open right now. Check back soon.</p>
+    <p class="ps-empty" data-list-no-match role="status" hidden>{FORMS.noMatch}</p>
+    <div class="notice" data-list-error role="alert" hidden>
+      {FORMS.error}
+      <button class="button link small-button" type="button" data-list-retry>Try again</button>
+    </div>
+    <nav class="pager" aria-label="More forms"><button class="button ghost" type="button" data-list-more hidden>{FORMS.more}</button></nav>
+
+    <template data-list-item>
+      <FormCard />
+    </template>
+  </main>
+</Base>
+
+<script>
+  import {applyIndexing, fillFormCard} from '../../components/public-site/client';
+  import {bindListPage} from '../../lib/list-page';
+  import type {PublicFormCard} from '../../lib/intelform/api-front';
+  import {formsCountText, type PublicFormsPage} from '../../server/intelform/public-site/common';
+
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector<HTMLElement>('[data-public-forms]');
+    if (!root) return;
+    const count = root.querySelector<HTMLElement>('[data-forms-count]');
+    const list = root.querySelector<HTMLElement>('[data-list-items]');
+    let shown = 0;
+    bindListPage<PublicFormsPage, PublicFormCard>({
+      root,
+      endpoint: '/site-api/public-site/forms',
+      cursorParam: 'after',
+      items: page => {
+        // A new first page (no cursor yet) numbers its cards from 01 again.
+        if (list?.childElementCount === 0) shown = 0;
+        if (count) count.textContent = formsCountText(page.total);
+        applyIndexing(page.indexing);
+        return page.forms;
+      },
+      next: page => page.next,
+      render(row, form) {
+        fillFormCard(row, form, shown++);
+      },
+    });
+  });
+</script>

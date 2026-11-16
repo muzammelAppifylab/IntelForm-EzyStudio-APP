@@ -82,6 +82,8 @@ export interface WebhookDelivery {
   isTest: boolean
   responseId: string | null
   ok: boolean
+  /** Queued as a background job, not sent yet. */
+  pending?: boolean
 }
 
 export interface WebhookDeliveriesResponse {
@@ -94,6 +96,8 @@ export interface WebhookSendResult {
   durationMs: number
   error: string | null
   deliveryId: string
+  /** True on the live site while the background job has not run yet (poll the delivery). */
+  queued?: boolean
 }
 
 // ---------------------------------------------------------------------------

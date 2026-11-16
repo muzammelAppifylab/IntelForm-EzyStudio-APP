@@ -1,0 +1,342 @@
+/*
+ * The builder's dense controls (src/portal/intelform/builder/{controls,condition-inputs,
+ * OptionsEditor,CountryPicker,ImageUpload}.tsx), used by the Build panel and the Design,
+ * Settings and Share tabs. Tokens only (src/styles/global.css); no inline styles (CSP).
+ */
+
+.if-overline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.if-caption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.if-label {
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.if-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ------------------------------------------------------------ sections -- */
+
+.if-panel-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.if-panel-section:last-child {
+  border-bottom: 0;
+}
+
+.if-panel-section-head {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.if-panel-section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.if-switch-row .switch-row {
+  padding: 0;
+  border: 0;
+}
+
+.if-segment-row {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.if-segment-row .toggle-group {
+  width: 100%;
+}
+
+.if-segment-row .toggle {
+  flex: 1;
+}
+
+.if-field-row .if-textarea {
+  min-height: 5rem;
+}
+
+/* -------------------------------------------------------------- inputs -- */
+
+.if-input,
+.if-textarea {
+  width: 100%;
+  min-height: 40px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.if-textarea {
+  resize: vertical;
+  min-height: 5rem;
+}
+
+.if-textarea-tall {
+  min-height: 12rem;
+}
+
+.if-input-sm {
+  min-height: 32px;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.875rem;
+}
+
+.if-input:hover,
+.if-textarea:hover {
+  border-color: var(--muted);
+}
+
+.if-input:focus-visible,
+.if-textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.if-input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.if-input[readonly] {
+  background: var(--hover);
+}
+
+.if-select-sm .select select {
+  min-height: 32px;
+  padding-block: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.if-link-button {
+  justify-self: start;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.if-link-button:hover {
+  text-decoration: underline;
+}
+
+.if-link-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------- countries -- */
+
+.if-country-multi {
+  display: grid;
+  gap: 0.5rem;
+  width: min(18rem, 80vw);
+}
+
+.if-country-list {
+  display: grid;
+  gap: 2px;
+  max-height: 16rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+/* -------------------------------------------------------------- images -- */
+
+.if-image-upload {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.if-image-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+}
+
+.if-image-frame.is-over {
+  border-color: var(--edge);
+  background: var(--accent-soft);
+}
+
+.if-aspect-video {
+  aspect-ratio: 16 / 9;
+}
+
+.if-aspect-wide {
+  aspect-ratio: 3 / 1;
+}
+
+.if-aspect-og {
+  aspect-ratio: 1200 / 630;
+}
+
+.if-aspect-square {
+  aspect-ratio: 1;
+}
+
+.if-image-frame img {
+  width: 100%;
+  height: 100%;
+}
+
+.if-image-cover {
+  object-fit: cover;
+}
+
+.if-image-contain {
+  object-fit: contain;
+  padding: 0.75rem;
+}
+
+.if-image-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 1rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.if-image-busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--card) 70%, transparent);
+}
+
+/* ------------------------------------------------------------- options -- */
+
+.if-options-editor {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.if-options-list {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.if-option-row {
+  display: grid;
+  gap: 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.if-option-row.is-dragging {
+  opacity: 0.6;
+  box-shadow: var(--shadow-lg);
+}
+
+.if-option-line {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.if-drag-handle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: grab;
+}
+
+.if-drag-handle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.if-drag-handle:active {
+  cursor: grabbing;
+}
+
+.if-drag-handle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.if-option-picture {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 2rem;
+}
+
+.if-option-thumb {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.if-option-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.if-option-thumb:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}

@@ -2,4 +2,38 @@
  * IntelForm dashboard CSS for screens/templates.tsx.
  * Scope every rule under the screen root class `.screen-templates` (`<div className="app-page screen-templates">`).
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ * The template card itself is shared with the forms screen: see forms.css.
  */
+
+.screen-templates {
+  gap: 2rem;
+}
+
+.screen-templates .if-section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.screen-templates .if-hint-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--muted);
+}
+
+.screen-templates .if-hint-box p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.screen-templates .if-hint-box svg {
+  flex: none;
+  margin-top: 0.1rem;
+}

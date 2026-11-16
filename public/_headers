@@ -8,3 +8,7 @@
   Cross-Origin-Opener-Policy: same-origin
   X-Frame-Options: DENY
   Strict-Transport-Security: max-age=15552000
+
+# The form embed loader (src/respondent/embed.ts docs): short cache so fixes reach sites soon.
+/embed.js
+  Cache-Control: public, max-age=300

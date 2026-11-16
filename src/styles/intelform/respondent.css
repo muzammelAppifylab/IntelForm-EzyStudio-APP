@@ -1,6 +1,806 @@
 /*
- * The PUBLIC form a respondent fills in (/f/<slug> and its embed), not the dashboard.
- * Imported by the respondent page itself (src/pages/f/...), after global.css; owned by the
- * respondent agent. Per-form theme values arrive as custom properties on the form's root
- * (set through the CSSOM, never style=""), falling back to the global tokens.
+ * The PUBLIC form a respondent fills in (/f/<slug>/ and its embeds), and the builder's preview
+ * of it: everything under `.rf-theme` (src/respondent/Shell.tsx), plus the page around it
+ * (`body.rf-page`, src/pages/f/[slug].astro). Imported by the page and by the Shell module, so
+ * the dashboard gets it wherever it renders FormRenderer. Owned by the respondent page.
+ *
+ * Per-form theme values arrive as custom properties (src/lib/intelform/form/theme-core.ts
+ * themeToVars): on `.rf-theme` through the CSSOM, and on `body.rf-page` from the page's hashed
+ * <style>. Never `style=""` (CSP). Inside `.rf-theme`, `--foreground`, `--accent`, `--muted`,
+ * `--border`, `--primary`… are the THEME's values (they shadow the site's tokens there): read
+ * text colours from `--foreground` / `--muted-foreground`, never from the site's `--ink` / `--muted`.
+ *
+ * Class contract used by src/respondent and the field renderers (src/form-types):
+ *   .rf-input .rf-control-box .rf-control           themed 48px text controls
+ *   .rf-button(-primary|-outline|-form|-icon|-sm)   themed buttons (src/respondent/classes.ts)
+ *   .rf-question-xl .rf-question .rf-text-*          type scale (follows --form-font-scale)
+ *   .rf-muted .rf-sr-only .rf-pre-line .rf-row       helpers
+ * The legacy layouts used Tailwind container queries at @lg: here `@container rf (min-width: 32rem)`.
  */
+
+/* ------------------------------------------------------------------ page -- */
+
+body.rf-page {
+  background: var(--form-bg, var(--bg));
+  color: var(--foreground, var(--ink));
+  min-height: 100dvh;
+}
+body.rf-page.rf-transparent,
+body.rf-page.rf-page-embed.rf-transparent {
+  background: transparent;
+}
+/* An inline embed takes its content height: the parent iframe follows it (embed.js). */
+body.rf-page-embed {
+  min-height: 0;
+}
+.rf-root {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rf-page-embed .rf-root {
+  flex: 0 0 auto;
+}
+.rf-loading {
+  min-height: 100dvh;
+}
+.rf-page-embed .rf-loading {
+  min-height: 12rem;
+}
+
+/* ----------------------------------------------------------------- shell -- */
+
+.rf-theme {
+  --rf-question-width: 45rem;
+  --rf-form-width: 40rem;
+  --rf-control: 3rem;
+  --rf-duration: 320ms;
+  --rf-ease: cubic-bezier(0.2, 0, 0, 1);
+  --rf-danger: light-dark(#a12144, #fd758e);
+  --rf-danger-soft: light-dark(#fee6e9, #3a1018);
+  --rf-danger-soft-ink: light-dark(#a12144, #ffa9b5);
+  --rating-empty: light-dark(#a6a39c, #716e67);
+  --text-question-xl: 400 calc(2.5rem * var(--form-font-scale, 1)) / calc(2.75rem * var(--form-font-scale, 1)) var(--form-question-font, var(--font-display));
+  --text-question: 600 calc(1.125rem * var(--form-font-scale, 1)) / calc(1.625rem * var(--form-font-scale, 1)) var(--form-question-sm-font, var(--form-question-font, var(--font-sans)));
+  --text-answer: 400 calc(1rem * var(--form-font-scale, 1)) / calc(1.5rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
+  --text-body: 400 calc(1rem * var(--form-font-scale, 1)) / calc(1.5rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
+  --text-body-sm: 400 calc(0.875rem * var(--form-font-scale, 1)) / calc(1.25rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
+  --text-label: 500 calc(0.875rem * var(--form-font-scale, 1)) / calc(1.25rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
+  --text-caption: 400 calc(0.75rem * var(--form-font-scale, 1)) / calc(1rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
+  --text-overline: 600 0.75rem / 1rem var(--form-font, var(--font-sans));
+
+  color-scheme: var(--form-color-scheme, light);
+  container: rf / inline-size;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--form-bg, var(--bg));
+  color: var(--foreground, var(--ink));
+  font: var(--text-body);
+  text-align: left;
+}
+.rf-theme *,
+.rf-theme *::before,
+.rf-theme *::after {
+  box-sizing: border-box;
+}
+.rf-theme.rf-mode-page {
+  min-height: 100dvh;
+}
+.rf-theme.rf-mode-preview {
+  height: 100%;
+  min-height: 100%;
+  overflow-y: auto;
+}
+.rf-theme.rf-mode-preview.rf-device-mobile {
+  width: 100%;
+  max-width: 26rem;
+  margin-inline: auto;
+}
+.rf-theme.rf-transparent {
+  background: transparent;
+}
+.rf-bg-image,
+.rf-bg-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.rf-bg-image {
+  background-image: var(--form-bg-image, none);
+  background-size: cover;
+  background-position: center;
+}
+.rf-bg-overlay {
+  background: #0e0c15;
+  opacity: var(--form-bg-overlay, 0);
+}
+.rf-logo {
+  display: flex;
+  justify-content: flex-start;
+  padding: 1.5rem 1rem 0;
+}
+.rf-logo-center {
+  justify-content: center;
+}
+.rf-logo-img {
+  height: 2.5rem;
+  width: auto;
+  max-width: 12rem;
+  object-fit: contain;
+}
+.rf-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+.rf-main-tall {
+  min-height: 34rem;
+}
+
+/* ------------------------------------------------------------ typography -- */
+
+.rf-theme h1,
+.rf-theme h2,
+.rf-theme h3,
+.rf-theme p {
+  margin: 0;
+}
+.rf-heading {
+  color: var(--foreground);
+  outline: none;
+}
+.rf-question-xl {
+  font: var(--text-question-xl);
+  letter-spacing: -0.01em;
+}
+.rf-question {
+  font: var(--text-question);
+}
+.rf-text-answer {
+  font: var(--text-answer);
+}
+.rf-text-body {
+  font: var(--text-body);
+}
+.rf-text-label {
+  font: var(--text-label);
+}
+.rf-text-caption {
+  font: var(--text-caption);
+}
+.rf-overline {
+  font: var(--text-overline);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.rf-muted {
+  color: var(--muted-foreground, var(--muted));
+}
+.rf-answer-colour {
+  color: var(--form-answer, var(--accent));
+}
+.rf-pre-line {
+  white-space: pre-line;
+}
+.rf-prose {
+  max-width: 65ch;
+}
+.rf-inline {
+  display: inline;
+}
+.rf-tabular {
+  font-variant-numeric: tabular-nums;
+}
+.rf-label {
+  cursor: default;
+}
+.rf-required {
+  color: var(--rf-danger);
+}
+.rf-number {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.5rem;
+  transform: translateY(-0.1em);
+  font: var(--text-label);
+  color: var(--form-answer, var(--accent));
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.rf-number-arrow {
+  margin-left: 0.125rem;
+}
+.rf-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.rf-honeypot {
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ----------------------------------------------------------------- icons -- */
+
+.rf-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+.rf-icon-sm {
+  width: 1rem;
+  height: 1rem;
+}
+.rf-icon-lg {
+  width: 2rem;
+  height: 2rem;
+}
+
+/* -------------------------------------------------------------- controls -- */
+
+.rf-control-box {
+  min-height: var(--rf-control);
+  border-radius: var(--form-radius, var(--radius-sm));
+  font: var(--text-answer);
+}
+.rf-control {
+  padding-inline: 1rem;
+}
+.rf-input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--input, var(--line-strong));
+  background: var(--field, var(--card));
+  color: var(--foreground, var(--ink));
+  outline: none;
+  transition: border-color 120ms;
+}
+.rf-input::placeholder {
+  color: var(--field-placeholder, var(--subtle));
+  opacity: 1;
+}
+.rf-input:focus-visible,
+.rf-theme select:focus-visible,
+.rf-theme button:focus-visible,
+.rf-theme a:focus-visible,
+.rf-theme [tabindex]:focus-visible:not([tabindex='-1']) {
+  outline: 2px solid var(--ring, var(--accent));
+  outline-offset: 2px;
+}
+.rf-input[aria-invalid='true'] {
+  border-color: var(--rf-danger);
+}
+.rf-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+textarea.rf-input {
+  padding-block: 0.75rem;
+  resize: vertical;
+}
+
+.rf-select {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.rf-select-control {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 2.5rem;
+}
+.rf-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 0.875rem;
+  width: 1rem;
+  height: 1rem;
+  transform: translateY(-50%);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.rf-combobox {
+  position: relative;
+}
+.rf-combobox-input {
+  padding-right: 2.5rem;
+}
+.rf-listbox {
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  z-index: 50;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 16rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--popover, var(--card));
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: 0 12px 32px color-mix(in oklab, #211d2a 12%, transparent);
+}
+.rf-listbox-empty {
+  padding: 0.625rem 0.75rem;
+}
+.rf-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font: var(--text-answer);
+}
+.rf-option.is-active {
+  background: var(--accent);
+  color: var(--accent-foreground, var(--foreground));
+}
+.rf-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rf-field-error {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font: var(--text-caption);
+  color: var(--rf-danger);
+  animation: rf-fade-up 200ms var(--rf-ease) both;
+}
+
+.rf-group {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.rf-legend {
+  margin-bottom: 0.75rem;
+  padding: 0;
+  color: var(--foreground);
+}
+.rf-group-description {
+  margin-top: -0.5rem;
+}
+
+/* --------------------------------------------------------------- buttons -- */
+
+.rf-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 2px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    background-color 120ms,
+    transform 120ms;
+}
+.rf-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.rf-button:disabled,
+.rf-button[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.rf-button .rf-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+.rf-button-primary {
+  background: var(--form-button, var(--primary));
+  color: var(--form-button-foreground, var(--primary-foreground, var(--primary-ink)));
+  border-color: var(--form-button-border, var(--primary-border, var(--edge)));
+}
+.rf-button-primary:hover:not(:disabled) {
+  background: var(--primary-hover, var(--form-button));
+}
+.rf-button-outline {
+  background: var(--form-bg, transparent);
+  color: var(--foreground);
+  border: 1px solid var(--input, var(--line-strong));
+}
+.rf-button-outline:hover:not(:disabled) {
+  background: var(--accent);
+}
+.rf-button-form {
+  min-height: var(--rf-control);
+  padding-inline: 1.25rem;
+  border-radius: var(--form-radius, var(--radius-sm));
+  font: var(--text-answer);
+  font-weight: 600;
+}
+.rf-button-icon {
+  width: var(--rf-control);
+  height: var(--rf-control);
+  padding: 0;
+  border-radius: min(var(--form-radius, 0.5rem), 0.75rem);
+}
+.rf-button-sm {
+  min-height: 2rem;
+  padding-inline: 0.75rem;
+  border-radius: 6px;
+  font: var(--text-label);
+}
+.rf-fit {
+  width: fit-content;
+}
+/* --------------------------------------------------------------- screens -- */
+
+.rf-screen {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 3rem 1rem;
+}
+.rf-screen-body {
+  display: grid;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: var(--rf-question-width);
+  margin-inline: auto;
+}
+.rf-center {
+  justify-items: center;
+  text-align: center;
+}
+.rf-start-image {
+  max-height: 18rem;
+  width: auto;
+  max-width: 100%;
+  object-fit: cover;
+  border-radius: min(var(--form-radius, var(--radius)), 1rem);
+}
+.rf-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+}
+.rf-center .rf-row,
+.rf-one-center .rf-row {
+  justify-content: center;
+}
+.rf-gap-sm {
+  gap: 0.5rem;
+}
+.rf-inline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.rf-password-form {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 28rem;
+  text-align: left;
+}
+.rf-password {
+  position: relative;
+  display: block;
+}
+.rf-password-input {
+  padding-right: 4.5rem;
+}
+.rf-password-reveal {
+  position: absolute;
+  top: 50%;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  min-height: 2rem;
+  padding-inline: 0.625rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: var(--text-label);
+  cursor: pointer;
+}
+.rf-password-reveal:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+/* --------------------------------------------- all at once, section pages -- */
+
+.rf-paged {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: 2.5rem 1rem;
+}
+.rf-paged-body {
+  display: grid;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: var(--rf-form-width);
+  margin-inline: auto;
+}
+.rf-paged-body.rf-gap-lg {
+  gap: 2rem;
+}
+.rf-stack {
+  display: grid;
+  gap: 1.5rem;
+}
+.rf-section-header {
+  display: grid;
+  gap: 0.5rem;
+}
+.rf-section {
+  display: grid;
+  gap: 0.375rem;
+  margin-top: 1rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border);
+}
+.rf-divider {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.rf-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.rf-field {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  scroll-margin-top: 1.5rem;
+}
+.rf-field-description {
+  margin-top: -0.25rem;
+}
+.rf-error-summary {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 2px solid var(--rf-danger);
+  border-radius: var(--radius, 12px);
+  background: var(--rf-danger-soft);
+  outline: none;
+}
+.rf-error-summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.rf-error-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--rf-danger-soft-ink);
+}
+.rf-error-summary-list {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0;
+  padding-left: 1.75rem;
+}
+.rf-error-summary-link {
+  color: var(--rf-danger-soft-ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.rf-submit-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 8px;
+  background: var(--rf-danger-soft);
+  color: var(--rf-danger-soft-ink);
+}
+.rf-submit-error-text {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.rf-submit-error-text .rf-icon {
+  margin-top: 0.125rem;
+}
+
+/* -------------------------------------------------------------- progress -- */
+
+.rf-progress {
+  display: grid;
+  gap: 0.5rem;
+}
+.rf-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.rf-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--progress-track, var(--line));
+}
+.rf-progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--form-progress, var(--progress, var(--accent)));
+  transition: width var(--rf-duration) ease-out;
+}
+
+/* ---------------------------------------------------------- one at a time -- */
+
+.rf-one {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.rf-one-progress {
+  padding: 1.25rem 1rem 0;
+}
+.rf-question-width {
+  width: 100%;
+  max-width: var(--rf-question-width);
+  margin-inline: auto;
+}
+.rf-one-stage {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 2.5rem 1rem 6rem;
+}
+.rf-one-step {
+  display: grid;
+  gap: 2rem;
+  width: 100%;
+  max-width: var(--rf-question-width);
+  margin-inline: auto;
+}
+.rf-one-center {
+  text-align: center;
+}
+.rf-one-center [data-slot='choice-option'] {
+  text-align: left;
+}
+.rf-one-center legend {
+  width: 100%;
+}
+.rf-one-nav {
+  right: 1rem;
+  bottom: calc(1rem + var(--kb, 0px));
+  z-index: 40;
+  display: flex;
+  gap: 0.25rem;
+}
+.rf-one-nav.rf-fixed {
+  position: fixed;
+}
+.rf-one-nav.rf-absolute {
+  position: absolute;
+}
+.rf-empty {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+.rf-step-fwd {
+  animation: rf-step-fwd var(--rf-duration) var(--rf-ease) both;
+}
+.rf-step-back {
+  animation: rf-step-back var(--rf-duration) var(--rf-ease) both;
+}
+@keyframes rf-step-fwd {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes rf-step-back {
+  from {
+    opacity: 0;
+    transform: translateY(-1.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes rf-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ----------------------------------------------------- wider containers -- */
+
+@container rf (min-width: 32rem) {
+  .rf-logo {
+    padding-inline: 2rem;
+  }
+  .rf-screen {
+    padding: 4rem 2rem;
+  }
+  .rf-paged {
+    padding: 3.5rem 2rem;
+  }
+  .rf-one-progress {
+    padding-inline: 2rem;
+  }
+  .rf-one-stage {
+    padding-inline: 2rem;
+  }
+  .rf-one-nav {
+    right: 2rem;
+  }
+}
+
+/* ------------------------------------------------------------- turnstile -- */
+
+.rf-turnstile {
+  display: flex;
+  justify-content: center;
+  padding: 0 1rem 1.5rem;
+}
+
+/* -------------------------------------------------------- reduced motion -- */
+
+@media (prefers-reduced-motion: reduce) {
+  .rf-step-fwd,
+  .rf-step-back,
+  .rf-field-error {
+    animation: none;
+  }
+  .rf-progress-fill,
+  .rf-button,
+  .rf-input {
+    transition: none;
+  }
+}

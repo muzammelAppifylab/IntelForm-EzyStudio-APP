@@ -157,7 +157,7 @@ export const db = createDb(DATABASE_URL || 'postgresql://unused@localhost/unused
 
 export async function resetDatabase() {
   await db.$executeRawUnsafe(
-    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits" RESTART IDENTITY CASCADE'
+    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits", "idempotency_keys" RESTART IDENTITY CASCADE'
   );
   // IntelForm's `editor` / `viewer` roles come from its migration: keep them (their grants too).
   await db.$executeRawUnsafe(`DELETE FROM "roles" WHERE NOT "is_system" AND "slug" NOT IN ('editor', 'viewer')`);

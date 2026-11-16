@@ -3,3 +3,614 @@
  * Scope every rule under the screen root class `.screen-responses` (`<div className="app-page screen-responses">`).
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
  */
+
+.screen-responses .responses-num {
+  font-variant-numeric: tabular-nums;
+}
+.screen-responses .responses-small {
+  margin: 0;
+  font-size: 0.8rem;
+}
+.screen-responses .responses-overline {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.screen-responses [aria-busy='true'] {
+  opacity: 0.7;
+  transition: opacity 150ms ease;
+}
+.screen-responses .tab-panel {
+  padding-top: 1.25rem;
+}
+
+/* ------------------------------------------------------------ summary */
+.screen-responses .responses-summary {
+  display: grid;
+  gap: 1.25rem;
+}
+.screen-responses .responses-summary > .toolbar > p {
+  margin: 0;
+}
+.screen-responses .responses-range-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.screen-responses .responses-stats {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+}
+.screen-responses .responses-charts {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  .screen-responses .responses-charts {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+.screen-responses .responses-series {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.screen-responses .responses-series-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.screen-responses .responses-series-tick {
+  fill: var(--subtle);
+  font-size: 11px;
+  font-family: var(--font-sans);
+}
+.screen-responses .responses-series-line {
+  fill: none;
+  stroke: var(--chart-1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.screen-responses .responses-series-area {
+  fill: var(--chart-1);
+  opacity: 0.12;
+}
+.screen-responses .responses-series-dot {
+  fill: var(--card);
+  stroke: var(--chart-1);
+  stroke-width: 2;
+}
+
+/* bars (choice rows, funnel) */
+.screen-responses .responses-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.screen-responses .responses-bar-track {
+  fill: var(--progress-track);
+}
+.screen-responses .responses-bar-default {
+  fill: var(--chart-1);
+}
+.screen-responses .responses-bar-other {
+  fill: var(--chart-3);
+}
+.screen-responses .responses-bar-deleted {
+  fill: var(--chart-6);
+}
+
+.screen-responses .responses-funnel {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+  padding: 1.25rem;
+}
+.screen-responses .responses-funnel h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.screen-responses .responses-funnel ol {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.screen-responses .responses-funnel li {
+  display: grid;
+  gap: 0.4rem;
+}
+.screen-responses .responses-funnel-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+.screen-responses .responses-funnel-label {
+  flex: 1;
+}
+.screen-responses .responses-funnel-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.screen-responses .responses-funnel-pct {
+  width: 3.5rem;
+  text-align: right;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* question cards */
+.screen-responses .responses-questions {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  .screen-responses .responses-questions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.screen-responses .responses-question {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+  padding: 1.25rem;
+}
+.screen-responses .responses-question > p {
+  margin: 0;
+}
+.screen-responses .responses-question-head {
+  display: grid;
+  gap: 0.25rem;
+}
+.screen-responses .responses-question-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.screen-responses .responses-question-title h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0.15rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-wrap: pretty;
+}
+.screen-responses .responses-question-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.screen-responses .responses-question-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding-left: 2.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.screen-responses .responses-question-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.screen-responses .responses-sub {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.screen-responses .responses-choices {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+}
+.screen-responses .responses-choices ul {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.screen-responses .responses-choice {
+  display: grid;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.screen-responses .responses-choice:hover {
+  background: var(--hover);
+}
+.screen-responses .responses-choice:focus-visible,
+.screen-responses .responses-answer:focus-visible,
+.screen-responses .responses-nps-column:focus-visible,
+.screen-responses .responses-open:focus-visible,
+.screen-responses .responses-sort:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.screen-responses .responses-choice-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+.screen-responses .responses-choice-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screen-responses .responses-choice-label[data-deleted] {
+  color: var(--muted);
+}
+.screen-responses .responses-choice-pct {
+  width: 3rem;
+  text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-responses .responses-answers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.screen-responses .responses-answers li + li {
+  border-top: 1px solid var(--line);
+}
+.screen-responses .responses-answer {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.screen-responses .responses-answer:hover {
+  background: var(--hover);
+}
+.screen-responses .responses-answer-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.screen-responses .responses-answer time {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+
+.screen-responses .responses-metrics {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+}
+.screen-responses .responses-metrics-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 2rem;
+}
+.screen-responses .responses-metric {
+  display: grid;
+  gap: 0.1rem;
+  font-size: 0.8rem;
+}
+.screen-responses .responses-metric-value {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.screen-responses .responses-big {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.screen-responses .responses-big-value {
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-responses .responses-nps-columns {
+  display: grid;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.screen-responses .responses-nps-column {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.screen-responses .responses-nps-column svg {
+  display: block;
+  width: 100%;
+  height: 72px;
+}
+.screen-responses .responses-nps-column:hover svg {
+  opacity: 0.85;
+}
+
+/* ------------------------------------------------------------ table */
+.screen-responses .responses-table {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.screen-responses .responses-table .search-input {
+  width: min(18rem, 100%);
+}
+.screen-responses .responses-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.screen-responses .responses-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.1rem 0.15rem 0.1rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  font-size: 0.85rem;
+}
+.screen-responses .responses-chip-label {
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screen-responses .responses-selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 0.875rem;
+}
+.screen-responses .responses-selection-count {
+  margin-right: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.screen-responses .responses-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 16rem;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.screen-responses .responses-sort:hover,
+.screen-responses .responses-sort[data-active] {
+  color: var(--ink);
+}
+.screen-responses .responses-sort:not([data-active]) svg {
+  opacity: 0.4;
+}
+.screen-responses .responses-sort[data-highlight] {
+  background: var(--highlight);
+  color: var(--highlight-ink);
+}
+.screen-responses .responses-sort-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.screen-responses .responses-open {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.screen-responses .responses-open:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.screen-responses .responses-open[aria-current] {
+  font-weight: 600;
+}
+.screen-responses .responses-cell {
+  display: inline-block;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.screen-responses .responses-link {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.screen-responses .responses-table-foot {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+}
+.screen-responses .responses-count {
+  margin: 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* popovers: range, filter, columns */
+.screen-responses .responses-range-trigger {
+  white-space: nowrap;
+}
+.screen-responses .responses-range,
+.screen-responses .responses-menu {
+  display: grid;
+  gap: 0.75rem;
+}
+.screen-responses .responses-range-foot,
+.screen-responses .responses-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.screen-responses .responses-menu-head {
+  justify-content: space-between;
+}
+.screen-responses .responses-menu-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.screen-responses .responses-filter-list {
+  display: grid;
+  gap: 0.25rem;
+}
+.screen-responses .responses-filter-options {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.25rem 0 0.5rem 1.5rem;
+}
+.screen-responses .responses-columns-list {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.screen-responses .responses-columns-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: var(--radius-sm);
+}
+.screen-responses .responses-columns-list li:hover {
+  background: var(--hover);
+}
+.screen-responses .responses-columns-list .checkbox {
+  flex: 1;
+  min-width: 0;
+}
+.screen-responses .responses-columns-moves {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------ drawer */
+.screen-responses .responses-drawer {
+  display: grid;
+  gap: 2rem;
+}
+.screen-responses .responses-drawer-answers {
+  display: grid;
+  gap: 1.25rem;
+  margin: 0;
+}
+.screen-responses .responses-drawer-answers dt {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.screen-responses .responses-drawer-answers dd {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.screen-responses .responses-signature {
+  display: inline-block;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+.screen-responses .responses-signature img {
+  display: block;
+  width: auto;
+  height: 6rem;
+}
+.screen-responses .responses-drawer-meta {
+  display: grid;
+  gap: 0.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+.screen-responses .responses-drawer-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+.screen-responses .responses-drawer-delete {
+  margin-left: auto;
+  color: var(--danger);
+}

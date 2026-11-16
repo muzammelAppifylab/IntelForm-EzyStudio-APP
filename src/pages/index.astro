@@ -1,91 +1,140 @@
 ---
 /**
- * The home page: PRERENDERED (built once, served as a static file, no server
- * work per visit) and made of sections. Words in `HOME`, `src/content/site.ts`;
- * styles in `src/styles/home.css` (every rule under `.home`).
+ * The home page: the creator's public forms hub (legacy src/pages/public/HomePage.tsx). Who you
+ * are, the forms open right now, how it works and how to reach you.
  *
- * What changes often is filled in by the browser after load, from the Site API:
- *   - the visitor (`<Base isStatic>`): signed-in users see "Open your dashboard"
- *     (`data-user-only`), guests "Create an account" (`data-guest-only`)
- *   - open roles (a `data-live` section, below)
- * The latest posts come from `src/content/blog/` at build time.
- * A section with no data stays hidden.
+ * RENDERED PER VISIT, not prerendered: its forms, contact email, description, social image and
+ * whether search engines may index it change in the dashboard without a Publish, and crawlers and
+ * link previews must see them in the HTML. It reads no visitor (the header fills the visitor in, in
+ * the browser, like a static page), so it may be kept by browsers and caches for a minute, and its
+ * data comes from the Site Cache (src/server/intelform/public-site/data.ts): usually no query.
+ *
+ * Words in `HOME`, `src/content/site.ts`; styles in src/components/public-site/public-site.css.
  */
 import '../styles/home.css';
+import '../components/public-site/public-site.css';
 
-import Cover from '../components/Cover.astro';
-import HeroVisual from '../components/home/HeroVisual.astro';
-import Icon, {type IconName} from '../components/home/Icon.astro';
-import {HOME, withName} from '../content/site';
+import FormCard from '../components/public-site/FormCard.astro';
+import FormPreview from '../components/public-site/FormPreview.astro';
+import SiteIcon from '../components/public-site/SiteIcon.astro';
+import {HOME, SITE, withName} from '../content/site';
 import Base from '../layouts/Base.astro';
-import {staticContext} from '../server/page';
-import {formatDate, postHref, publishedPosts} from '../lib/posts';
+import type {PublicHome} from '../lib/intelform/api-front';
+import type {Site} from '../lib/types';
+import {GUEST} from '../platform/auth';
+import {backend, read} from '../server/backend';
+import {formHref, HOME_FORMS} from '../server/intelform/public-site/shape';
 
-export const prerender = true;
+export const prerender = false;
 
-const {site, viewer} = await staticContext(Astro.request);
+// Both in-process (src/server/backend.ts), at once. No `pageContext`: the page never reads the
+// visitor, so one copy serves everyone; `isStatic` below lets the header fill them in.
+const api = backend(Astro.request);
+const [brand, home] = await Promise.all([read<{site: Site | null}>(api.site.$get()), read<PublicHome>(api['public-site'].home.$get())]);
+const site = brand?.site ?? null;
+const viewer = GUEST;
 const name = site?.name ?? 'My site';
-const latest = (await publishedPosts()).slice(0, 3);
 
-// The headline, split around the highlighted words (`HOME.hero.highlight`).
-const {title, highlight} = HOME.hero;
-const at = highlight ? title.indexOf(highlight) : -1;
-const headline =
-  at < 0
-    ? {before: title, mark: '', after: ''}
-    : {before: title.slice(0, at), mark: highlight, after: title.slice(at + highlight.length)};
+if (home) {
+  // The same for every visitor: nothing here read the visitor.
+  Astro.response.headers.set('Cache-Control', 'public, max-age=60');
+  if (!home.indexing) Astro.response.headers.set('X-Robots-Tag', 'noindex');
+} else {
+  // The database could not be read: never cache or index the error page.
+  Astro.response.status = 503;
+  Astro.response.headers.set('Cache-Control', 'no-store');
+  Astro.response.headers.set('X-Robots-Tag', 'noindex');
+}
+
+const forms = home?.forms ?? [];
+const only = forms.length === 1 ? forms[0]! : null;
+const more = forms.length > HOME_FORMS;
+const contactEmail = home?.contactEmail ?? '';
+const description = home?.description || withName(SITE.description, name);
+const empty = contactEmail ? HOME.forms.emptyWithEmail.replace('{email}', contactEmail) : HOME.forms.empty;
 ---
 
-<Base site={site} viewer={viewer} isStatic>
-  <main id="main" tabindex="-1" class="home">
-    <section class="home-hero">
+<Base site={site} viewer={viewer} isStatic description={description} image={home?.ogImage ?? null} noindex={!home || !home.indexing}>
+  <main id="main" tabindex="-1" class="home ps">
+    <section class="home-hero" aria-labelledby="hero-title">
       <div class="wrap home-hero-grid">
         <div class="home-hero-copy">
-          <p class="home-eyebrow" data-brand-text={HOME.hero.eyebrow}>{withName(HOME.hero.eyebrow, name)}</p>
-          <h1>
-            {headline.before}{headline.mark && <mark>{headline.mark}</mark>}{headline.after}
-          </h1>
+          <h1 id="hero-title" data-brand-text="{name}">{name}</h1>
           <p class="home-lede">{HOME.hero.body}</p>
-          <div class="home-actions" data-guest-only>
-            <a class="button home-button-lg" href="/account/register/" data-astro-prefetch>
-              {HOME.hero.guest.primary}
-              <Icon name="arrow-right" size={18} />
-            </a>
-            <a class="button ghost home-button-lg" href="#how">{HOME.hero.guest.secondary}</a>
+          <div class="home-actions">
+            {
+              only ? (
+                <a class="button home-button-lg" href={formHref(only.slug)}>
+                  {only.title}
+                  <SiteIcon name="arrow-right" size={18} />
+                </a>
+              ) : (
+                forms.length > 0 && (
+                  <a class="button home-button-lg" href="#forms-title">
+                    {HOME.hero.seeForms}
+                    <SiteIcon name="arrow-right" size={18} />
+                  </a>
+                )
+              )
+            }
+            <a class="button ghost home-button-lg" href="/about/" data-astro-prefetch>{HOME.hero.about}</a>
           </div>
-          <div class="home-actions" data-user-only hidden>
-            <a class="button home-button-lg" href="/dashboard">
-              {HOME.hero.user.primary}
-              <Icon name="arrow-right" size={18} />
-            </a>
-            <a class="button ghost home-button-lg" href="/blog/" data-astro-prefetch>{HOME.hero.user.secondary}</a>
-          </div>
-          <p class="home-note" data-guest-only>{HOME.hero.note}</p>
         </div>
         <div class="home-hero-visual">
-          <HeroVisual name={name} />
+          <FormPreview />
         </div>
       </div>
     </section>
 
-    <section class="home-section" aria-labelledby="features-title">
+    <section class="home-section" aria-labelledby="forms-title">
       <div class="wrap">
-        <div class="home-head">
-          <p class="home-eyebrow">{HOME.features.eyebrow}</p>
-          <h2 id="features-title">{HOME.features.title}</h2>
-          <p class="home-sub">{HOME.features.body}</p>
-        </div>
-        <ul class="home-features">
+        <div class="home-head home-head-row">
+          <div>
+            <p class="home-eyebrow">{HOME.forms.eyebrow}</p>
+            <h2 id="forms-title">{HOME.forms.title}</h2>
+          </div>
           {
-            HOME.features.items.map(feature => (
-              <li class="home-feature">
-                <span class="home-icon-tile">
-                  <Icon name={feature.icon as IconName} />
-                </span>
-                <h3>{feature.title}</h3>
-                <p>{feature.body}</p>
+            more && (
+              <a class="home-more" href="/forms/" data-astro-prefetch>
+                {HOME.forms.seeAll.replace('{count}', String(forms.length))}
+                <SiteIcon name="arrow-up-right" size={16} />
+              </a>
+            )
+          }
+        </div>
+        {
+          !home ? (
+            <p class="notice" role="alert">
+              The forms didn’t load. Refresh the page to try again.
+            </p>
+          ) : forms.length === 0 ? (
+            <p class="ps-empty">{empty}</p>
+          ) : (
+            <ul class="ps-cards">
+              {forms.slice(0, HOME_FORMS).map((form, i) => (
+                <FormCard form={form} index={i} />
+              ))}
+            </ul>
+          )
+        }
+        <ul class="ps-facts" aria-label={HOME.goodToKnow.label}>
+          <li>
+            <SiteIcon name="user-x" size={16} />
+            {HOME.goodToKnow.noAccount}
+          </li>
+          <li>
+            <SiteIcon name="monitor-smartphone" size={16} />
+            {HOME.goodToKnow.anyDevice}
+          </li>
+          {
+            home?.hasPrivacy && (
+              <li>
+                <SiteIcon name="shield-check" size={16} />
+                <a href="/privacy/" data-astro-prefetch>
+                  {HOME.goodToKnow.privacy}
+                </a>
               </li>
-            ))
+            )
           }
         </ul>
       </div>
@@ -111,72 +160,31 @@ const headline =
       </div>
     </section>
 
-    {
-      latest.length > 0 && (
-        <section class="home-section" aria-labelledby="blog-title">
-          <div class="wrap">
-            <div class="home-head home-head-row">
-              <h2 id="blog-title">{HOME.blog.title}</h2>
-              <a class="home-more" href="/blog/" data-astro-prefetch>
-                {HOME.blog.link}
-                <Icon name="arrow-right" size={16} />
+    <section class="home-section home-section-last" aria-labelledby="about-title">
+      <div class:list={['wrap', 'ps-about', {'ps-about-split': contactEmail}]}>
+        <div class="ps-about-copy">
+          <p class="home-eyebrow">{HOME.about.eyebrow}</p>
+          <h2 id="about-title">{HOME.about.title}</h2>
+          <p class="home-sub" data-brand-text={HOME.about.body}>{withName(HOME.about.body, name)}</p>
+          <a class="home-more" href="/about/" data-astro-prefetch>
+            <span data-brand-text={HOME.about.link}>{withName(HOME.about.link, name)}</span>
+            <SiteIcon name="arrow-up-right" size={16} />
+          </a>
+        </div>
+        {
+          contactEmail && (
+            <div class="ps-contact">
+              <span class="ps-contact-icon">
+                <SiteIcon name="mail" size={20} />
+              </span>
+              <h3>{HOME.contact.title}</h3>
+              <p class="muted">{HOME.contact.body}</p>
+              <a class="ps-contact-email" href={`mailto:${contactEmail}`}>
+                {contactEmail}
               </a>
             </div>
-            <div class="grid grid-3">
-              {latest.map(post => (
-                <a class="post-card" href={postHref(post)} data-astro-prefetch>
-                  {post.data.cover ? (
-                    <Cover class="cover" src={post.data.cover} alt={post.data.coverAlt} width={640} height={360} sizes="(min-width: 1100px) 350px, (min-width: 640px) 50vw, 100vw" />
-                  ) : (
-                    <span class="cover cover-empty" aria-hidden="true" />
-                  )}
-                  <div class="post-card-body">
-                    <p class="meta">{formatDate(post.data.publishedAt)}</p>
-                    <h3>{post.data.title}</h3>
-                    <p class="muted small">{post.data.description}</p>
-                  </div>
-                </a>
-              ))}
-            </div>
-          </div>
-        </section>
-      )
-    }
-
-    <section class="home-section" aria-labelledby="faq-title">
-      <div class="wrap home-faq-grid">
-        <div class="home-head">
-          <p class="home-eyebrow">{HOME.faq.eyebrow}</p>
-          <h2 id="faq-title">{HOME.faq.title}</h2>
-        </div>
-        <div class="home-faq">
-          {
-            HOME.faq.items.map(item => (
-              <details>
-                <summary>
-                  {item.q}
-                  <Icon name="plus" size={20} class="home-faq-icon" />
-                </summary>
-                <p>{item.a}</p>
-              </details>
-            ))
-          }
-        </div>
-      </div>
-    </section>
-
-    <section class="home-section home-section-last" data-guest-only aria-labelledby="cta-title">
-      <div class="wrap">
-        <div class="home-cta">
-          <div>
-            <h2 id="cta-title" data-brand-text={HOME.cta.title}>{withName(HOME.cta.title, name)}</h2>
-            <p>{HOME.cta.body}</p>
-          </div>
-          <div class="home-cta-actions">
-            <a class="button home-button-lg home-cta-primary" href="/account/register/" data-astro-prefetch>{HOME.cta.primary}</a>
-            <a class="button home-button-lg home-cta-ghost" href="/account/login/" data-astro-prefetch>{HOME.cta.secondary}</a>
-          </div>
-        </div>
+          )
+        }
       </div>
     </section>
   </main>

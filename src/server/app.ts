@@ -1,4 +1,4 @@
-import {Hono} from 'hono';
+import {Hono, type Context} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
 
 import {isPreview} from '../platform/api';
@@ -20,6 +20,13 @@ import {siteRoutes} from './routes/site';
 import {templatesRoutes} from './routes/templates';
 import {themesRoutes} from './routes/themes';
 import {uploadsRoutes} from './routes/uploads';
+import {formDraftRoutes} from './intelform/builder/form-routes';
+
+const tooLarge = (c: Context) => c.json(problem('too_large', 'That request is too large.'), 413);
+const defaultBodyLimit = bodyLimit({maxSize: 64 * 1024, onError: tooLarge});
+const draftBodyLimit = bodyLimit({maxSize: 512 * 1024, onError: tooLarge});
+const DRAFT_PATH = /^\/site-api\/(?:builder\/)?forms\/[0-9a-f-]{36}$/i;
+const isDraftAutosave = (method: string, path: string) => method === 'PATCH' && DRAFT_PATH.test(path);
 
 /**
  * The Site API: this site's ONLY backend, one Hono app at `/site-api/*`.
@@ -63,8 +70,9 @@ export const app = new Hono()
   // `formCsrf` (the token, or a same-origin form post). Keep it here (docs/agent/payments.md).
   .route('/checkout', checkoutRoutes)
   .use(csrf)
-  // No route here takes a big body; uploads never pass through the Worker.
-  .use(bodyLimit({maxSize: 64 * 1024, onError: c => c.json(problem('too_large', 'That request is too large.'), 413)}))
+  // No route here takes a big body; uploads never pass through the Worker. The one exception is
+  // the form builder's autosave (PATCH /forms/:id), which carries the whole draft: 512 KB there.
+  .use((c, next) => (isDraftAutosave(c.req.method, c.req.path) ? draftBodyLimit : defaultBodyLimit)(c, next))
   // New catalogue codenames reach the `permissions` table (once per isolate; no migration).
   .use(syncPermissions(CATALOGUE))
 
@@ -90,6 +98,8 @@ export const app = new Hono()
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
   .route('/site', siteRoutes)
+  // Autosave, publish and versions first (PATCH /:id, POST /:id/publish), then the rest.
+  .route('/forms', formDraftRoutes)
   .route('/forms', formsRoutes)
   .route('/builder', builderRoutes)
   .route('/templates', templatesRoutes)

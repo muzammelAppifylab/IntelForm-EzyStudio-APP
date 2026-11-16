@@ -35,7 +35,8 @@ export const formsListQuery = z.object({
   q: z.string().trim().max(200).optional(),
   status: z.enum([...FORM_STATUSES, 'all']).default('all'),
   sort: z.enum(FORM_SORTS).default('updated'),
-  page: z.coerce.number().int().min(1).max(100_000).default(1),
+  /** Keyset paging: the previous page's `nextCursor` (GET /site-api/forms?cursor=…). */
+  cursor: z.string().max(600).optional(),
 })
 export type FormsListQuery = z.infer<typeof formsListQuery>
 
@@ -139,6 +140,8 @@ export interface FormsListResponse {
   matched: number
   page: number
   pageSize: number
+  /** Pass as `?cursor=` for the next page; null on the last one. */
+  nextCursor: string | null
 }
 
 export interface CreatedForm {

@@ -27,6 +27,10 @@ import {
   usersQuery,
 } from './queries';
 import {useMe, useSite} from './shared';
+import {appSettingsQuery} from './intelform/queries/app-settings';
+import {contactsListQuery, contactsOverviewQuery, DEFAULT_CONTACTS_STATE} from './intelform/queries/contacts';
+import {DEFAULT_FORMS_FILTER, formsListQuery, formsStripQuery, recentFormsQuery} from './intelform/queries/forms';
+import {templatesQuery} from './intelform/queries/templates';
 import {
   Avatar,
   Button,
@@ -364,7 +368,13 @@ const overviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   staticData: {title: 'Overview'},
-  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(meQuery), queryClient.ensureQueryData(siteQuery)),
+  loader: ({context: {queryClient}}) =>
+    warm(
+      queryClient.ensureQueryData(meQuery),
+      queryClient.ensureQueryData(siteQuery),
+      queryClient.ensureQueryData(formsStripQuery),
+      queryClient.ensureQueryData(recentFormsQuery)
+    ),
   component: lazyRouteComponent(() => import('./screens/overview'), 'Overview'),
 });
 const accountRoute = createRoute({
@@ -383,30 +393,41 @@ const accountRoute = createRoute({
   component: lazyRouteComponent(() => import('./screens/account'), 'Account'),
 });
 // ------------------------------------------------------------------ IntelForm --
-// Screens start as stubs; each screen's agent sends its `loader` (warming its own
-// queries from ./intelform/queries/<domain>.ts) to the owner of this file.
+// Each loader warms the screen's own queries from ./intelform/queries/<domain>.ts.
 const formsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/forms',
   staticData: {title: 'Forms'},
+  loader: ({context: {queryClient}}) =>
+    warm(queryClient.ensureInfiniteQueryData(formsListQuery(DEFAULT_FORMS_FILTER)), queryClient.ensureQueryData(formsStripQuery)),
   component: lazyRouteComponent(() => import('./screens/forms'), 'Forms'),
 });
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/templates',
   staticData: {title: 'Templates'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(templatesQuery)),
   component: lazyRouteComponent(() => import('./screens/templates'), 'Templates'),
 });
 const contactsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/contacts',
   staticData: {title: 'Contacts'},
+  loader: ({context: {queryClient}}) =>
+    warm(
+      queryClient.ensureInfiniteQueryData(contactsListQuery(DEFAULT_CONTACTS_STATE)),
+      queryClient.ensureQueryData(contactsOverviewQuery)
+    ),
   component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
 });
 const appSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/app-settings',
   staticData: {title: 'Settings'},
+  // `?tab=spam`: a link can open one tab of the settings screen.
+  validateSearch: (search: Record<string, unknown>): {tab?: string} =>
+    typeof search.tab === 'string' ? {tab: search.tab} : {},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(appSettingsQuery)),
   component: lazyRouteComponent(() => import('./screens/app-settings'), 'AppSettings'),
 });
 

@@ -1,0 +1,146 @@
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
+
+import {hashPassword} from '../../src/platform/auth/password';
+import {formDefinition} from '../../src/lib/intelform/form/definition';
+import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
+import {defaultTheme} from '../../src/lib/intelform/form/theme';
+import {app} from '../../src/server/app';
+import {renderToken} from '../../src/server/intelform/respondent/tokens';
+import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
+
+/**
+ * The respondent API (/site-api/public/forms) end to end against a real Postgres: load by slug
+ * (and an old slug), submit with every check, the funnel events, the form password. Anonymous:
+ * no sign-in anywhere here. Runs only with TEST_DATABASE_URL (it empties the tables).
+ */
+const SECRET = 'integration-test-secret-0123456789-abcdefghijklmnop';
+
+const DEF = formDefinition.parse({
+  layout: 'all_at_once',
+  startScreen: {enabled: false, title: '', button: 'Start'},
+  endScreen: {title: 'Thanks', message: ''},
+  fields: [
+    {id: 'f_name', type: 'name', label: 'Your name', required: true, props: {split: true}},
+    {id: 'f_email', type: 'email', label: 'Email', required: true},
+  ],
+});
+
+let seq = 0;
+async function makeForm(settings: Record<string, unknown> = {}, status = 'live') {
+  const slug = `t-${++seq}`;
+  const s = {...defaultFormSettings(), ...settings};
+  const form = await db.form.create({
+    data: {slug, title: `Survey ${seq}`, status, draft: DEF as never, settings: s as never, theme: defaultTheme() as never},
+    select: {id: true},
+  });
+  const v = await db.formVersion.create({
+    data: {formId: form.id, version: 1, definition: DEF as never, theme: defaultTheme() as never},
+    select: {id: true},
+  });
+  await db.form.update({where: {id: form.id}, data: {publishedVersionId: v.id}, select: {id: true}});
+  return {id: form.id, slug, versionId: v.id};
+}
+
+const good = {f_name: {first: 'Ada', last: 'Lovelace'}, f_email: 'ada@example.com'};
+async function submitBody(form: {id: string; versionId: string}, extra: Record<string, unknown> = {}) {
+  return {formVersionId: form.versionId, answers: good, renderToken: await renderToken(SECRET, form.id, Date.now() - 5000), startedAt: Date.now() - 4000, ...extra};
+}
+
+describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', () => {
+  beforeAll(configureEnv);
+  afterAll(() => db.$disconnect());
+  beforeEach(resetDatabase);
+
+  it('loads a live form, follows an old slug, hides drafts', async () => {
+    const form = await makeForm();
+    const visitor = new Browser(app);
+    const live = await visitor.get(`/site-api/public/forms/${form.slug}`);
+    expect(live.status).toBe(200);
+    expect(live.json).toMatchObject({status: 'live', id: form.id, versionId: form.versionId});
+    expect(String(live.json.renderToken)).toMatch(/^\d+\./);
+    expect(live.headers.get('cache-control')).toBe('no-store');
+    expect(JSON.stringify(live.json)).not.toContain('passwordHash');
+
+    await db.formSlugOld.create({data: {slug: 'old-name', formId: form.id}});
+    expect((await visitor.get('/site-api/public/forms/old-name')).json).toEqual({status: 'moved', redirectTo: form.slug});
+
+    const draft = await makeForm({}, 'draft');
+    expect((await visitor.get(`/site-api/public/forms/${draft.slug}`)).status).toBe(404);
+    expect((await visitor.get('/site-api/public/forms/no-such-form')).status).toBe(404);
+  });
+
+  it('saves a response, keeps the count, fills contacts by trigger', async () => {
+    const form = await makeForm();
+    const visitor = new Browser(app);
+    const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form));
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ok: true});
+    const rows = await db.response.findMany({where: {formId: form.id}, select: {answers: true, ipHash: true, contactEmail: true, searchText: true}});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.ipHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows[0]!.contactEmail).toBe('ada@example.com');
+    expect((await db.form.findUniqueOrThrow({where: {id: form.id}, select: {responseCount: true}})).responseCount).toBe(1);
+  });
+
+  it('refuses without the CSRF token (same-origin writes only)', async () => {
+    const form = await makeForm();
+    const res = await new Browser(app).request('POST', `/site-api/public/forms/${form.slug}/responses`, await submitBody(form), {'x-csrf-token': ''});
+    expect(res.status).toBe(403);
+  });
+
+  it('closes at the cap, exactly, under parallel submits', async () => {
+    const form = await makeForm({responseCap: 3});
+    const results = await Promise.all(
+      Array.from({length: 6}, async (_, i) => new Browser(app, `203.0.113.${20 + i}`).post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form)))
+    );
+    expect(results.filter(r => r.status === 200)).toHaveLength(3);
+    expect(results.filter(r => r.status === 403)).toHaveLength(3);
+    const after = await db.form.findUniqueOrThrow({where: {id: form.id}, select: {status: true, responseCount: true}});
+    expect(after).toEqual({status: 'closed', responseCount: 3});
+  });
+
+  it('one response per email, also in a race', async () => {
+    const form = await makeForm({onePerEmail: true, onePerEmailFieldId: 'f_email'});
+    const results = await Promise.all(
+      [0, 1, 2].map(async i => new Browser(app, `203.0.113.${40 + i}`).post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form)))
+    );
+    expect(results.filter(r => r.status === 200)).toHaveLength(1);
+    expect(results.filter(r => r.status === 422).every(r => (r.json.fields as Record<string, unknown>).f_email)).toBe(true);
+    expect(await db.response.count({where: {formId: form.id}})).toBe(1);
+  });
+
+  it('rate limits submits per caller and form', async () => {
+    const form = await makeForm();
+    const visitor = new Browser(app, '203.0.113.60');
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) statuses.push((await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form))).status);
+    expect(statuses.slice(0, 10).every(s => s === 200)).toBe(true);
+    expect(statuses[10]).toBe(429);
+  });
+
+  it('counts views and starts once per session in 15-minute buckets', async () => {
+    const form = await makeForm();
+    const visitor = new Browser(app);
+    const session = '6f1c1d2e-1111-4222-8333-444455556666';
+    for (const type of ['view', 'view', 'start']) {
+      expect((await visitor.post(`/site-api/public/forms/${form.slug}/events`, {type, session})).status).toBe(204);
+    }
+    const counts = await db.formEventCount.findMany({where: {formId: form.id}, select: {views: true, starts: true}});
+    expect(counts).toEqual([{views: 1, starts: 1}]);
+  });
+
+  it('a password-protected form unlocks with the right password only', async () => {
+    const form = await makeForm({passwordHash: await hashPassword('open sesame')});
+    const visitor = new Browser(app);
+    expect((await visitor.get(`/site-api/public/forms/${form.slug}`)).json.status).toBe('locked');
+    const wrong = await visitor.post(`/site-api/public/forms/${form.slug}/unlock`, {password: 'nope'});
+    expect(wrong.status).toBe(422);
+    expect((await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form))).status).toBe(401);
+    const right = await visitor.post(`/site-api/public/forms/${form.slug}/unlock`, {password: 'open sesame'});
+    expect(right.status).toBe(200);
+    const token = String(right.json.token);
+    expect((right.json.form as {status: string}).status).toBe('live');
+    const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form, {unlockToken: token}));
+    expect(res.status).toBe(200);
+  });
+});

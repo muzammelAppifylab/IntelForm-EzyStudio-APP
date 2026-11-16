@@ -2,4 +2,388 @@
  * IntelForm dashboard CSS for screens/builder/settings.tsx (a form's settings tab).
  * Scope every rule under the screen root class `.screen-form-settings` (`<div className="app-page screen-form-settings">`).
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ *
+ * The first block styles the small controls the Design, Settings and Share tabs share
+ * (src/portal/intelform/builder/settings/shared.tsx, design/ImageField.tsx): it is scoped to
+ * those three screens.
  */
+
+/* ------------------------------------------------ shared builder-tab controls -- */
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-settings-body {
+  display: grid;
+  gap: 1.25rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-settings-card {
+  scroll-margin-top: 1.5rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-settings-card h3:focus {
+  outline: none;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-group {
+  display: grid;
+  gap: 0.75rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-two-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-row-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-row-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-row-text {
+  display: grid;
+  gap: 0.15rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-row-between {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.75rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-inline-form > .field {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-inline-form > .button,
+:is(.screen-design, .screen-share, .screen-form-settings) .if-inline-form > .if-row-actions {
+  margin-bottom: 1.6rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-choice-row {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-fieldset {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-fieldset legend {
+  padding: 0 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-fieldset > .button {
+  justify-self: start;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-mono {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-code {
+  max-height: 10rem;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-empty-box {
+  margin: 0;
+  padding: 1.5rem 1rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+/* Image picker (design/ImageField.tsx). */
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-field {
+  display: grid;
+  gap: 0.5rem;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-box {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+  aspect-ratio: 16 / 9;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-box[data-dragging] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-logo {
+  aspect-ratio: 3 / 1;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-og {
+  aspect-ratio: 1200 / 630;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-box img {
+  width: 100%;
+  height: 100%;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-contain {
+  padding: 0.75rem;
+  object-fit: contain;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-cover {
+  object-fit: cover;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  padding: 1rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-image-busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--card) 70%, transparent);
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-color-picker {
+  width: 40px;
+  height: 40px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-color-picker:disabled {
+  cursor: not-allowed;
+}
+
+:is(.screen-design, .screen-share, .screen-form-settings) .if-color-picker:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- settings tab -- */
+
+.screen-form-settings .if-settings-layout {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+  max-width: 64rem;
+}
+
+.screen-form-settings .if-settings-nav {
+  position: sticky;
+  top: 1rem;
+}
+
+.screen-form-settings .if-settings-nav ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.screen-form-settings .if-settings-nav a {
+  display: block;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.screen-form-settings .if-settings-nav a:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.screen-form-settings .if-settings-nav a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.screen-form-settings .if-settings-stack {
+  display: grid;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.screen-form-settings .if-pipe-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+/* Webhook headers and delivery log. */
+.screen-form-settings .if-header-row {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.screen-form-settings .if-header-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.screen-form-settings .if-log {
+  max-height: 24rem;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.screen-form-settings .if-log:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.screen-form-settings .if-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.screen-form-settings .if-log-table th {
+  position: sticky;
+  top: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--hover);
+  font-weight: 600;
+  text-align: left;
+}
+
+.screen-form-settings .if-log-table td {
+  padding: 0.4rem 0.75rem;
+  border-top: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.screen-form-settings .if-log-table .if-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-form-settings .if-log-table .if-log-toggle {
+  width: 2.5rem;
+  padding: 0.25rem;
+}
+
+.screen-form-settings .if-log-detail td {
+  border-top: 0;
+  background: color-mix(in oklab, var(--hover) 50%, transparent);
+}
+
+.screen-form-settings .if-log-detail td > * + * {
+  margin-top: 0.4rem;
+}
+
+.screen-form-settings .if-log-detail .if-break,
+.screen-form-settings .if-log-detail .field-error {
+  display: block;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.screen-form-settings .if-log-detail .if-break {
+  color: var(--muted);
+}
+
+.screen-form-settings .if-nowrap {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-form-settings .if-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+@media (max-width: 860px) {
+  .screen-form-settings .if-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .screen-form-settings .if-settings-nav {
+    position: static;
+  }
+
+  .screen-form-settings .if-settings-nav ul {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  :is(.screen-design, .screen-share, .screen-form-settings) .if-two-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .screen-form-settings .if-header-inputs {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .screen-form-settings .if-header-inputs input:nth-child(2) {
+    grid-column: 1;
+  }
+}

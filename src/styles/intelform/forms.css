@@ -1,5 +1,539 @@
 /*
- * IntelForm dashboard CSS for screens/forms.tsx (the forms list).
- * Scope every rule under the screen root class `.screen-forms` (`<div className="app-page screen-forms">`).
+ * IntelForm dashboard CSS for screens/forms.tsx (the forms list), plus the pieces it shares with
+ * screens/templates.tsx and screens/overview.tsx (src/portal/intelform/forms/*: the layout tile,
+ * template cards, the New form drawer, the week strip). Scoped under the screen root classes.
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
  */
+
+/* ---------------------------------------------------------- shared bits -- */
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-layout-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-layout-icon-sm {
+  width: 2rem;
+  height: 2rem;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-new-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-overline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The typed title in the delete confirmation. The kit's confirm modal is mounted by the shell, outside .screen-forms, so this one class is scoped to the modal box. */
+.modal-box .if-typed-confirm {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.85rem;
+  color: var(--ink);
+}
+
+.modal-box .if-typed-confirm label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.modal-box .if-typed-confirm input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--ink);
+  font: inherit;
+}
+
+.modal-box .if-typed-confirm input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* --------------------------------------------------- templates (cards) -- */
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-skeleton {
+  min-height: 9rem;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-text {
+  display: grid;
+  flex: 1;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-text h4 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) :is(.if-template-card-text p, .if-template-card-meta) {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-description {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-card-foot {
+  margin-top: auto;
+  padding-top: 0.25rem;
+}
+
+:is(.screen-forms, .screen-overview) .if-template-picker {
+  display: grid;
+  gap: 1.5rem;
+}
+
+:is(.screen-forms, .screen-templates, .screen-overview) .if-template-group {
+  display: grid;
+  gap: 0.75rem;
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 1rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank-text {
+  display: grid;
+  gap: 0.1rem;
+}
+
+:is(.screen-forms, .screen-overview) .if-start-blank-text span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+/* ------------------------------------------------------------ the week -- */
+
+:is(.screen-forms, .screen-overview) .if-week {
+  display: grid;
+  gap: 1rem;
+}
+
+:is(.screen-forms, .screen-overview) .if-week-stats {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+}
+
+.screen-forms .if-day-bars {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.screen-forms .if-day-bars-today {
+  justify-self: end;
+  margin: 0;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-forms .if-day-bars-plot {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: 0.5rem;
+  height: 12rem;
+}
+
+.screen-forms .if-day-bars-axis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: end;
+}
+
+.screen-forms .if-day-bars-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.screen-forms .if-grid-dash {
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.screen-forms .if-grid-base {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.screen-forms .if-bar {
+  fill: color-mix(in srgb, var(--chart-1) 70%, transparent);
+}
+
+.screen-forms .if-bar-today {
+  fill: var(--highlight);
+}
+
+.screen-forms .if-day-bars-labels {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.25rem;
+  margin: 0 0 0 2.5rem;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  list-style: none;
+  text-align: center;
+}
+
+.screen-forms .if-day-bars-labels [data-today] {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.screen-forms .if-ranked > li {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.screen-forms .if-ranked-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-forms .if-ranked-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.screen-forms .if-ranked-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-forms .if-ranked-text a {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.screen-forms .if-ranked-text a:hover {
+  text-decoration: underline;
+}
+
+.screen-forms .if-ranked-text .muted {
+  font-size: 0.8125rem;
+}
+
+.screen-forms .if-ranked-count {
+  color: var(--pine);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------- toolbar, list -- */
+
+.screen-forms .if-forms-search {
+  flex: 1 1 16rem;
+  max-width: 24rem;
+}
+
+.screen-forms .if-forms-search .search-input {
+  width: 100%;
+}
+
+.screen-forms .if-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-forms .if-forms-results {
+  display: grid;
+  gap: 1rem;
+  transition: opacity 150ms ease-out;
+}
+
+.screen-forms .if-stale {
+  opacity: 0.7;
+}
+
+.screen-forms .if-forms-shown {
+  margin: 0;
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.screen-forms .if-forms-grid {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  list-style: none;
+}
+
+.screen-forms .if-form-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  transition: border-color 120ms ease-out;
+}
+
+.screen-forms .if-form-card:hover {
+  border-color: var(--line-strong);
+}
+
+.screen-forms .if-form-card:focus-within {
+  border-color: var(--ring);
+}
+
+.screen-forms .if-form-card[aria-busy='true'] {
+  opacity: 0.6;
+}
+
+.screen-forms .if-form-card-skeleton {
+  gap: 0.75rem;
+  min-height: 14rem;
+}
+
+.screen-forms .if-form-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* Above the title link's card-wide overlay. */
+.screen-forms .if-form-card-menu {
+  position: relative;
+  z-index: 1;
+  margin: -0.25rem -0.4rem 0 0;
+}
+
+.screen-forms .if-form-card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0.75rem 0 0;
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 400;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.screen-forms .if-form-card-title a {
+  border-radius: 4px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+/* The title link covers the whole card. */
+.screen-forms .if-form-card-title a::after {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  content: '';
+}
+
+.screen-forms .if-form-card-title a:focus-visible {
+  outline: none;
+}
+
+.screen-forms .if-form-card-title a:focus-visible::after {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.screen-forms .if-form-card-layout {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0 1.25rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.screen-forms .if-form-card-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: auto 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.screen-forms .if-form-card-stats div {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.1rem;
+}
+
+.screen-forms .if-form-card-stats dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.screen-forms .if-form-card-stats dd {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen-forms .if-form-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 1.25rem;
+  margin-top: 0.75rem;
+}
+
+.screen-forms .if-form-card-foot p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.screen-forms .if-form-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.screen-forms .if-form-row .cell-title {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-forms .if-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .screen-forms .if-forms-search {
+    max-width: none;
+  }
+}

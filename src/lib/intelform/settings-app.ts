@@ -25,7 +25,7 @@ export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 /** Image types an upload of each purpose may have (checked in the browser and again in the route). */
 export const UPLOAD_TYPES: Record<UploadPurpose, readonly string[]> = {
   logo: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
-  favicon: ['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml'],
+  favicon: ['image/png', 'image/svg+xml'], // platform storage takes no .ico
   image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
   og: ['image/png', 'image/jpeg', 'image/webp'],
 }

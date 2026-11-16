@@ -1,0 +1,682 @@
+/*
+ * Field-type inputs on the PUBLIC form (src/form-types/<type>/Renderer.tsx), loaded with the
+ * renderer registry (src/form-types/renderers.tsx). `ft-*` classes only; they build on the
+ * respondent stylesheet (src/styles/intelform/respondent.css: `rf-*`, the `--text-*` type
+ * scale, `--rf-control`, the `rf` container) and follow the form theme's custom properties
+ * (`--form-answer`, `--form-radius`, `--form-font`, `--form-surface`), falling back to the
+ * global tokens. No hex here except the signature paper, which stays light in every theme.
+ */
+
+.ft-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.ft-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+.ft-icon-sm {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.ft-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------ groups -- */
+
+.ft-group {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ft-legend {
+  margin-bottom: 0.75rem;
+  padding: 0;
+  color: var(--foreground, var(--ink));
+}
+.ft-group-description {
+  margin: -0.5rem 0 0;
+  font: var(--text-body-sm, var(--text-body));
+  color: var(--muted-foreground, var(--muted));
+  white-space: pre-line;
+}
+.ft-legend-description {
+  display: block;
+  margin-top: 0.5rem;
+  font: var(--text-body);
+  color: var(--muted-foreground, var(--muted));
+  white-space: pre-line;
+}
+
+/* Two sub-inputs side by side on a wide form (name, address). */
+.ft-pair-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+.ft-sub-field {
+  display: grid;
+  gap: 0.375rem;
+}
+@container rf (min-width: 28rem) {
+  .ft-pair-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ft-span-2 {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ------------------------------------------------------------- tiles -- */
+
+/* An answer tile: a native radio / checkbox inside, visually hidden. */
+.ft-tile {
+  position: relative;
+  display: flex;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  border-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+  background: var(--form-surface, var(--card));
+  color: var(--foreground, var(--ink));
+  font: var(--text-answer);
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out,
+    scale 120ms ease-out;
+}
+.ft-tile:hover {
+  background: var(--hover);
+}
+.ft-tile:active {
+  scale: 0.98;
+}
+.ft-tile:has(:focus-visible) {
+  outline: 2px solid var(--ring, var(--accent));
+  outline-offset: 2px;
+}
+.ft-tile:has(:disabled) {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.ft-tile[data-state='checked'] {
+  border-color: var(--form-answer, var(--edge));
+  background: var(--option-selected);
+  color: var(--option-selected-ink);
+  box-shadow: inset 0 0 0 1px var(--form-answer, var(--edge));
+}
+@media (prefers-reduced-motion: reduce) {
+  .ft-tile,
+  .ft-tile:active {
+    transition: none;
+    scale: none;
+  }
+}
+
+.ft-tile-row {
+  align-items: center;
+  gap: 0.75rem;
+  min-height: var(--rf-control, 3rem);
+  padding: 0.625rem 1rem;
+}
+.ft-tile-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The A, B, C… badge. Selected: filled with the selected edge colour. */
+.ft-key {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--form-surface, var(--card));
+  color: var(--muted-foreground, var(--muted));
+  font: var(--text-caption);
+  font-weight: 500;
+}
+.ft-tile[data-state='checked'] .ft-key {
+  border-color: var(--form-answer, var(--edge));
+  background: var(--form-answer, var(--edge));
+  color: var(--form-surface, var(--card));
+}
+
+.ft-tile-check {
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--form-answer, var(--edge));
+  stroke-width: 2.5;
+  visibility: hidden;
+}
+.ft-tile[data-state='checked'] .ft-tile-check {
+  visibility: visible;
+  animation: ft-pop-in 200ms ease-out both;
+}
+
+@keyframes ft-pop-in {
+  from {
+    scale: 0.6;
+    opacity: 0;
+  }
+  to {
+    scale: 1;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ft-tile[data-state='checked'] .ft-tile-check {
+    animation: none;
+  }
+}
+
+/* Choice lists. */
+.ft-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.ft-choice-list[data-orientation='horizontal'] {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.ft-choice-list[data-orientation='horizontal'] > * {
+  flex: 1 0 auto;
+}
+.ft-yes-no {
+  max-width: 28rem;
+}
+.ft-other-input {
+  animation: ft-fade-up 200ms ease-out both;
+}
+@keyframes ft-fade-up {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+
+/* Consent: a checkbox mark + the consent text. */
+.ft-tile-consent {
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-height: var(--rf-control, 3rem);
+  padding: 0.75rem 1rem;
+}
+.ft-checkmark {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin-top: 0.125rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--field, var(--card));
+}
+.ft-checkmark .ft-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  stroke-width: 3;
+}
+.ft-tile[data-state='checked'] .ft-checkmark {
+  border-color: var(--form-answer, var(--edge));
+  background: var(--form-answer, var(--edge));
+  color: var(--form-surface, var(--card));
+}
+.ft-consent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  font: var(--text-body);
+  color: var(--form-answer, var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+/* Picture choice. */
+.ft-picture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@container rf (min-width: 32rem) {
+  .ft-picture-grid[data-columns='3'] {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .ft-picture-grid[data-columns='4'] {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.ft-tile-picture {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+.ft-picture-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: min(var(--form-radius, var(--radius-sm)), 0.5rem);
+  background: var(--hover);
+}
+.ft-picture-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ft-picture-placeholder {
+  position: absolute;
+  inset: 0;
+  width: 2rem;
+  height: 2rem;
+  margin: auto;
+  color: var(--muted-foreground, var(--muted));
+}
+.ft-picture-caption {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.25rem 0.25rem;
+}
+
+/* ------------------------------------------------------------ scales -- */
+
+.ft-scale {
+  gap: 0.5rem;
+}
+.ft-tile-score {
+  align-items: center;
+  justify-content: center;
+  height: var(--rf-control, 3rem);
+  min-width: 2.5rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.ft-nps-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+@container rf (min-width: 30rem) {
+  .ft-nps-grid {
+    grid-template-columns: repeat(11, minmax(0, 1fr));
+    gap: 0.25rem;
+  }
+}
+.ft-scale-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font: var(--text-caption);
+  color: var(--muted-foreground, var(--muted));
+}
+.ft-scale-ends > :last-child {
+  text-align: right;
+}
+
+.ft-rating-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.ft-rating-row[data-variant='stars'] {
+  gap: 0.125rem;
+}
+.ft-tile-number {
+  flex: 1;
+  max-width: 4rem;
+}
+.ft-tile-face {
+  align-items: center;
+  justify-content: center;
+  width: 3.5rem;
+  height: 3.5rem;
+}
+.ft-face-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  stroke-width: 1.75;
+  color: var(--muted-foreground, var(--muted));
+}
+.ft-tile[data-state='checked'] .ft-face-icon {
+  color: inherit;
+}
+
+.ft-star {
+  display: grid;
+  place-items: center;
+  width: var(--rf-control, 3rem);
+  height: var(--rf-control, 3rem);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ft-star:has(:focus-visible) {
+  outline: 2px solid var(--ring, var(--accent));
+  outline-offset: 2px;
+}
+.ft-star-icon {
+  width: 2rem;
+  height: 2rem;
+  stroke-width: 1.75;
+  color: var(--rating-empty);
+  fill: transparent;
+  transition:
+    color 120ms ease-out,
+    fill 120ms ease-out,
+    scale 120ms ease-out;
+}
+.ft-star[data-filled] .ft-star-icon {
+  color: var(--rating);
+  fill: var(--rating);
+}
+.ft-star[data-hover] .ft-star-icon {
+  scale: 1.1;
+}
+.ft-star:active .ft-star-icon {
+  scale: 0.9;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ft-star-icon {
+    transition: none;
+  }
+  .ft-star[data-hover] .ft-star-icon,
+  .ft-star:active .ft-star-icon {
+    scale: none;
+  }
+}
+
+/* ------------------------------------------------------------- inputs -- */
+
+.ft-textarea {
+  min-height: 6rem;
+  field-sizing: content;
+}
+
+.ft-affix-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ft-affix {
+  font: var(--text-answer);
+  color: var(--muted-foreground, var(--muted));
+}
+.ft-number-input {
+  max-width: 15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ft-time-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.ft-time-select {
+  width: 6rem;
+}
+.ft-time-colon {
+  font: var(--text-answer);
+  color: var(--muted-foreground, var(--muted));
+}
+
+/* Date: masked input + calendar button + popover. */
+.ft-date {
+  position: relative;
+  display: flex;
+  gap: 0.5rem;
+  max-width: 20rem;
+}
+.ft-date-button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: var(--rf-control, 3rem);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--field, var(--card));
+  color: var(--muted-foreground, var(--muted));
+  cursor: pointer;
+}
+.ft-date-button:hover {
+  color: var(--foreground, var(--ink));
+}
+.ft-popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+}
+.ft-calendar-placeholder {
+  width: 16rem;
+  height: 18rem;
+}
+.ft-calendar {
+  display: grid;
+  gap: 0.5rem;
+  font: var(--text-body-sm, var(--text-body));
+}
+.ft-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+}
+.ft-calendar-caption {
+  display: flex;
+  gap: 0.25rem;
+}
+.ft-calendar-select {
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.ft-calendar-nav {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.ft-calendar-nav:hover {
+  background: var(--hover);
+}
+.ft-calendar-nav .ft-icon {
+  width: 1rem;
+  height: 1rem;
+}
+.ft-calendar-grid {
+  border-collapse: collapse;
+}
+.ft-calendar-grid th {
+  width: 2.25rem;
+  height: 2rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ft-calendar-grid td {
+  padding: 1px;
+  text-align: center;
+}
+.ft-calendar-day {
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.ft-calendar-day:hover:not(:disabled) {
+  background: var(--hover);
+}
+.ft-calendar-today {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ft-calendar-day[aria-pressed='true'] {
+  background: var(--form-answer, var(--edge));
+  color: var(--form-surface, var(--card));
+}
+.ft-calendar-day:disabled {
+  color: var(--subtle);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Phone: dial-code picker (flag + code, a transparent native select on top) + tel input. */
+.ft-phone {
+  display: flex;
+  gap: 0.5rem;
+  max-width: 28rem;
+}
+.ft-phone-fallback {
+  max-width: 28rem;
+}
+.ft-phone-country {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  width: auto;
+  padding-right: 2rem;
+}
+.ft-phone-country:has(:focus-visible) {
+  outline: 2px solid var(--ring, var(--accent));
+  outline-offset: 2px;
+}
+.ft-phone-chevron {
+  position: absolute;
+  right: 0.625rem;
+  width: 1rem;
+  height: 1rem;
+  color: var(--muted-foreground, var(--muted));
+}
+.ft-phone-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.ft-flag {
+  display: block;
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1rem;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--hover);
+}
+.ft-flag-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Signature: dark ink on light paper in every theme, so the stored image reads anywhere. */
+.ft-signature {
+  display: grid;
+  gap: 0.5rem;
+}
+.ft-signature-pad {
+  --ft-signature-ink: #211d2a;
+  position: relative;
+  height: 11rem;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+  background: #fdfcf9;
+  color: #5a5851;
+  font-family: var(--form-font, var(--font-sans));
+}
+.ft-signature-pad[data-invalid] {
+  border-color: var(--rf-danger, var(--danger));
+}
+.ft-signature-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+.ft-signature-canvas-typed {
+  pointer-events: none;
+}
+.ft-signature-line {
+  position: absolute;
+  inset-inline: 1rem;
+  bottom: 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed #c3c0ba;
+  font: var(--text-caption);
+  pointer-events: none;
+}
+.ft-signature-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.ft-quiet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground, var(--muted));
+  font: var(--text-label);
+  cursor: pointer;
+}
+.ft-quiet-button:hover {
+  background: var(--hover);
+  color: var(--foreground, var(--ink));
+}
+.ft-quiet-button .ft-icon {
+  width: 1rem;
+  height: 1rem;
+}

@@ -1,0 +1,156 @@
+---
+/**
+ * The public form a respondent fills in: /f/<slug>/ (and its embeds, ?embed=1 / ?embed=popup).
+ *
+ * Server-rendered per request: the published form is read in-process (payloadForSlug, the same
+ * code as GET /site-api/public/forms/:slug) and handed to ONE client-only React island
+ * (src/respondent/PublicForm.tsx), so the first paint needs no second request. States:
+ *   - live / password-protected: the island (password gate, layouts, submit);
+ *   - closed: a themed message drawn here, no JavaScript needed;
+ *   - an old slug: 301 to the current one (embed options kept);
+ *   - unknown or draft: 404; rate limited: 429; database or setup missing: 503 (never a 404).
+ *
+ * Client-only, not hydrated: the field renderers read the browser (pointer type, storage,
+ * cookies) and size things through the CSSOM; server-rendering them would emit `style=""`
+ * attributes the CSP refuses. The theme reaches the first paint through one hashed <style>.
+ *
+ * Its own small document, not the website layout (no header, footer or client router) and not
+ * the dashboard's: the respondent bundle carries no portal kit.
+ */
+import '../../styles/fonts.css';
+import '../../styles/global.css';
+import '../../styles/intelform/respondent.css';
+
+import {config} from '../../platform/config';
+import {getDb} from '../../platform/db';
+import {allowFileUploads} from '../../platform/files';
+import {embedOptions} from '../../respondent/embed';
+import {PublicForm} from '../../respondent/PublicForm';
+import {
+  allowFraming,
+  allowTurnstile,
+  fontPreloads,
+  loadFormPage,
+  movedLocation,
+  pageMeta,
+  statusOf,
+  themeStyle,
+} from './_lib/page';
+
+export const prerender = false;
+
+const slug = Astro.params.slug ?? '';
+const opts = embedOptions(Astro.url.searchParams);
+const ip = Astro.request.headers.get('cf-connecting-ip');
+const state = await loadFormPage({db: getDb(), secret: config.jwtSecret ?? null, slug, ip});
+
+if (state.kind === 'moved') {
+  return Astro.redirect(movedLocation(state.slug, opts), 301);
+}
+
+Astro.response.status = statusOf(state);
+// Every render carries a fresh signed render token: never kept by a shared cache.
+Astro.response.headers.set('Cache-Control', 'no-store');
+if (state.kind === 'limited') Astro.response.headers.set('Retry-After', String(state.retryAfter));
+
+const meta = pageMeta(state, opts);
+if (meta.noindex) Astro.response.headers.set('X-Robots-Tag', 'noindex');
+
+// Any site may embed a form; Turnstile and signature uploads only where the form needs them.
+allowFraming(Astro.csp);
+allowTurnstile(Astro.csp, state);
+if (state.kind === 'form') await allowFileUploads(Astro.csp, Astro.url);
+
+const style = await themeStyle(meta.theme);
+Astro.csp?.insertStyleHash(style.hash);
+
+const canonical = `${Astro.url.origin}/f/${encodeURIComponent(slug.toLowerCase())}/`;
+const preloads = fontPreloads(meta.theme);
+const mode = opts.embed === 'inline' ? 'embed' : 'page';
+const transparent = opts.transparent && state.kind !== 'unavailable';
+const bodyClass = ['rf-page', `rf-page-${mode}`, transparent && 'rf-transparent'].filter(Boolean).join(' ');
+const shellClass = ['rf-theme', `rf-mode-${mode}`, transparent && 'rf-transparent', meta.center && 'rf-align-center']
+  .filter(Boolean)
+  .join(' ');
+const logo = state.kind === 'closed' ? meta.theme.logo : null;
+const image = state.kind === 'closed' && meta.theme.background.type === 'image' && !transparent;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
+    <title>{meta.title}</title>
+    {meta.description && <meta name="description" content={meta.description} />}
+    {meta.noindex ? <meta name="robots" content="noindex, nofollow" /> : <link rel="canonical" href={canonical} />}
+    {state.kind === 'form' || state.kind === 'closed' ? (
+      <>
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={meta.title} />
+        {meta.description && <meta property="og:description" content={meta.description} />}
+        {meta.ogImage && <meta property="og:image" content={meta.ogImage} />}
+        <meta name="twitter:card" content={meta.ogImage ? 'summary_large_image' : 'summary'} />
+      </>
+    ) : null}
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    {preloads.map(href => <link rel="preload" as="font" type="font/woff2" href={href} crossorigin="anonymous" />)}
+    <style is:inline set:html={style.css} />
+  </head>
+  <body class={bodyClass}>
+    {
+      state.kind === 'form' ? (
+        <div id="rf-root" class="rf-root">
+          <PublicForm client:only="react" slug={slug.toLowerCase()} initial={state.payload} search={Astro.url.search} />
+          <noscript>
+            <div class={shellClass}>
+              <main class="rf-main">
+                <div class="rf-screen">
+                  <div class="rf-screen-body">
+                    <h1 class="rf-question-xl rf-heading">{meta.title}</h1>
+                    <p class="rf-text-answer rf-muted">This form needs JavaScript. Turn it on and reload the page.</p>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </noscript>
+        </div>
+      ) : (
+        <div id="rf-root" class="rf-root">
+          <div class={shellClass}>
+            {image && (
+              <>
+                <div aria-hidden="true" class="rf-bg-image" />
+                <div aria-hidden="true" class="rf-bg-overlay" />
+              </>
+            )}
+            {logo && (
+              <div class={logo.position === 'center' ? 'rf-logo rf-logo-center' : 'rf-logo'}>
+                <img src={logo.url} alt={logo.alt ?? ''} class="rf-logo-img" />
+              </div>
+            )}
+            <main class="rf-main">
+              <div class="rf-screen">
+                <div class={meta.center ? 'rf-screen-body rf-center' : 'rf-screen-body'}>
+                  <h1 class="rf-question-xl rf-heading">{meta.message?.title}</h1>
+                  {meta.message?.body && <p class="rf-text-answer rf-muted rf-pre-line rf-prose">{meta.message.body}</p>}
+                </div>
+              </div>
+            </main>
+          </div>
+        </div>
+      )
+    }
+    <script>
+      import {EMBED_MESSAGES, embedOptions} from '../../respondent/embed';
+
+      // Server-drawn screens (closed, not found) inside an inline embed: size the parent's
+      // iframe like the island does (src/respondent/PublicForm.tsx useEmbedBridge).
+      const root = document.getElementById('rf-root');
+      if (root && !root.querySelector('astro-island') && window.parent !== window && embedOptions(location.search).embed === 'inline') {
+        const post = () => window.parent.postMessage({type: EMBED_MESSAGES.resize, height: Math.ceil(root.getBoundingClientRect().height)}, '*');
+        new ResizeObserver(post).observe(root);
+      }
+    </script>
+  </body>
+</html>

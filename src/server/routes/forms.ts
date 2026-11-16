@@ -1,12 +1,371 @@
 import {Hono} from 'hono';
+import {validator} from 'hono/validator';
 
-import {problem} from '../../platform/guards';
+import type {Prisma} from '../../generated/prisma/client';
+import {
+  createFormInput,
+  deleteFormInput,
+  formsViewInput,
+  saveAsTemplateInput,
+  type CreatedForm,
+  type FormDetail,
+  type FormsListResponse,
+  type FormsStrip,
+  type FormStatus,
+  type FormStatusResponse,
+  type FormsViewResponse,
+  type TemplateSummary,
+} from '../../lib/intelform/api-forms';
+import {blankDefinition, type FormDefinition} from '../../lib/intelform/form/definition';
+import {clientSettings, copyableSettings, defaultFormSettings, type FormSettings} from '../../lib/intelform/form/settings';
+import {remapTemplateIds} from '../../lib/intelform/form/templates/remap';
+import type {FormTheme} from '../../lib/intelform/form/theme';
+import {permissionScope, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {
+  countFields,
+  decodeCursor,
+  FormsError,
+  hasTheme,
+  listQuery,
+  normalizeDraft,
+  notFound,
+  PAGE_SIZE,
+  readSettings,
+  readTheme,
+  repairOrBlank,
+  savedTemplateSlug,
+} from '../intelform/forms/core';
+import {fail, formIdParam, zodJson} from '../intelform/forms/http';
+import {
+  closeForm,
+  formsStrip,
+  insertForm,
+  listForms,
+  newFormDefaults,
+  reopenForm,
+} from '../intelform/forms/store';
+import {clearPublicSiteCache} from '../intelform/public-site/data';
+import {findBuiltinTemplate} from '../intelform/templates/builtins';
+import {formSignatureFileIds} from '../intelform/uploads/signatures';
+import {deleteStoredFiles} from '../intelform/uploads/storage';
+import {PERMISSIONS} from '../permissions';
 
 /**
- * `/site-api/forms/*` — Forms: list, create, read, update, duplicate, close, publish, delete (FORM_READ / FORM_WRITE / FORM_DELETE).
+ * `/site-api/forms/*`: IntelForm's dashboard forms (ported from IntelForm's server/routes/forms.ts).
  *
- * STUB (IntelForm migration scaffold): mounted in src/server/app.ts so every agent agrees on the
- * path; the owning agent replaces the placeholder with the real, guarded routes
- * (docs/agent/site-api.md: validator → withViewer → requireAuth → requirePermission → withDb).
+ *   GET    /                 list: search, status filter, sort, keyset pages     FORM_READ
+ *   GET    /strip            the weekly numbers above the list                   FORM_READ
+ *   GET    /prefs/view       grid or list, per user                              FORM_READ
+ *   PATCH  /prefs/view                                                           FORM_READ
+ *   POST   /                 create: blank, or from a template (id or slug)      FORM_WRITE
+ *   GET    /:id              the builder's form (webhook secrets hidden from readers) FORM_READ
+ *   GET    /recent-responses the newest responses across forms (the Overview)    RESPONSE_READ
+ *   (PATCH /:id autosave and POST /:id/publish are intelform/builder/form-routes.ts,
+ *    mounted at /site-api/forms just before this app)
+ *   POST   /:id/close        /:id/reopen                                          FORM_WRITE
+ *   POST   /:id/duplicate                                                         FORM_WRITE
+ *   POST   /:id/save-as-template                                                  FORM_WRITE
+ *   DELETE /:id              with the typed title `{confirmTitle}`                FORM_DELETE
+ *
+ * Every route: validator → withViewer → requireAuth → requirePermission → withDb.
+ * Errors: `{error: code, message, fields?}`.
  */
-export const formsRoutes = new Hono().get('/', c => c.json(problem('not_implemented', 'Not built yet.'), 501));
+
+const asJson = (v: unknown) => v as Prisma.InputJsonValue;
+
+export const formsRoutes = new Hono()
+  // ------------------------------------------------------------------ list --
+  .get(
+    '/',
+    validator('query', v => listQuery.parse(v)),
+    withViewer,
+    requireAuth,
+    requirePermission(PERMISSIONS.FORM_READ),
+    withDb,
+    async c => {
+      const query = c.req.valid('query');
+      const page = await listForms(c.var.db, query, decodeCursor(query.cursor, query.sort));
+      return c.json<FormsListResponse & {nextCursor: string | null}>({
+        forms: page.forms,
+        total: page.total,
+        matched: page.matched,
+        page: page.page,
+        pageSize: PAGE_SIZE,
+        nextCursor: page.nextCursor,
+      });
+    }
+  )
+
+  .get('/strip', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
+    return c.json<FormsStrip>(await formsStrip(c.var.db));
+  })
+
+  // -------------------------------------------- grid / list view, per user --
+  .get('/recent-responses', withViewer, requireAuth, requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
+    const rows = await c.var.db.response.findMany({
+      orderBy: [{submittedAt: 'desc'}, {id: 'desc'}],
+      take: 6,
+      select: {id: true, formId: true, submittedAt: true, contactName: true, contactEmail: true, form: {select: {title: true}}},
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      responses: rows.map(r => ({
+        id: r.id,
+        formId: r.formId,
+        formTitle: r.form.title,
+        submittedAt: r.submittedAt.toISOString(),
+        contactName: r.contactName,
+        contactEmail: r.contactEmail,
+      })),
+    });
+  })
+
+  .get('/prefs/view', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
+    const row = await c.var.db.userPref.findUnique({
+      where: {userId_key: {userId: c.var.viewer.id!, key: 'forms.view'}},
+      select: {value: true},
+    });
+    return c.json<FormsViewResponse>({view: row?.value === 'list' ? 'list' : 'grid'});
+  })
+
+  .patch(
+    '/prefs/view',
+    zodJson(formsViewInput),
+    withViewer,
+    requireAuth,
+    requirePermission(PERMISSIONS.FORM_READ),
+    withDb,
+    async c => {
+      const {view} = c.req.valid('json');
+      const userId = c.var.viewer.id!;
+      await c.var.db.userPref.upsert({
+        where: {userId_key: {userId, key: 'forms.view'}},
+        create: {userId, key: 'forms.view', value: view},
+        update: {value: view},
+        select: {userId: true},
+      });
+      return c.json<FormsViewResponse>({view});
+    }
+  )
+
+  // ---------------------------------------------------------------- create --
+  .post('/', zodJson(createFormInput), withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    try {
+      const input = c.req.valid('json');
+      const db = c.var.db;
+      const wantsTemplate = !!(input.templateId || input.templateSlug);
+
+      const builtin = wantsTemplate ? findBuiltinTemplate(input.templateId ?? input.templateSlug) : undefined;
+      const [appDefaults, saved] = await Promise.all([
+        newFormDefaults(db),
+        wantsTemplate && !builtin
+          ? db.template.findFirst({
+              where: input.templateId ? {id: input.templateId} : {slug: input.templateSlug ?? ''},
+              select: {name: true, definition: true, theme: true, settings: true},
+            })
+          : null,
+      ]);
+
+      let title = input.title ?? 'Untitled form';
+      let draft: FormDefinition = blankDefinition();
+      let theme: FormTheme = appDefaults.theme;
+      let settings: FormSettings = {...defaultFormSettings(), timezone: appDefaults.timezone};
+
+      if (wantsTemplate) {
+        const tpl = builtin ?? saved;
+        if (!tpl) throw notFound('That template no longer exists');
+        title = input.title ?? tpl.name;
+        if (hasTheme(tpl.theme)) theme = readTheme(tpl.theme);
+        // Fresh field and option ids per form, with logic, pipes and settings references rewritten.
+        ({definition: draft, settings} = remapTemplateIds(
+          normalizeDraft(tpl.definition),
+          copyableSettings(readSettings(tpl.settings), true)
+        ));
+        if (!settings.closeAt) settings = {...settings, timezone: appDefaults.timezone};
+      }
+
+      const created = await insertForm(db, {title, draft, theme, settings, userId: c.var.viewer.id!});
+      return c.json<CreatedForm>(created, 201);
+    } catch (err) {
+      return fail(c, err);
+    }
+  })
+
+  // ------------------------------------------------------------------ read --
+  .get('/:id', formIdParam, withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
+    const {id} = c.req.valid('param');
+    const [row, canEdit] = await Promise.all([
+      c.var.db.form.findUnique({
+        where: {id},
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          status: true,
+          draft: true,
+          theme: true,
+          settings: true,
+          revision: true,
+          publishedVersionId: true,
+          hasUnpublished: true,
+          responseCount: true,
+          createdAt: true,
+          updatedAt: true,
+          publishedVersion: {select: {version: true, publishedAt: true}},
+          updatedBy: {select: {id: true, name: true}},
+        },
+      }),
+      permissionScope(c, PERMISSIONS.FORM_WRITE).then(scope => scope === 'all'),
+    ]);
+    if (!row) return fail(c, notFound());
+
+    const draft = repairOrBlank(row.draft);
+    return c.json<FormDetail>({
+      id: row.id,
+      title: row.title,
+      slug: row.slug,
+      status: row.status as FormStatus,
+      draft,
+      theme: readTheme(row.theme),
+      // Readers get the webhook URL and header values blanked: they are secrets.
+      settings: clientSettings(readSettings(row.settings), {canEdit}),
+      revision: row.revision,
+      publishedVersion: row.publishedVersion?.version ?? null,
+      publishedAt: row.publishedVersion?.publishedAt.toISOString() ?? null,
+      hasUnpublished: row.hasUnpublished && row.publishedVersionId !== null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      updatedBy: row.updatedBy ? {id: row.updatedBy.id, name: row.updatedBy.name} : null,
+      counts: {...countFields(draft), responses: row.responseCount},
+    });
+  })
+
+  // --------------------------------------------------------- close, reopen --
+  .post('/:id/close', formIdParam, withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    try {
+      const {id} = c.req.valid('param');
+      const result = await closeForm(c.var.db, id, c.var.viewer.id!);
+      await clearPublicSiteCache();
+      return c.json<FormStatusResponse>(result);
+    } catch (err) {
+      return fail(c, err);
+    }
+  })
+
+  .post('/:id/reopen', formIdParam, withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    try {
+      const {id} = c.req.valid('param');
+      const result = await reopenForm(c.var.db, id, c.var.viewer.id!);
+      await clearPublicSiteCache();
+      return c.json<FormStatusResponse>(result);
+    } catch (err) {
+      return fail(c, err);
+    }
+  })
+
+  // ---------------------------------------- duplicate, save as template, delete --
+  .post('/:id/duplicate', formIdParam, withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    try {
+      const {id} = c.req.valid('param');
+      const db = c.var.db;
+      const row = await db.form.findUnique({where: {id}, select: {title: true, draft: true, theme: true, settings: true}});
+      if (!row) throw notFound();
+      // Copies the definition, theme and settings only: never responses or the webhook secret.
+      const created = await insertForm(db, {
+        title: `Copy of ${row.title}`.slice(0, 200),
+        draft: repairOrBlank(row.draft),
+        theme: readTheme(row.theme),
+        settings: copyableSettings(readSettings(row.settings)),
+        userId: c.var.viewer.id!,
+      });
+      return c.json<CreatedForm>(created, 201);
+    } catch (err) {
+      return fail(c, err);
+    }
+  })
+
+  .post(
+    '/:id/save-as-template',
+    formIdParam,
+    zodJson(saveAsTemplateInput),
+    withViewer,
+    requireAuth,
+    requirePermission(PERMISSIONS.FORM_WRITE),
+    withDb,
+    async c => {
+      const {id} = c.req.valid('param');
+      const input = c.req.valid('json');
+      const db = c.var.db;
+      const row = await db.form.findUnique({where: {id}, select: {title: true, draft: true, theme: true, settings: true}});
+      if (!row) return fail(c, notFound());
+      const definition = repairOrBlank(row.draft);
+      // Templates are the whole team's: no password, webhook target or recipients (copyableSettings).
+      const tpl = await db.template.create({
+        data: {
+          slug: savedTemplateSlug(),
+          name: (input.name ?? row.title).slice(0, 120),
+          category: input.category ?? 'Saved',
+          description: input.description ?? '',
+          definition: asJson(definition),
+          theme: asJson(readTheme(row.theme)),
+          settings: asJson(copyableSettings(readSettings(row.settings), true)),
+          sortOrder: 1000,
+          createdById: c.var.viewer.id!,
+        },
+        select: {id: true, slug: true, name: true, category: true, description: true, createdAt: true},
+      });
+      return c.json<TemplateSummary>(
+        {
+          id: tpl.id,
+          slug: tpl.slug,
+          name: tpl.name,
+          category: tpl.category,
+          description: tpl.description,
+          isBuiltin: false,
+          layout: definition.layout,
+          fieldCount: countFields(definition).fields,
+          createdBy: c.var.viewer.name ?? null,
+          createdAt: tpl.createdAt.toISOString(),
+        },
+        201
+      );
+    }
+  )
+
+  .delete(
+    '/:id',
+    formIdParam,
+    zodJson(deleteFormInput),
+    withViewer,
+    requireAuth,
+    requirePermission(PERMISSIONS.FORM_DELETE),
+    withDb,
+    async c => {
+      const {id} = c.req.valid('param');
+      const {confirmTitle} = c.req.valid('json');
+      const db = c.var.db;
+      const row = await db.form.findUnique({where: {id}, select: {title: true}});
+      if (!row) return fail(c, notFound());
+      if (confirmTitle.trim() !== row.title.trim()) {
+        return fail(
+          c,
+          new FormsError(422, 'validation_failed', 'Type the form title to confirm', {confirmTitle: ['Type the form title exactly as shown']})
+        );
+      }
+      // Signature files live in platform storage, not in the rows: collect them first.
+      const fileIds = await formSignatureFileIds(db, id);
+      // Cascades to versions, responses, events, webhook deliveries, old slugs, prefs and presence.
+      await db.form.deleteMany({where: {id}});
+      await clearPublicSiteCache();
+      // Best effort, after the response (a very large form's files may outlast waitUntil).
+      if (fileIds.length) {
+        const work = deleteStoredFiles(c.req.url, fileIds);
+        try {
+          c.executionCtx.waitUntil(work);
+        } catch {
+          await work;
+        }
+      }
+      return c.body(null, 204);
+    }
+  );

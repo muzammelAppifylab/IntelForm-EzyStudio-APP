@@ -1,0 +1,325 @@
+/*
+ * The builder's right-hand settings panel (src/portal/intelform/builder/panel/**): the selected
+ * question (settings + logic), the start / end screens and the form's layout.
+ * Tokens only (src/styles/global.css), light and dark from the same names; no inline styles.
+ * Imported by SettingsPanel.tsx / parts.tsx; may move into src/styles/intelform/builder.css.
+ */
+
+.if-settings-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+}
+
+.if-settings-panel .if-field-panel,
+.if-settings-panel .if-form-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ------------------------------------------------------------------ head -- */
+
+.if-settings-panel .if-panel-head {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.5rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.if-settings-panel .if-field-panel .if-panel-head {
+  border-bottom: 0;
+  padding-bottom: 0.5rem;
+}
+
+.if-settings-panel .if-panel-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.if-settings-panel .if-panel-head-text {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.if-settings-panel .if-panel-head h2 {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 400;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.if-settings-panel .if-panel-overline,
+.if-settings-panel .if-panel-section-title h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.if-settings-panel .if-panel-actions {
+  flex-shrink: 0;
+  gap: 0.125rem;
+}
+
+.if-settings-panel .if-panel-danger {
+  color: var(--danger);
+}
+
+/* The kit's Tabs inside the narrow panel: the two tabs share the width. */
+.if-settings-panel .tabs {
+  gap: 0;
+}
+
+.if-settings-panel .tab-list {
+  padding: 0 1.25rem;
+}
+
+.if-settings-panel .tab {
+  flex: 1;
+  justify-content: center;
+}
+
+.if-settings-panel .tab-panel:focus-visible {
+  outline-offset: -2px;
+}
+
+.if-settings-panel .if-panel-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+/* ------------------------------------------------------------- sections -- */
+
+.if-settings-panel .if-panel-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.if-settings-panel .if-panel-section:last-child {
+  border-bottom: 0;
+}
+
+.if-settings-panel .if-panel-section-head {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.if-settings-panel .if-panel-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.if-settings-panel .if-panel-hint,
+.if-settings-panel .if-panel-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.if-settings-panel .if-panel-text {
+  font-size: 0.875rem;
+}
+
+.if-settings-panel .if-panel-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: default;
+}
+
+.if-settings-panel .if-panel-pipe,
+.if-settings-panel .if-panel-stack,
+.if-settings-panel .if-panel-image {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.if-settings-panel .if-panel-stack {
+  gap: 0.75rem;
+}
+
+.if-settings-panel .if-panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.if-settings-panel .if-panel-fit {
+  justify-self: start;
+}
+
+/* The question type picker under the head. */
+.if-settings-panel .if-panel-type {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.if-settings-panel .if-panel-type .combobox-trigger,
+.if-settings-panel .if-logic-condition .combobox-trigger {
+  flex: 1;
+  min-width: 0;
+}
+
+.if-settings-panel .if-panel-type-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+/* ---------------------------------------------------------------- image -- */
+
+.if-settings-panel .if-panel-image-drop {
+  position: relative;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+}
+
+.if-settings-panel .if-panel-image-drop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.if-settings-panel .if-panel-image-drop.is-logo img {
+  padding: 0.75rem;
+  object-fit: contain;
+}
+
+.if-settings-panel .if-panel-image-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 1rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.if-settings-panel .if-panel-image-busy {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--card) 70%, transparent);
+}
+
+/* ---------------------------------------------------------------- logic -- */
+
+.if-settings-panel .if-logic-sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.if-settings-panel .if-logic-sentence .select {
+  width: auto;
+  min-width: 5.5rem;
+}
+
+.if-settings-panel .if-logic-conditions {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.if-settings-panel .if-logic-condition {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.if-settings-panel .if-logic-condition-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1rem;
+}
+
+.if-settings-panel .if-logic-joiner {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.if-settings-panel .if-logic-remove {
+  margin-left: auto;
+}
+
+.if-settings-panel .if-logic-compare {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 0.5rem;
+}
+
+.if-settings-panel .if-logic-warning {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  color: var(--warning);
+  font-size: 0.8125rem;
+}
+
+.if-settings-panel .if-logic-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 0.8125rem;
+}
+
+.if-settings-panel .if-logic-summary svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}

@@ -1,19 +1,37 @@
-import {EmptyState, PageHeader} from '../../ui';
+import {useState} from 'react';
+
+import {DesignPanel} from '../../intelform/builder/design/DesignPanel';
+import {DeviceToggle, FormPreview, type Device} from '../../intelform/builder/design/Preview';
+import {Button, PageHeader} from '../../ui';
 
 /**
- * `/forms/$formId/design`: the form's theme and layout, with a live preview.
- *
- * STUB (IntelForm migration scaffold): the route, nav item and title are wired in
- * src/portal/routes.tsx; the owning agent replaces this body with the real screen
- * (docs/agent/ui.md: PageHeader, Cards, DataTable, loading / empty / error states).
+ * `/forms/$formId/design`: the form's theme (presets, colours, fonts, background, logo, button
+ * corners, saved themes) on the left, a live preview on the right. Theme edits are undoable and
+ * autosave with the draft. Rendered inside BuilderLayout, which provides the builder store.
  */
 export function DesignTab() {
+  const [device, setDevice] = useState<Device>('desktop');
+  const [resetKey, setResetKey] = useState(0);
   return (
     <div className="app-page screen-design">
-      <PageHeader title="Design" description="Layout, colours, fonts and the welcome and thank-you screens." />
-      <EmptyState icon="palette" title="Coming soon">
-        This part of IntelForm is being moved over.
-      </EmptyState>
+      <PageHeader title="Design" description="Colours, fonts, background and logo. Changes save automatically." />
+      <div className="if-design-layout">
+        <DesignPanel />
+        <section aria-label="Live preview" className="if-design-preview">
+          <div className="if-design-preview-bar">
+            <p>Live preview. Answers here are not saved.</p>
+            <div className="if-row-actions">
+              <Button variant="ghost" size="sm" icon="rotate-ccw" onClick={() => setResetKey(k => k + 1)}>
+                Restart
+              </Button>
+              <DeviceToggle value={device} onChange={setDevice} />
+            </div>
+          </div>
+          <div className="if-design-preview-body" data-device={device}>
+            <FormPreview device={device} resetKey={resetKey} />
+          </div>
+        </section>
+      </div>
     </div>
   );
 }

@@ -1,0 +1,40 @@
+---
+/**
+ * One form on the public site: its number, "Takes about X min", title, description and an Open
+ * link to the form (`/f/<slug>`). Rendered by the server on the home page; on /forms/ it is
+ * the list page's `<template>` row (no `form`), filled in with `textContent` through its
+ * `data-*` hooks (`fillFormCard` in src/components/public-site/client.ts).
+ */
+import {minutesLabel, type PublicFormCard} from '../../lib/intelform/api-front';
+import {formHref} from '../../server/intelform/public-site/common';
+import SiteIcon from './SiteIcon.astro';
+
+interface Props {
+  form?: PublicFormCard;
+  index?: number;
+}
+
+const {form, index = 0} = Astro.props;
+const minutes = form ? minutesLabel(form.minutes) : null;
+const number = form ? String(index + 1).padStart(2, '0') : '';
+---
+
+<li class="ps-card-item">
+  <article class="ps-card">
+    <div class="ps-card-top">
+      <span class="ps-card-num" aria-hidden="true" data-number>{number}</span>
+      <span class="ps-chip" data-minutes-chip hidden={!minutes}>
+        <SiteIcon name="clock" size={14} />
+        <span data-minutes>{minutes}</span>
+      </span>
+    </div>
+    <h3 class="ps-card-title" data-title>{form?.title}</h3>
+    <p class="ps-card-desc" data-description hidden={!form?.description}>{form?.description}</p>
+    <div class="ps-card-foot">
+      <a class="button ghost ps-card-open" href={form ? formHref(form.slug) : undefined} aria-label={form ? `Open ${form.title}` : undefined} data-href>
+        Open
+        <SiteIcon name="arrow-right" size={16} />
+      </a>
+    </div>
+  </article>
+</li>

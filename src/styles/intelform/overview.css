@@ -2,4 +2,86 @@
  * IntelForm dashboard CSS for screens/overview.tsx (the IntelForm overview).
  * Scope every rule under the screen root class `.screen-overview` (`<div className="app-page screen-overview">`).
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ * The stat strip, layout tile and New form drawer are shared with the forms screen: see forms.css.
  */
+
+.screen-overview .if-rows > li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.75rem 1.25rem;
+}
+
+.screen-overview .if-rows > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.screen-overview .if-rows-text {
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.screen-overview .if-rows-text > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screen-overview .if-rows-text a {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.screen-overview .if-rows-text a:hover {
+  text-decoration: underline;
+}
+
+.screen-overview .if-rows-text a:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.screen-overview .if-rows-text .muted {
+  font-size: 0.8125rem;
+}
+
+.screen-overview .if-rows-when {
+  flex: none;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.screen-overview .if-rows-skeleton {
+  padding: 1rem 1.25rem;
+}
+
+.screen-overview .if-view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 4px;
+  color: var(--accent-text);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.screen-overview .if-view-all:hover {
+  text-decoration: underline;
+}
+
+.screen-overview .if-view-all:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 560px) {
+  .screen-overview .if-rows > li .badges {
+    display: none;
+  }
+}

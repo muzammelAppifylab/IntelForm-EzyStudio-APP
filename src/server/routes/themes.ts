@@ -1,12 +1,32 @@
 import {Hono} from 'hono';
 
-import {problem} from '../../platform/guards';
+import {saveThemeInput} from '../../lib/intelform/api-builder';
+import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {zodJson} from '../intelform/templates/validate';
+import {createSavedTheme, deleteSavedTheme, listSavedThemes, THEME_GONE, themePresets} from '../intelform/themes/service';
+import {PERMISSIONS} from '../permissions';
 
 /**
- * `/site-api/themes/*` — Form themes: presets and a form's design theme (FORM_READ / FORM_WRITE).
+ * `/site-api/themes/*` — form design themes (ported from legacy server/routes/themes.ts):
  *
- * STUB (IntelForm migration scaffold): mounted in src/server/app.ts so every agent agrees on the
- * path; the owning agent replaces the placeholder with the real, guarded routes
- * (docs/agent/site-api.md: validator → withViewer → requireAuth → requirePermission → withDb).
+ *   GET    /          saved themes, newest first (max 200)   FORM_READ
+ *   GET    /presets   the built-in presets (code)            FORM_READ
+ *   POST   /          save the current theme {name, settings} FORM_WRITE
+ *   DELETE /:id       delete a saved theme                   FORM_WRITE
+ *
+ * A form's own theme is saved with the form (PATCH /site-api/forms/:id {theme}).
  */
-export const themesRoutes = new Hono().get('/', c => c.json(problem('not_implemented', 'Not built yet.'), 501));
+export const themesRoutes = new Hono()
+  .get('/', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
+    return c.json(await listSavedThemes(c.var.db));
+  })
+  .get('/presets', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), c => c.json(themePresets()))
+  .post('/', zodJson(saveThemeInput), withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    const viewer = c.var.viewer;
+    const theme = await createSavedTheme(c.var.db, c.req.valid('json'), {id: viewer.id!, name: viewer.name});
+    return c.json(theme, 201);
+  })
+  .delete('/:id', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+    if (!(await deleteSavedTheme(c.var.db, c.req.param('id')))) return c.json(problem('not_found', THEME_GONE), 404);
+    return c.body(null, 204);
+  });

@@ -5,14 +5,24 @@ import { BOOL_OPS, PRESENCE_OPS, base, defineType, isRecord, str, type AnswerCon
 // ------------------------------------------------------------------ Signature: { url }
 
 /**
- * Submit format: the browser sends `{ url: "data:image/png;base64,…" }`. The server checks it
- * (isSignatureDataUrl, then a strict PNG check in server/lib/png.ts), uploads the PNG (storeBuffer) and stores
- * `{ url: "https://cdn…/sig.png" }`. Only the data URL validates here: a client-supplied URL
- * would let a respondent point a stored answer (and the owner's emails) at any image.
+ * In the browser the pad's answer is `{ url: "data:image/png;base64,…" }`. At submit the browser
+ * uploads the PNG straight to storage (src/respondent/upload.ts) and sends `{ fileId, token }`;
+ * the server verifies the token, checks the stored PNG and stores
+ * `{ url: "/__platform/files/<id>/signature.png" }` (src/server/intelform/uploads/signatures.ts).
+ * Only those two shapes validate here: a client-supplied URL would let a respondent point a
+ * stored answer (and the owner's emails) at any image.
  */
 export interface SignatureAnswer {
   url: string
 }
+
+/** The submitted shape: a pending upload this site started for this field, plus its signed token. */
+export interface SubmittedSignatureAnswer {
+  fileId: string
+  token: string
+}
+
+const FILE_ID_RE = /^file_[0-9a-z]{26}$/
 
 /** ~300 KB of base64: a 600×200 PNG of a signature is far below this. */
 export const SIGNATURE_DATA_URL_MAX = 400_000
@@ -32,7 +42,10 @@ export function signatureBytes(dataUrl: string): Uint8Array {
 }
 
 function signatureUrl(v: unknown): string {
-  return isRecord(v) && typeof v.url === 'string' ? v.url : ''
+  if (!isRecord(v)) return ''
+  if (typeof v.url === 'string') return v.url
+  // Submitted, not yet stored: present, but no link to show.
+  return typeof v.fileId === 'string' && v.fileId ? 'pending:' + v.fileId : ''
 }
 
 const signatureProps = z.object({})
@@ -42,10 +55,16 @@ export const signature = defineType({
   props: signatureProps,
   defaultProps: () => ({}),
   answer: () =>
-    z.object(
-      {
-        url: z.string({ error: 'invalidSignature' }).check(z.refine((u: string) => isSignatureDataUrl(u), 'invalidSignature')),
-      },
+    z.union(
+      [
+        z.object({
+          url: z.string({ error: 'invalidSignature' }).check(z.refine((u: string) => isSignatureDataUrl(u), 'invalidSignature')),
+        }),
+        z.object({
+          fileId: z.string({ error: 'invalidSignature' }).check(z.regex(FILE_ID_RE, 'invalidSignature')),
+          token: z.string({ error: 'invalidSignature' }).check(z.minLength(1, 'invalidSignature'), z.maxLength(600, 'invalidSignature')),
+        }),
+      ],
       { error: 'invalidSignature' },
     ),
   isEmpty: (v) => signatureUrl(v) === '',
@@ -55,7 +74,7 @@ export const signature = defineType({
   pipe: () => '',
   csvColumns: () => [''],
   // Data URLs never reach a stored response; guard anyway so a CSV never carries one.
-  csv: (v) => [signatureUrl(v).startsWith('data:') ? '' : signatureUrl(v)],
+  csv: (v) => [/^(data|pending):/.test(signatureUrl(v)) ? '' : signatureUrl(v)],
 })
 
 // ------------------------------------------------------------------ Consent: { accepted: true, at, text, version? }

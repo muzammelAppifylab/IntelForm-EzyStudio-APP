@@ -116,7 +116,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   if (target.isContentEditable) return true
   const tag = target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
-  return !!target.closest('[role="dialog"],[role="menu"],[role="listbox"],[role="alertdialog"],[cmdk-root]')
+  return !!target.closest('dialog[open],[role="dialog"],[role="menu"],[role="listbox"],[role="alertdialog"],[cmdk-root]')
 }
 
 export interface ShortcutHandlers {

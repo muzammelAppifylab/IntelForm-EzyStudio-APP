@@ -1,0 +1,32 @@
+/*
+ * Field-type settings panels in the builder (src/form-types/<type>/Settings.tsx), loaded with
+ * the settings registry (src/form-types/settings.tsx). Layout only: the controls themselves are
+ * the kit's and the builder's (src/portal/ui, src/portal/intelform/builder/controls.tsx).
+ * Tokens only, never hex.
+ */
+
+.fts-stack {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.fts-stack-tight {
+  gap: 0.75rem;
+}
+.fts-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+.fts-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.fts-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--muted);
+}

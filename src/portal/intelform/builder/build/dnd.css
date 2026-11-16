@@ -1,0 +1,65 @@
+/*
+ * @dnd-kit's own feedback rules. The library injects them as a <style> element, which the
+ * site's Content-Security-Policy blocks (styles need a hash), so the same rules ship here.
+ * Without them a dragged card would not follow the pointer. Copied from @dnd-kit/dom 0.5
+ * (src/core/plugins/feedback/constants.ts); keep in step when the package is upgraded.
+ */
+:root [data-dnd-dragging] {
+  position: fixed !important;
+  pointer-events: none !important;
+  touch-action: none;
+  z-index: 2147483647;
+  will-change: translate;
+  top: var(--dnd-top, 0px) !important;
+  left: var(--dnd-left, 0px) !important;
+  right: unset !important;
+  bottom: unset !important;
+  width: var(--dnd-width, auto);
+  max-width: var(--dnd-width, auto);
+  height: var(--dnd-height, auto);
+  max-height: var(--dnd-height, auto);
+  transform: var(--dnd-transform, none) !important;
+  transition: var(--dnd-transition) !important;
+}
+
+:root [data-dnd-placeholder] {
+  transition: none;
+}
+
+:root [data-dnd-placeholder='hidden'] {
+  visibility: hidden;
+}
+
+[data-dnd-dragging] * {
+  pointer-events: none !important;
+}
+
+[data-dnd-dragging]:not([data-dnd-dropping]) {
+  translate: var(--dnd-translate) !important;
+}
+
+[data-dnd-dragging][style*='--dnd-scale'] {
+  scale: var(--dnd-scale) !important;
+  transform-origin: var(--dnd-transform-origin) !important;
+}
+
+:where([data-dnd-dragging][popover]) {
+  overflow: visible;
+  background: unset;
+  border: unset;
+  margin: unset;
+  padding: unset;
+  color: inherit;
+}
+
+[data-dnd-dragging]::backdrop,
+[data-dnd-overlay]:not([data-dnd-dragging]) {
+  display: none;
+  visibility: hidden;
+}
+
+/* While something is dragged (set by the builder's DragDropProvider handlers). */
+:root[data-if-dragging] * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}

@@ -2,4 +2,123 @@
  * IntelForm dashboard CSS for screens/builder/share.tsx.
  * Scope every rule under the screen root class `.screen-share` (`<div className="app-page screen-share">`).
  * Tokens only (global.css), never hex; no style="" in screens (CSP). Loaded by src/styles/intelform/index.css.
+ * The shared builder-tab controls (.if-*) are in settings.css.
  */
+
+.screen-share .if-share-stack {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 48rem;
+}
+
+/* Custom link: the host prefix and the slug look like one input. */
+.screen-share .if-slug-input {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.screen-share .if-slug-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.screen-share .if-slug-prefix {
+  padding-left: 0.75rem;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.screen-share .field .if-slug-input input {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.screen-share .field .if-slug-input input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.screen-share .field[data-invalid] .if-slug-input {
+  border-color: var(--danger);
+}
+
+/* Popup: the colour picker and a sample button in the creator's colours (CSSOM vars). */
+.screen-share .if-color-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.screen-share .field .if-color-inline input[type='color'] {
+  width: 40px;
+  min-height: 40px;
+  padding: 3px;
+}
+
+.screen-share .if-popup-sample {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+}
+
+.screen-share .if-popup-sample-button {
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  background: var(--sample-bg);
+  color: var(--sample-fg);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* QR code: always black on white, whatever the theme. */
+.screen-share .if-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.screen-share .if-qr-figure {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.screen-share .if-qr-code {
+  display: block;
+  width: 11rem;
+  height: 11rem;
+}
+
+.screen-share .if-qr-figure figcaption {
+  max-width: 14rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.screen-share .if-qr-actions {
+  display: grid;
+  gap: 0.5rem;
+}

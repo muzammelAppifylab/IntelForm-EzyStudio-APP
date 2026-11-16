@@ -1,0 +1,77 @@
+---
+/**
+ * Privacy and Terms (legacy LegalPage.tsx): a static shell, the text from
+ * `GET /site-api/public-site/legal/<kind>` (Settings, Public site), one paragraph per blank line.
+ * Always text, never HTML. Used by src/pages/privacy.astro and terms.astro.
+ */
+import './public-site.css';
+
+import {LEGAL, withName} from '../../content/site';
+import Base from '../../layouts/Base.astro';
+import type {LegalKind} from '../../lib/intelform/api-front';
+import {staticContext} from '../../server/page';
+
+interface Props {
+  kind: LegalKind;
+}
+
+const {kind} = Astro.props;
+const {site, viewer} = await staticContext(Astro.request);
+const name = site?.name ?? 'My site';
+const copy = LEGAL[kind];
+---
+
+<Base site={site} viewer={viewer} isStatic preloadData={`/site-api/public-site/legal/${kind}`} title={copy.title} description={withName(copy.description, name)}>
+  <main id="main" tabindex="-1" class="wrap narrow section ps" data-public-legal={kind}>
+    <div class="ps-intro">
+      <p class="eyebrow">{LEGAL.eyebrow}</p>
+      <h1>{copy.title}</h1>
+    </div>
+    <div class="ps-legal" aria-busy="true">
+      <div class="ps-legal-skeleton" data-legal-skeleton aria-hidden="true"><span></span><span></span><span></span></div>
+      <noscript><p class="notice">Turn on JavaScript to read this page.</p></noscript>
+      <div class="ps-legal-text" data-legal-text></div>
+      <p class="muted" data-legal-empty role="status" hidden>{LEGAL.empty}</p>
+      <div class="notice" data-legal-error role="alert" hidden>
+        {LEGAL.error}
+        <button class="button link small-button" type="button" data-legal-retry>Try again</button>
+      </div>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {applyIndexing, getJson, renderPlainText} from './client';
+  import type {PublicLegalPage} from '../../server/intelform/public-site/shape';
+
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector<HTMLElement>('[data-public-legal]');
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = '1';
+    const kind = root.dataset.publicLegal!;
+    const part = <T extends HTMLElement = HTMLElement>(name: string) => root.querySelector<T>(`[data-legal-${name}]`)!;
+    const box = root.querySelector<HTMLElement>('.ps-legal')!;
+    const retry = part<HTMLButtonElement>('retry');
+
+    async function load() {
+      box.setAttribute('aria-busy', 'true');
+      part('error').hidden = true;
+      part('skeleton').hidden = false;
+      retry.disabled = true;
+      const legal = await getJson<PublicLegalPage>(`/site-api/public-site/legal/${encodeURIComponent(kind)}`);
+      part('skeleton').hidden = true;
+      box.removeAttribute('aria-busy');
+      retry.disabled = false;
+      if (!legal) {
+        part('error').hidden = false;
+        return;
+      }
+      applyIndexing(legal.indexing);
+      renderPlainText(part('text'), legal.text);
+      part('empty').hidden = legal.text.trim() !== '';
+    }
+
+    retry.addEventListener('click', () => void load());
+    void load();
+  });
+</script>
