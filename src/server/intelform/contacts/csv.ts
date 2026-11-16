@@ -1,7 +1,7 @@
 /**
  * CSV for Excel, Numbers and Google Sheets: a UTF-8 BOM, CRLF line endings, RFC 4180 quoting,
  * and formula-injection escaping (OWASP) for text cells only, so numbers stay numbers.
- * (Ported from legacy/server/lib/csv.ts for the contacts export.)
+ * (IntelForm's CSV rules, for the contacts export.)
  */
 export const CSV_BOM = '\uFEFF';
 export const CSV_EOL = '\r\n';

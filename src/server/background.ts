@@ -5,8 +5,8 @@ import { trimWebhookDeliveries } from './intelform/webhooks'
 import { webhookDeliveryJob } from './intelform/builder/webhook-delivery'
 import { clearPublicSiteCache } from './intelform/public-site/data'
 import { clearPublicFormCache } from './intelform/respondent/cache'
-import { drainFileTrash, FILE_CLEANUP_LIST, fileCleanupJob, scheduleFileCleanup } from './intelform/uploads/trash'
-import { EXPORTS_LIST, runExportJob, sweepExports } from './intelform/exports/job'
+import { drainFileTrash, fileCleanupJob, scheduleFileCleanup } from './intelform/uploads/trash'
+import { runExportJob, sweepExports } from './intelform/exports/job'
 
 /**
  * This site's BACKGROUND JOBS: one handler per list (docs/agent/background-jobs.md).
@@ -55,11 +55,11 @@ export const background = defineBackground({
   'intelform-maintenance': async () => {
     await hourlyMaintenance(db())
   },
-  [FILE_CLEANUP_LIST]: async (data) => {
+  'intelform-file-cleanup': async (data) => {
     const step = Number((data as { step?: unknown } | null)?.step ?? 0)
     await fileCleanupJob(db(), jobRequestUrl(), Number.isSafeInteger(step) && step >= 0 ? step : 0)
   },
-  [EXPORTS_LIST]: async (data) => {
+  'intelform-exports': async (data) => {
     await runExportJob(db(), jobRequestUrl(), data)
   },
 })

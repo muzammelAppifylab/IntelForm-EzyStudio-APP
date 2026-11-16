@@ -1,23 +1,108 @@
-# Site — Astro app
+# IntelForm
 
-A starter for a **website plus its own app**, built with [Astro](https://astro.build) on one
-Cloudflare Worker:
+**IntelForm** is a form builder for one business: build forms (bookings, questions, feedback,
+sign-ups, waitlists) in the dashboard, publish them at `/f/<slug>`, and read, chart, export and act
+on the answers. It runs on the EzyStudio web-app template: [Astro](https://astro.build) pages and a
+[Hono](https://hono.dev) backend at `/site-api` on one Cloudflare Worker, Postgres through
+[Prisma ORM 7](https://www.prisma.io), and a React dashboard at `/dashboard`
+([TanStack Router](https://tanstack.com/router) and [Query](https://tanstack.com/query)) on the
+template's own UI kit (`src/portal/ui/`), dressed in IntelForm's "paper & ink" look.
 
-- **pages**: a home page made of sections and an about page (prerendered), a **blog** written as
-  Markdown files, and a **job board** with search and detail pages;
-- **accounts of its own**: sign-up with an emailed code, sign-in, two-step sign-in, password reset,
-  signed-in devices — scrypt passwords, short-lived signed tokens, rotating refresh tokens, rate limits;
-- **roles and permissions**: owner, admin and member out of the box, custom roles, and admin screens
-  for users, roles and an activity log;
-- a **dashboard** at `/dashboard`: a React app ([TanStack Router](https://tanstack.com/router) and
-  [Query](https://tanstack.com/query)) on its own UI kit (`src/portal/ui/`), light and dark;
-- your own **backend** at `/site-api`: a [Hono](https://hono.dev) app every page and screen reads through;
-- your own **database**: Postgres, through [Prisma ORM 7](https://www.prisma.io).
+- **Builder**: 21 question types (short and long text, email, phone, URL, number, date, time, name,
+  address, country, single and multiple choice, picture choice, dropdown, yes/no, rating, NPS,
+  consent, signature, section breaks), conditional logic and answer piping, three layouts (one
+  question at a time, paged, all at once), design themes and fonts, drafts with autosave, a live
+  preview, and publish (each publish kept as a version).
+- **Sharing**: a public page per form (`/f/<slug>`; a renamed slug keeps redirecting), embedding
+  (inline or popup, `public/embed.js`), a QR code, password protection, close dates and response
+  limits, Cloudflare Turnstile plus a honeypot, minimum fill time and rate limits against spam.
+- **Responses**: a table with filters, column choices and a detail drawer, a summary with a chart
+  per question, CSV and ZIP export (uploaded files and signatures included) as a background job,
+  and deletion.
+- **Contacts**: everyone who answered, rolled up by email address, with filters, a drawer, CSV
+  export and erasure.
+- **After a submission**: an email to the owner (the platform's relay), optional emails to
+  teammates and a confirmation to the respondent (these need a mail provider, see
+  [Owner secrets](#owner-secrets)), signed webhooks with retries, a thank-you screen or a redirect.
+- **Templates and themes**: built-in starter templates, your own forms saved as templates, reusable themes.
+- **Public site**: a home page and `/forms/` listing the forms marked "Show on the homepage", an
+  about page, Privacy and Terms (their texts are set in Settings), sitemap and RSS.
+- **Accounts, team and roles** are the template's: sign-up, sign-in, two-step sign-in, users, roles
+  and the activity log. IntelForm adds the roles **Editor** and **Viewer** (a migration) and these
+  permissions:
 
-One project, one build, one deploy.
+| Permission | What it allows | admin | editor | viewer |
+| --- | --- | :-: | :-: | :-: |
+| `site:form:read` | see forms | yes | yes | yes |
+| `site:form:write` | create, edit, duplicate, publish and close forms; form settings, webhooks, templates | yes | yes | |
+| `site:form:delete` | delete forms | yes | yes | |
+| `site:response:read` | read and export responses | yes | yes | yes |
+| `site:response:delete` | delete responses | yes | yes | |
+| `site:contact:read` | read and export contacts | yes | yes | yes |
+| `site:contact:write` | change and erase contacts | yes | yes | |
+| `site:intelform:settings` | the app's Settings screen | yes | | |
+
+The owner holds every permission. They are declared once, in `src/server/permissions.ts`.
+
+## Where each feature lives
+
+| Feature | Dashboard and pages | Site API | Shared code |
+| --- | --- | --- | --- |
+| Forms list, overview | `src/portal/screens/forms.tsx`, `overview.tsx`, `src/portal/intelform/forms/` | `src/server/routes/forms.ts`, `src/server/intelform/forms/` | `src/lib/intelform/api-forms.ts` |
+| Builder (build, design, settings, share) | `src/portal/screens/builder/`, `src/portal/intelform/builder/` | `src/server/routes/builder.ts`, `src/server/intelform/builder/` | `src/lib/intelform/form/` (definition, logic, validation) |
+| Question types | `src/form-types/<type>/` (editor, answer input, summary) | | `src/lib/intelform/form/types/` |
+| Responses | `src/portal/screens/builder/responses.tsx`, `src/portal/intelform/responses/` | `src/server/routes/responses.ts`, `exports.ts`, `src/server/intelform/responses/`, `exports/` | `src/lib/intelform/api-responses.ts`, `api-exports.ts` |
+| Contacts | `src/portal/screens/contacts.tsx`, `src/portal/intelform/contacts/` | `src/server/routes/contacts.ts`, `src/server/intelform/contacts/` | `src/lib/intelform/api-contacts.ts` |
+| Templates and themes | `src/portal/screens/templates.tsx` | `src/server/routes/templates.ts`, `themes.ts`, `src/server/intelform/templates/`, `themes/` | |
+| App settings | `src/portal/screens/app-settings.tsx`, `src/portal/intelform/settings/` | `src/server/routes/app-settings.ts`, `src/server/intelform/settings/` | `src/lib/intelform/settings-app.ts` |
+| Public form page | `src/pages/f/[slug].astro`, `src/respondent/` | `src/server/routes/public-forms.ts`, `src/server/intelform/respondent/` | `src/lib/intelform/api-public.ts` |
+| Uploads and signatures | `src/portal/intelform/upload.ts` | `src/server/routes/uploads.ts`, `src/server/intelform/uploads/` (the platform's file storage) | |
+| Notifications, webhooks, jobs | | `src/server/intelform/notify/`, `webhooks/`, `src/server/background.ts`, `background.json` | |
+| Public site (home, `/forms/`) | `src/pages/index.astro`, `src/pages/forms/`, `src/components/public-site/` | `src/server/routes/public-site.ts`, `src/server/intelform/public-site/` | `src/lib/intelform/api-front.ts` |
+| The look ("paper & ink") | `src/styles/base.css` (tokens), `src/styles/app.css`, `src/form-types/*.css` | | |
+| Database | `prisma/schema.prisma`, `prisma/migrations/`, `prisma/seed.sql` | | |
+
+Background work (`background.json`, handlers in `src/server/background.ts`):
+`intelform-response-notify` (emails after a submission), `intelform-webhooks` and
+`intelform-webhook-deliver` (webhooks, with retries), `intelform-exports` (CSV and ZIP exports,
+in parts), `intelform-file-cleanup` (stored files of deleted responses), and two schedules:
+`intelform-retention` daily at 04:30 (deletes responses past their form's retention period) and
+`intelform-maintenance` hourly (closes forms past their close date, trims logs).
+
+## What an owner usually changes
+
+- **The public site's words**: `src/content/site.ts` (navigation, home sections, `/forms/` and
+  about copy). Without a Publish: the site's name and logo (the platform), which forms are listed
+  (each form's Share tab, "Show on the homepage"), and the contact email, search and sharing,
+  Privacy and Terms (dashboard › Settings › Public site).
+- **The look**: the colour, type and radius tokens at the top of `src/styles/base.css`; per form,
+  the builder's Design tab (theme, fonts, colours, logo).
+- **App settings** (dashboard › Settings, admins only): the app's name and branding, date format and
+  colour mode, how long responses are kept, spam protection, notification defaults.
+- **Built-in templates**: `src/server/intelform/templates/builtins.ts`.
+- **Who can do what**: dashboard › Roles (the owner): give a role any of the permissions above.
+- **Sample data**: `prisma/seed.sql` (sample forms with responses, contacts and themes).
+
+### Owner secrets
+
+Secrets are never in a file or in the database: the site's owner adds them on the platform as
+**owner secrets**, and the server reads them with `config.ownerSecret('NAME')`. All are optional.
+
+| Secret | What it turns on |
+| --- | --- |
+| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile on public forms: the widget's (public) site key |
+| `TURNSTILE_SECRET_KEY` | the widget's secret key. Both are needed: create a widget in the Cloudflare dashboard under Turnstile, for this site's domain. Settings › Spam protection shows whether each is set and has **Test keys**. Without them forms still have a honeypot, a minimum fill time and rate limits; each form can also turn Turnstile off in its settings. |
+| `RESEND_API_KEY` or `POSTMARK_SERVER_TOKEN` | a mail provider for emails with the form's own text: teammate notifications and the respondent's confirmation |
+| `EMAIL_FROM_ADDRESS` | the sender of those emails, on a domain verified with that provider |
+
+Without a mail provider the owner's "new response" email still goes through the platform's relay;
+teammate and confirmation emails are skipped. On your computer every email is printed where
+`npm run dev` runs instead ([Local development mode](#local-development-mode)).
 
 ## Contents
 
+- [Where each feature lives](#where-each-feature-lives) ·
+  [What an owner usually changes](#what-an-owner-usually-changes) · [Owner secrets](#owner-secrets)
 - [Quick start](#quick-start)
 - [Requirements](#requirements)
 - [Setting up, step by step](#setting-up-step-by-step)
@@ -39,17 +124,22 @@ One project, one build, one deploy.
 With [Node.js 22.12+](#requirements) and Docker running:
 
 ```bash
-git clone <the template repository's address> my-site
-cd my-site
+git clone <this repository's address> intelform
+cd intelform
 npm install
 docker compose up -d --wait db      # a local Postgres (docker-compose.yml)
 npm run setup                       # .env with a new JWT_SECRET, database check, tables
+npm run db:seed                     # sample forms, responses and contacts
 npm run dev                         # http://localhost:4321
 ```
 
+Port 5432 already taken? Put `DB_PORT=5433` (any free port) in `.env` before
+`docker compose up`, and the same port in `DATABASE_URL` ([Troubleshooting](#troubleshooting)).
+
 Then [create your admin account](#create-your-admin-account): sign up at
 http://localhost:4321/account/register/, type the code printed by `npm run dev`, and run
-`npm run dev-admin -- you@example.com`.
+`npm run dev-admin -- you@example.com`. The sample forms are at http://localhost:4321/forms/ and
+in the dashboard under Forms.
 
 ## Requirements
 
@@ -69,19 +159,20 @@ No Docker? Any Postgres 15 or later on your computer works: put its address in `
 
 ### Get the code
 
-Clone the template repository, so later releases can be merged into your work
-([Staying up to date](#staying-up-to-date)):
+IntelForm is a clone of the EzyStudio web-app template with the app built on top, so template
+releases merge into it ([Staying up to date](#staying-up-to-date)). Clone this repository and add
+the template as `upstream`:
 
 ```bash
-git clone <the template repository's address> my-site
-cd my-site
-git remote rename origin upstream             # the template: releases come from here
-git remote add origin <your own repository's address>
-git push -u origin main
+git clone <this repository's address> intelform
+cd intelform
+git remote add upstream https://github.com/EzyStudio/web-app-template.git
+git fetch upstream --tags
 ```
 
-Don't use a "Use this template" button or copy the files: that makes a copy with no shared
-history, and `git merge` can no longer tell your changes from the template's. Already did? See
+`node store-check.mjs` and `npm run platform -- check` read the release tags from `upstream`.
+Don't copy the files into a fresh repository: that loses the shared history, and `git merge` can
+no longer tell IntelForm's changes from the template's. Already did? See
 [Started from a copy](#started-from-a-copy).
 
 ### Install
@@ -106,6 +197,8 @@ ignores it): never commit it. Restart `npm run dev` after changing it.
 | `SITE_PREVIEW` | leave empty | `1` only in the platform editor's Preview. |
 | `SITE_OWNER_ID` | leave empty | the platform's opaque id for the account's owner. |
 | `DB_PORT` | optional | the port `docker-compose.yml` publishes when 5432 is taken ([Troubleshooting](#troubleshooting)). The site never reads it. |
+| `TEST_DATABASE_URL` | optional | a throwaway database for the integration tests ([Tests](#tests)). |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `RESEND_API_KEY`, … | optional | on your computer, [owner secrets](#owner-secrets) are read from `.env` under the same names. Use Cloudflare's Turnstile test keys here, never a live site's keys. |
 
 ### The database
 
@@ -163,7 +256,9 @@ dashboard. On your computer nobody can press that, so you make a local admin:
    ```bash
    npm run dev-admin -- you@example.com
    ```
-4. Open (or reload) http://localhost:4321/dashboard/: Users, Roles and Activity are there.
+4. Open (or reload) http://localhost:4321/dashboard/: Forms, Templates, Contacts and Settings are
+   there, and Users, Roles and Activity. To try the Editor or Viewer role, sign up a second
+   account and give it that role under Users.
 
 `dev-admin` changes your LOCAL database only. It refuses when `SITE_KEY` or `SITE_PREVIEW` is set or
 `NODE_ENV=production`, and when `DATABASE_URL` isn't on this computer: its host must be
@@ -197,18 +292,26 @@ docs/agent/              the rules by topic: auth, roles, security, performance,
 template.json            which template version this is
 docker-compose.yml       the local Postgres
 scripts/platform.mjs     setup, dev-admin, template updates, checks
-prisma/                  schema.prisma, migrations/, seed.sql
-tests/                   unit tests; tests/integration/ = the Site API on a real Postgres
-public/                  files served as they are (_headers: security headers)
+background.json          IntelForm's background job lists and schedules
+prisma/                  schema.prisma, migrations/, seed.sql (sample forms, responses, contacts)
+tests/                   unit tests; tests/intelform/ = IntelForm; tests/integration/ = the Site API on a real Postgres
+public/                  files served as they are (_headers: security headers, embed.js: the form embed)
 src/
-  content/site.ts        navigation, home sections, about copy, the site's name and address
+  content/site.ts        navigation, home sections, /forms/ and about copy
   content/blog/          blog posts (Markdown)
   assets/                images optimised at build
-  pages/                 pages: index, about, blog/, jobs/, account/, portal/, site-api/, sitemap, RSS
-  portal/                the dashboard (React): routes.tsx, screens/, ui/ (the UI kit)
-  server/                YOUR backend: app.ts, routes/, auth-settings.ts, permissions.ts
+  pages/                 pages: index, forms/, f/[slug] (a public form), about, privacy, terms, blog/,
+                         account/, dashboard/, site-api/, sitemap, RSS
+  portal/                the dashboard (React): routes.tsx, screens/, intelform/ (builder, responses,
+                         contacts, settings, queries), ui/ (the UI kit)
+  form-types/            each question type's editor, answer input and summary
+  respondent/            the public form (React): layouts, logic engine, embed
+  server/                YOUR backend: app.ts, routes/, intelform/ (the app's server code),
+                         background.ts, auth-settings.ts, permissions.ts
   platform/              the template's managed core (auth, guards, platform calls): never edit
-  lib/                   shared types, form rules, browser helpers, seo.ts
+  lib/                   shared types, browser helpers, seo.ts; lib/intelform/ = the form
+                         definition, logic and API contracts shared by server and browser
+  styles/                base.css (the "paper & ink" tokens), app.css (the dashboard)
 ```
 
 ## Building on it
@@ -254,6 +357,8 @@ docker compose exec db createdb -U postgres site_test
 DATABASE_URL=postgresql://postgres:dev@localhost:5432/site_test npx prisma migrate deploy
 TEST_DATABASE_URL=postgresql://postgres:dev@localhost:5432/site_test npm test
 ```
+
+With `DB_PORT` set, use that port in both addresses instead of 5432.
 
 ## Staying up to date
 
@@ -355,6 +460,8 @@ then deploys. If a migration fails, the previous version keeps serving.
 
 - The **owner** is your account's owner, who opens the admin with **View as admin** in the dashboard or the
   editor. There's no owner sign-up, password or owner list. Owners and admins manage users at `/dashboard/users` and roles at `/dashboard/roles`.
+- Teammates sign up like anyone else; an admin then gives them the **Editor** or **Viewer** role
+  ([permissions](#intelform)). People who only answer forms need no account.
 - Confirmation and password-reset emails are sent by the platform on your site's behalf.
 - Change how sign-up works in `src/server/auth-settings.ts`.
 
@@ -367,7 +474,8 @@ Add a Markdown file to `src/content/blog/` (`my-post.md` → `/blog/my-post/`) w
 
 | Address | Served by |
 | --- | --- |
-| `/`, `/about/`, `/blog/`, `/jobs/` | this site |
+| `/`, `/forms/`, `/about/`, `/privacy/`, `/terms/`, `/blog/` | this site |
+| `/f/<slug>` | this site (a public form; `?embed=1` or `?embed=popup` inside `embed.js`) |
 | `/sitemap.xml`, `/robots.txt`, `/rss.xml` | this site (search engines, feed readers) |
 | `/account/login`, `/account/register`, `/account/forgot`, … | this site (sign-in) |
 | `/dashboard/…` | this site (the dashboard) |

@@ -22,7 +22,7 @@
 :root {
   color-scheme: light;
 
-  /* IntelForm "paper & ink" (legacy/docs/DESIGN.md v2.1): an oat paper canvas, warm
+  /* IntelForm "paper & ink" (design v2.1): an oat paper canvas, warm
      violet-black ink, periwinkle actions edged in 2px ink, pine green confirmations and
      one persimmon live accent. Shadowless: borders and fills separate surfaces; only
      menus, popovers and dialogs float (`--shadow-lg`). */

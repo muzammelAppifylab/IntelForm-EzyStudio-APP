@@ -1,6 +1,6 @@
 import type {PrismaClient} from '../../../generated/prisma/client';
 
-/** Time zones for the contacts filters and CSV (ported from legacy/server/responses/query.ts). */
+/** Time zones for the contacts filters and CSV. */
 
 /** A zone `Intl` knows (the runtime's own list). */
 export function intlKnowsZone(tz: string): boolean {
