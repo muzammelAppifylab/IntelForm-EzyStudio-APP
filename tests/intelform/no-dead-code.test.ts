@@ -10,7 +10,9 @@ import {describe, expect, it} from 'vitest';
  *
  * 1. Every app source file under src/ must be imported by another source file (tests don't
  *    count) or be an entry point. A file only tests import is dead code with false coverage.
- * 2. Every package.json dependency must be imported somewhere in the app.
+ * 2. Every exported value in IntelForm code must be used by app code (or by its own file);
+ *    an export only tests call is a dead copy unless it is a named test seam.
+ * 3. Every package.json dependency must be imported somewhere in the app.
  */
 
 const root = path.resolve(__dirname, '../..');
@@ -45,6 +47,24 @@ const INDIRECT_DEPENDENCIES = new Set<string>([
   '@videojs/hlsjs-video', // loaded by @videojs/react/media/hlsjs-video (the platform's player)
   '@videojs/vimeo-video', // loaded by @videojs/react/media/vimeo-video
   '@videojs/youtube-video', // loaded by @videojs/react/media/youtube-video
+]);
+
+/** IntelForm's own code (the template's files are checked by the template). */
+const INTELFORM_CODE = /^src\/(server\/intelform|lib\/intelform|portal\/intelform|form-types|respondent)\//;
+const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:const|let|function\*?|class|enum)\s+([A-Za-z_$][\w$]*)/gm;
+
+/**
+ * Exports only tests use, on purpose (file#name, each with its reason). Never a second copy of
+ * live logic: a test of a copy passes while production runs the other one.
+ */
+const TEST_SEAMS = new Set([
+  'src/server/intelform/respondent/signatures.ts#setSignatureStorage', // swaps file storage for a fake
+  'src/server/intelform/respondent/turnstile.ts#setTurnstileFetch', // swaps the Turnstile call for a fake
+  'src/lib/intelform/form/templates/index.ts#BUILTIN_TEMPLATE_INPUTS', // the raw template data BUILTIN_TEMPLATES is parsed from
+  'src/lib/intelform/form/theme-core.ts#surfaceColor', // the resolved colour of themeToVars' surface color-mix(), for contrast tests
+  'src/form-types/renderers.tsx#respondentRenderers', // the form-types contract's alias of FIELD_RENDERERS
+  'src/form-types/settings.tsx#settingsEditors', // the form-types contract's alias of FIELD_SETTINGS
+  'src/form-types/settings.tsx#conditionValueInputs', // the form-types contract's alias of CONDITION_VALUE_INPUTS
 ]);
 
 function walk(dir: string): string[] {
@@ -98,6 +118,36 @@ describe('no dead code (F-047)', () => {
       .map(rel)
       .filter(f => !ENTRY.some(re => re.test(f)) && !TEMPLATE_SCAFFOLDING.has(f) && !referenced.has(f));
     expect(dead, 'delete these files (or import them from app code); point tests at the live module').toEqual([]);
+  });
+
+  it('every exported value in IntelForm code is used by app code, not only by tests', () => {
+    const texts = new Map(srcFiles.map(f => [f, fs.readFileSync(f, 'utf8')]));
+    const others = [...rootConfigs, ...walk(path.join(root, 'scripts')).filter(f => EXTS.includes(path.extname(f)))].map(f =>
+      fs.readFileSync(f, 'utf8')
+    );
+    const unused: string[] = [];
+    for (const [file, text] of texts) {
+      const r = rel(file);
+      if (!INTELFORM_CODE.test(r)) continue;
+      for (const m of text.matchAll(EXPORT_DECL_RE)) {
+        const name = m[1]!;
+        if (TEST_SEAMS.has(`${r}#${name}`)) continue;
+        const word = new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`);
+        const usedInFile = text.split(word).length - 1 > 1;
+        const usedElsewhere =
+          [...texts].some(([g, t]) => g !== file && word.test(t)) || others.some(t => word.test(t));
+        if (!usedInFile && !usedElsewhere) unused.push(`${r}#${name}`);
+      }
+    }
+    expect(unused, 'delete these exports (or use them from app code); point tests at the live code').toEqual([]);
+  });
+
+  it('the test seams allowlist only names exports that exist', () => {
+    for (const entry of TEST_SEAMS) {
+      const [file, name] = entry.split('#') as [string, string];
+      const text = fs.readFileSync(path.join(root, file), 'utf8');
+      expect([...text.matchAll(EXPORT_DECL_RE)].some(m => m[1] === name), entry).toBe(true);
+    }
   });
 
   it('the template scaffolding allowlist only names files that exist', () => {

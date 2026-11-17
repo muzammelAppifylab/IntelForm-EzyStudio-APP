@@ -15,5 +15,3 @@ configureValidators({
   phone: e164 => isValidPhoneNumber(e164),
   isFreeEmailDomain: domain => free.has(domain),
 });
-
-export const validatorsConfigured = true;

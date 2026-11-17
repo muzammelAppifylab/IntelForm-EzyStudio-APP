@@ -19,7 +19,6 @@ export type ColorMode = (typeof COLOR_MODES)[number]
 /** What an upload is for. SVG is accepted only for logo and favicon. */
 export const UPLOAD_PURPOSES = ['logo', 'favicon', 'image', 'og'] as const
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number]
-export const SVG_PURPOSES: readonly UploadPurpose[] = ['logo', 'favicon']
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 /** Image types an upload of each purpose may have (checked in the browser and again in the route). */
@@ -31,7 +30,6 @@ export const UPLOAD_TYPES: Record<UploadPurpose, readonly string[]> = {
 }
 
 /** Where a public file stored by the platform is served on this site (`publicFileUrl` in src/platform/files.ts). */
-export const PLATFORM_FILE_PREFIX = '/__platform/files/'
 const PLATFORM_FILE = /^\/__platform\/files\/[A-Za-z0-9_-]{1,100}\/[^/?#\s]{1,300}$/
 
 /**

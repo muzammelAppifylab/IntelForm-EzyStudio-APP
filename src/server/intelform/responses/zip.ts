@@ -1,20 +1,13 @@
 /**
- * A streamed ZIP writer (STORE method, no compression), plain JavaScript so it runs on the
- * Worker: IntelForm used `archiver`, which needs Node streams and zlib. Each entry is written
- * as it is produced: a local header with the "sizes follow" flag, the bytes, then a data
- * descriptor with the CRC-32 and sizes; the central directory goes at the end. Only the
- * directory (a few dozen bytes per entry) is held in memory.
+ * ZIP records (STORE method, no compression), plain JavaScript so they run on the Worker:
+ * IntelForm used `archiver`, which needs Node streams and zlib. The export job
+ * (../exports/builders.ts) writes each entry as it is produced: a local header with the
+ * "sizes follow" flag, the bytes, then a data descriptor with the CRC-32 and sizes; the central
+ * directory goes at the end.
  *
  * Limits: no ZIP64, so the whole archive must stay under 4 GB (an export never comes close);
- * past that the writer throws instead of writing a broken file.
+ * past that the export throws instead of writing a broken file.
  */
-
-export interface ZipEntry {
-  name: string;
-  /** The entry's content, as text chunks (UTF-8) or bytes. */
-  chunks: AsyncIterable<string | Uint8Array>;
-  date?: Date;
-}
 
 let table: Uint32Array | null = null;
 
@@ -48,11 +41,8 @@ export function dosDateTime(d: Date): {time: number; date: number} {
 
 /** ZIP (no ZIP64) offsets and sizes stop here. */
 export const ZIP_LIMIT = 0xffffffff;
-const LIMIT = ZIP_LIMIT;
 // Bit 3: sizes and CRC in a data descriptor after the data. Bit 11: the name is UTF-8.
 const FLAGS = 0x0808;
-
-const encoder = new TextEncoder();
 
 export interface DirEntry {
   name: Uint8Array;
@@ -118,49 +108,6 @@ export function endOfDirectory(count: number, size: number, offset: number): Uin
   v.setUint32(12, size, true);
   v.setUint32(16, offset, true);
   return b;
-}
-
-/** The ZIP's bytes, entry by entry. At most 65535 entries. */
-export async function* zipChunks(entries: AsyncIterable<ZipEntry> | Iterable<ZipEntry>): AsyncGenerator<Uint8Array> {
-  const dir: DirEntry[] = [];
-  let offset = 0;
-  const check = () => {
-    if (offset > LIMIT) throw new Error('The export is too large for one ZIP file.');
-  };
-  for await (const entry of entries) {
-    if (dir.length >= 0xffff) throw new Error('Too many files for one ZIP file.');
-    const name = encoder.encode(entry.name);
-    const {time, date} = dosDateTime(entry.date ?? new Date());
-    const header = localHeader(name, time, date);
-    const start = offset;
-    yield header;
-    offset += header.length;
-    let crc = 0;
-    let size = 0;
-    for await (const chunk of entry.chunks) {
-      const bytes = typeof chunk === 'string' ? encoder.encode(chunk) : chunk;
-      if (!bytes.length) continue;
-      crc = crc32(bytes, crc);
-      size += bytes.length;
-      offset += bytes.length;
-      check();
-      yield bytes;
-    }
-    const desc = dataDescriptor(crc, size);
-    yield desc;
-    offset += desc.length;
-    check();
-    dir.push({name, crc, size, offset: start, time, date});
-  }
-  const dirStart = offset;
-  let dirSize = 0;
-  for (const e of dir) {
-    const b = centralEntry(e);
-    dirSize += b.length;
-    yield b;
-  }
-  if (dirStart + dirSize > LIMIT) throw new Error('The export is too large for one ZIP file.');
-  yield endOfDirectory(dir.length, dirSize, dirStart);
 }
 
 /** A unique entry name for a form's CSV: its slug, then -2, -3… */

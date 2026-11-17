@@ -79,24 +79,6 @@ export function textToDoc(text: string, multiline: boolean): JSONNode {
   }
 }
 
-export function docToText(doc: JSONNode): string {
-  return (doc.content ?? [])
-    .map((p) =>
-      (p.content ?? [])
-        .map((n) => {
-          if (n.type === 'text') return n.text ?? ''
-          if (n.type === PIPE_NODE) {
-            const a = n.attrs ?? {}
-            return pipeToken(String(a.id), (a.part as string | null) ?? undefined, (a.fallback as string | null) ?? undefined)
-          }
-          if (n.type === 'hardBreak') return '\n'
-          return ''
-        })
-        .join(''),
-    )
-    .join('\n')
-}
-
 /** Filter for the @ menu: matches the label words, case-insensitive. */
 export function filterSources(sources: readonly PipeSource[], query: string, limit = 30): PipeSource[] {
   const q = query.trim().toLowerCase()

@@ -1,5 +1,3 @@
-import {useEffect, useState} from 'react';
-
 /**
  * Light / dark for IntelForm on top of the template's theme switch.
  *
@@ -34,12 +32,6 @@ export function memberTheme(): ResolvedTheme | null {
   return v === 'light' || v === 'dark' ? v : null;
 }
 
-/** The cached app default ('system' when none). */
-export function cachedAppDefault(): ThemePreference {
-  const v = read(APP_DEFAULT_THEME_KEY);
-  return v === 'light' || v === 'dark' || v === 'system' ? v : 'system';
-}
-
 /**
  * Applies the Owner's default mode unless the member picked a theme. Call when App settings load
  * (`useBranding` does). Returns true when it changed `<html data-theme>`.
@@ -55,41 +47,4 @@ export function applyAppDefaultTheme(mode: ThemePreference, root: HTMLElement = 
   if (mode === 'system') delete root.dataset.theme;
   else root.dataset.theme = mode;
   return before !== root.dataset.theme;
-}
-
-function systemTheme(): ResolvedTheme {
-  try {
-    return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  } catch {
-    return 'light';
-  }
-}
-
-/** The theme on screen right now. */
-export function resolvedTheme(root: HTMLElement = document.documentElement): ResolvedTheme {
-  const forced = root.dataset.theme;
-  return forced === 'dark' || forced === 'light' ? forced : systemTheme();
-}
-
-/**
- * The theme on screen, kept current: follows `<html data-theme>` (the top bar, the app default)
- * and the device setting. For previews that must match the dashboard (e.g. the form preview).
- */
-export function useResolvedTheme(): ResolvedTheme {
-  const [theme, setTheme] = useState<ResolvedTheme>(() =>
-    typeof document === 'undefined' ? 'light' : resolvedTheme()
-  );
-  useEffect(() => {
-    const update = () => setTheme(resolvedTheme());
-    const mq = matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', update);
-    const observer = new MutationObserver(update);
-    observer.observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
-    update();
-    return () => {
-      mq.removeEventListener('change', update);
-      observer.disconnect();
-    };
-  }, []);
-  return theme;
 }

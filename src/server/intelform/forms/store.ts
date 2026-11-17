@@ -67,11 +67,6 @@ export async function newFormDefaults(db: Db): Promise<{theme: FormTheme; timezo
   return {theme, timezone};
 }
 
-/** The app's timezone (dashboard dates), from the cached app settings. */
-export async function appTimezone(db: Db): Promise<string> {
-  return (await getAppSettings(db as PrismaClient)).timezone || 'UTC';
-}
-
 // ---------------------------------------------------------------------------
 // Create
 // ---------------------------------------------------------------------------

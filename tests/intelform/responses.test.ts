@@ -21,7 +21,7 @@ import {
   whereFragment,
 } from '../../src/server/intelform/responses/query';
 import {questionData, summaryRange, SummaryRangeError} from '../../src/server/intelform/responses/summary';
-import {crc32, dosDateTime, entryName, zipChunks} from '../../src/server/intelform/responses/zip';
+import {crc32, dosDateTime, entryName} from '../../src/server/intelform/responses/zip';
 
 // ------------------------------------------------------------------ Fixture: two versions
 
@@ -515,47 +515,6 @@ describe('summary', () => {
 
 // ------------------------------------------------------------------ ZIP
 
-/** Reads a STORE-only ZIP back through its central directory. */
-function unzip(bytes: Uint8Array): {name: string; text: string; crcOk: boolean}[] {
-  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const eocd = bytes.length - 22;
-  expect(v.getUint32(eocd, true)).toBe(0x06054b50);
-  const count = v.getUint16(eocd + 10, true);
-  let p = v.getUint32(eocd + 16, true);
-  const out = [];
-  for (let i = 0; i < count; i++) {
-    expect(v.getUint32(p, true)).toBe(0x02014b50);
-    const crc = v.getUint32(p + 16, true);
-    const size = v.getUint32(p + 20, true);
-    const nameLen = v.getUint16(p + 28, true);
-    const offset = v.getUint32(p + 42, true);
-    const name = new TextDecoder().decode(bytes.subarray(p + 46, p + 46 + nameLen));
-    expect(v.getUint32(offset, true)).toBe(0x04034b50);
-    const start = offset + 30 + v.getUint16(offset + 26, true);
-    const data = bytes.subarray(start, start + size);
-    expect(v.getUint32(start + size, true)).toBe(0x08074b50);
-    out.push({
-      name,
-      text: new TextDecoder('utf-8', {ignoreBOM: true}).decode(data),
-      crcOk: crc32(data) === crc,
-    });
-    p += 46 + nameLen;
-  }
-  return out;
-}
-
-async function collect(gen: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
-  const parts: Uint8Array[] = [];
-  for await (const b of gen) parts.push(b);
-  const all = new Uint8Array(parts.reduce((s, b) => s + b.length, 0));
-  let o = 0;
-  for (const b of parts) {
-    all.set(b, o);
-    o += b.length;
-  }
-  return all;
-}
-
 describe('zip', () => {
   it('computes CRC-32 and DOS dates', () => {
     expect(crc32(new TextEncoder().encode('123456789'))).toBe(0xcbf43926);
@@ -565,23 +524,6 @@ describe('zip', () => {
       time: (10 << 11) | (20 << 5) | 15,
       date: (46 << 9) | (11 << 5) | 16,
     });
-  });
-
-  it('writes entries that read back intact', async () => {
-    async function* chunks(...parts: string[]) {
-      for (const p of parts) yield p;
-    }
-    const zip = await collect(
-      zipChunks([
-        {name: 'contact-us.csv', chunks: chunks('﻿a,b\r\n', '1,2\r\n')},
-        {name: 'émoji 🙂.csv', chunks: chunks('')},
-      ])
-    );
-    expect(unzip(zip)).toEqual([
-      {name: 'contact-us.csv', text: '﻿a,b\r\n1,2\r\n', crcOk: true},
-      {name: 'émoji 🙂.csv', text: '', crcOk: true},
-    ]);
-    expect(unzip(await collect(zipChunks([])))).toEqual([]);
   });
 
   it('names entries uniquely', () => {

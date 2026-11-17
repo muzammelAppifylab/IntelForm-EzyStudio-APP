@@ -327,8 +327,3 @@ export function useBuilderStore(): BuilderStore {
 export function useBuilder<T>(selector: (s: BuilderState & BuilderActions) => T): T {
   return useStore(useBuilderStore(), selector)
 }
-
-/** Actions never change, so components can grab them without re-rendering. */
-export function useActions(): BuilderActions {
-  return useBuilderStore().getState()
-}

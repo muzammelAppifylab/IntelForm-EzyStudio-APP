@@ -33,7 +33,6 @@ const timeZone = z
 
 const fieldRef = z.string().min(1).max(40)
 
-export const SPAM_RATE_LIMIT_PER_MINUTE = 10
 export const DEFAULT_CLOSED_MESSAGE = 'This form is no longer accepting responses.'
 
 export const AFTER_SUBMIT = ['end_screen', 'redirect'] as const

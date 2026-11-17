@@ -187,28 +187,3 @@ export function changeFieldType<T extends FieldType>(f: FormField, type: T): Fie
   return next as FieldOf<T>
 }
 
-/** Static pages: split at section breaks. Visibility-aware pages come from logic.computeVisibility. */
-export interface DefinitionPage {
-  /** The section break that starts this page; null for the first page when the form doesn't start with one. */
-  section: FieldOf<'section_break'> | null
-  /** The page's fields, section break excluded. */
-  fields: FormField[]
-}
-
-export function fieldsByPage(def: Pick<FormDefinition, 'fields'>): DefinitionPage[] {
-  const pages: DefinitionPage[] = []
-  let current: DefinitionPage | null = null
-  for (const f of def.fields) {
-    if (f.type === 'section_break') {
-      current = { section: f, fields: [] }
-      pages.push(current)
-    } else {
-      if (!current) {
-        current = { section: null, fields: [] }
-        pages.push(current)
-      }
-      current.fields.push(f)
-    }
-  }
-  return pages
-}

@@ -9,14 +9,14 @@ import {
   interpolate,
   lintLogic,
   lintOnePerEmail,
-  orderViolations,
   parsePipes,
   pipeToken,
   pruneAnswers,
-  validatePage,
   validateSubmission,
   type Answers,
 } from '../../src/lib/intelform/form/logic'
+// The respondent page's per-page check (validatePage in logic.ts was a dead copy of it).
+import { checkFields } from '../../src/respondent/engine'
 
 const choiceProps = { options: [{ id: 'o_a1', label: 'Search' }, { id: 'o_b2', label: 'Friend' }], other: true }
 
@@ -126,7 +126,7 @@ describe('visibility', () => {
       ok: false,
       errors: { f_req1: 'We need this one', f_req2: 'This question is required', f_req3: 'Enter at least 5 characters' },
     })
-    expect(validatePage(d2, { f_req1: 'x' }, ['f_req1', 'f_req2'])).toEqual({ f_req2: 'This question is required' })
+    expect(checkFields(d2, { f_req1: 'x' }, ['f_req1', 'f_req2'])).toEqual({ f_req2: 'This question is required' })
   })
 
   it('drops unknown keys and section breaks, rejects non-objects', () => {
@@ -196,14 +196,6 @@ describe('lint and builder warnings', () => {
       { fieldId: 'f_bbbb', via: 'pipe' },
       { fieldId: 'f_cccc', via: 'logic', conditionIndex: 0 },
       { fieldId: 'endScreen', via: 'pipe' },
-    ])
-  })
-
-  it('orderViolations finds sources at or below their target', () => {
-    expect(orderViolations(d)).toEqual([
-      { target: 'f_bbbb', source: 'f_cccc' },
-      { target: 'f_bbbb', source: 'f_bbbb' },
-      { target: 'f_cccc', source: 'f_sect' },
     ])
   })
 })

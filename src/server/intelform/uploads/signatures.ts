@@ -59,19 +59,10 @@ export function storedSignatureFileId(value: unknown): string | null {
 
 const STORED_URL = /^\/__platform\/files\/([^/?#]+)\//;
 
-/** Every stored signature file id in one response's answers. */
-export function answersSignatureFileIds(answers: unknown): string[] {
-  if (!isRecord(answers)) return [];
-  return Object.values(answers)
-    .map(storedSignatureFileId)
-    .filter((id): id is string => id !== null);
-}
-
 /** The dashboard's view link of one signature (checks RESPONSE_READ on every view). */
 export function signatureViewPath(responseId: string, fieldId: string): string {
   return `/site-api/uploads/signatures/${encodeURIComponent(responseId)}/${encodeURIComponent(fieldId)}`;
 }
-
 
 export type ClaimResult =
   | {ok: true; fileIds: string[]}

@@ -16,7 +16,6 @@ import {
   SIGNATURE_MAX_BYTES,
 } from '../../src/server/intelform/uploads/rules';
 import {
-  answersSignatureFileIds,
   claimSignatures,
   signatureViewPath,
   storedSignatureFileId,
@@ -388,7 +387,6 @@ describe('signatures and images against the platform (mocked)', () => {
     expect(answers.sig).toEqual({fileId: FILE_A});
     expect(files.get(FILE_A)?.status).toBe('ready');
     expect(storedSignatureFileId(answers.sig)).toBe(FILE_A);
-    expect(answersSignatureFileIds(answers)).toEqual([FILE_A]);
   });
 
   it('leaves forms without signature answers alone', async () => {
