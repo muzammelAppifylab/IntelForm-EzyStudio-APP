@@ -12,9 +12,14 @@ import {Palette} from '../../intelform/builder/build/Palette';
 import {useBuildShortcuts} from '../../intelform/builder/lifecycle';
 import {SettingsPanel} from '../../intelform/builder/panel/SettingsPanel';
 import {useBuilderStore} from '../../intelform/builder/store';
+import {restoreFocusIfLost} from '../../intelform/lib/focus';
 import {cn} from '../../intelform/lib/utils';
 import {Icon} from '../../ui';
 import '../../intelform/builder/build/dnd.css';
+
+function refocusHandle(fieldId: string) {
+  restoreFocusIfLost(() => document.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(fieldId)}"] .if-drag-handle`));
+}
 
 /**
  * `/forms/$formId/build`: three panes (PRD "Build tab"): the question types (click, drag, or
@@ -33,8 +38,11 @@ export function BuildTab() {
       onDragStart={() => document.documentElement.setAttribute('data-if-dragging', '')}
       onDragEnd={event => {
         document.documentElement.removeAttribute('data-if-dragging');
-        if (event.canceled) return;
         const {source, target} = event.operation;
+        // Sorting moves the card's DOM node, which drops focus to <body> during a keyboard drag
+        // (dropped or cancelled): give it back to the handle of the card that was moved.
+        if (source && isSortable(source)) refocusHandle(String(source.id));
+        if (event.canceled) return;
         const s = store.getState();
         if (!source || s.readOnly) return;
         if (source.type === 'palette') {

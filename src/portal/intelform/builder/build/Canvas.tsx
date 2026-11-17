@@ -1,9 +1,10 @@
-import {type ReactNode, useMemo} from 'react';
+import {type ReactNode, useEffect, useMemo, useRef} from 'react';
 import {useDroppable} from '@dnd-kit/react';
 
 import {type FormDefinition, LAYOUT_LABEL} from '../../../../lib/intelform/form/definition';
 import {lintLogic, type LogicIssue} from '../../../../lib/intelform/form/logic';
 import {Button, Icon, type IconName} from '../../../ui';
+import {neighbourAfterRemoval, restoreFocusIfLost} from '../../lib/focus';
 import {cn} from '../../lib/utils';
 import {PipedText} from '../pipe/PipedText';
 import {useBuilder, useBuilderStore} from '../store';
@@ -40,6 +41,7 @@ export function Canvas({onInsert}: {onInsert(): void}) {
   const readOnly = useBuilder(s => s.readOnly);
   const settingsRedirect = useBuilder(s => s.settings.afterSubmit === 'redirect');
 
+  useFocusAfterRemoval(draft.fields);
   const issues = useMemo(() => issuesByField(draft), [draft]);
   const numbers = useMemo(() => questionNumbers(draft.fields), [draft.fields]);
   const start = draft.startScreen;
@@ -106,6 +108,27 @@ export function Canvas({onInsert}: {onInsert(): void}) {
 }
 
 const NO_ISSUES: LogicIssue[] = [];
+
+/**
+ * A deleted question takes focus with it (its card, its ⋯ menu, or the Delete dialog that closes
+ * once it is gone), dropping the keyboard to <body>. Whichever way it was deleted (Delete key,
+ * the card's buttons, the settings panel, the dialog), focus moves to the question now in its
+ * place, else the one before it, else "Add question" / the end screen.
+ */
+function useFocusAfterRemoval(fields: FormDefinition['fields']) {
+  const ids = useMemo(() => fields.map(f => f.id), [fields]);
+  const previous = useRef(ids);
+  useEffect(() => {
+    const before = previous.current;
+    previous.current = ids;
+    if (ids.length >= before.length) return;
+    const next = neighbourAfterRemoval(before, ids);
+    if (next === undefined) return;
+    restoreFocusIfLost(() =>
+      document.querySelector<HTMLElement>(next ? `[data-card-id="${CSS.escape(next)}"]` : '.if-canvas-empty .button, [data-card-id="end"]')
+    );
+  }, [ids]);
+}
 
 function ScreenCard({
   id,

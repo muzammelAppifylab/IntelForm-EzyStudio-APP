@@ -1,5 +1,6 @@
 import {
   cloneElement,
+  isValidElement,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
   type ReactNode,
@@ -75,6 +76,11 @@ const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), select:n
 
 // ---------------------------------------------------------------- popover --
 
+/** A trigger that is only an `<Icon>` (aria-hidden, no text) and so needs the label as its name. */
+function isIconOnly(trigger: ReactNode): boolean {
+  return isValidElement(trigger) && trigger.type === Icon;
+}
+
 /**
  * A small panel of controls opened by a button: a colour picker, a filter, a
  * date. Not for actions (that is `Menu`) and not for a task with a Save (that is
@@ -94,7 +100,11 @@ export function Popover({
 }: {
   /** What the panel is for ("Filter responses"): the trigger's and the panel's name. */
   label: string;
-  /** The trigger button's content; default a "more" icon. */
+  /**
+   * The trigger button's content; default a "more" icon. Text in it names the button; an
+   * `<Icon>` alone has no text, so `label` names the button then (an icon-only button always
+   * has an `aria-label`).
+   */
   trigger?: ReactNode;
   children: ReactNode;
   align?: 'start' | 'end' | 'center';
@@ -135,7 +145,7 @@ export function Popover({
         id={triggerId}
         type="button"
         className={triggerClassName ?? 'popover-trigger'}
-        aria-label={trigger ? undefined : label}
+        aria-label={trigger && !isIconOnly(trigger) ? undefined : label}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? id : undefined}

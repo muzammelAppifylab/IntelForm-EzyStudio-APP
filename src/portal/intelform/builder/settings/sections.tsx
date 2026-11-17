@@ -9,7 +9,7 @@ import {api, errorMessage} from '../../lib/api';
 import {fieldName} from '../ops';
 import {PipeInput} from '../pipe/PipeInput';
 import {useBuilder, useBuilderStore} from '../store';
-import {browserTimeZone, isoToZoned, timeZones, zonedToIso} from '../tz';
+import {browserTimeZone, isoToZoned, resolveZonedTime, shiftedTimeNote, timeZones, zonedToIso} from '../tz';
 import {useDraftText} from '../use-draft-text';
 import {applyStatus, useSettingsSave} from './hooks';
 import {defaultCloseLocal, isRedirectUrl, toggleRecipient} from './logic';
@@ -36,6 +36,8 @@ export function AccessSection() {
   const {save, errors} = useSettingsSave();
   const emailFields = useEmailFields();
   const [closing, setClosing] = useState(false);
+  // Said under the close date when the picked time fell in a clock change and was moved forward.
+  const [closeNote, setCloseNote] = useState<string | null>(null);
   const closedMessage = useDraftText(settings.closedMessage, v => void save({closedMessage: v}));
   const zones = useMemo(() => timeZones().map(z => ({value: z, label: z.replace(/_/g, ' ')})), []);
   // A form that never had a close date shows the creator's own zone, not UTC.
@@ -75,7 +77,10 @@ export function AccessSection() {
           label="Close on a date"
           checked={settings.closeAt !== null}
           disabled={readOnly}
-          onChange={v => void save(v ? {closeAt: zonedToIso(defaultCloseLocal(), tz), timezone: tz} : {closeAt: null})}
+          onChange={v => {
+            setCloseNote(null);
+            void save(v ? {closeAt: zonedToIso(defaultCloseLocal(), tz), timezone: tz} : {closeAt: null});
+          }}
         />
         {settings.closeAt && (
           <div className="if-two-cols">
@@ -85,9 +90,11 @@ export function AccessSection() {
               value={isoToZoned(settings.closeAt, tz)}
               disabled={readOnly}
               error={errors.closeAt}
+              hint={closeNote ?? undefined}
               onChange={v => {
-                const iso = zonedToIso(v, tz);
-                if (iso) void save({closeAt: iso, timezone: tz});
+                const resolved = resolveZonedTime(v, tz);
+                setCloseNote(shiftedTimeNote(v, resolved, tz));
+                if (resolved) void save({closeAt: resolved.iso, timezone: tz});
               }}
             />
             <SelectRow
@@ -95,7 +102,12 @@ export function AccessSection() {
               value={tz}
               options={zones}
               disabled={readOnly}
-              onChange={z => void save({timezone: z, closeAt: zonedToIso(isoToZoned(settings.closeAt!, tz), z)})}
+              onChange={z => {
+                const local = isoToZoned(settings.closeAt!, tz);
+                const resolved = resolveZonedTime(local, z);
+                setCloseNote(shiftedTimeNote(local, resolved, z));
+                void save({timezone: z, closeAt: resolved?.iso ?? null});
+              }}
             />
           </div>
         )}

@@ -1,7 +1,8 @@
-import {type ReactNode, useId, useState} from 'react';
+import {type ReactNode, useEffect, useId, useRef, useState} from 'react';
 
 import {CONTACT_HAS, type ContactHas, contactsFilterQuery, type ContactsOverviewResponse} from '../../../lib/intelform/api-contacts';
 import {Button, Checkbox, Collapsible, DatePicker, Drawer, Field, ScrollArea, SearchInput, toIsoDate} from '../../ui';
+import {restoreFocusIfLost} from '../lib/focus';
 import {type AdvancedFilters, advancedCount, NO_ADVANCED} from '../queries/contacts';
 import {FormStatus} from './bits';
 import {countryLabel, formatNumber} from './format';
@@ -35,9 +36,24 @@ export function checkFilters(draft: AdvancedFilters, minText: string, maxText: s
 export function FiltersButton({value, facets, onApply}: {value: AdvancedFilters; facets: Facets | undefined; onApply: (f: AdvancedFilters) => void}) {
   const [open, setOpen] = useState(false);
   const n = advancedCount(value);
+  // The drawer unmounts on close (each opening starts from the applied filters), which takes its
+  // <dialog> out of the page before the browser can hand focus back: return it to this button.
+  const opener = useRef<HTMLButtonElement | null>(null);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current && !open) restoreFocusIfLost(() => opener.current);
+    wasOpen.current = open;
+  }, [open]);
   return (
     <>
-      <Button variant="secondary" icon="sliders" onClick={() => setOpen(true)} aria-label={n ? `Filters, ${n} active` : 'Filters'}>
+      <Button
+        variant="secondary"
+        icon="sliders"
+        onClick={event => {
+          opener.current = event.currentTarget;
+          setOpen(true);
+        }}
+        aria-label={n ? `Filters, ${n} active` : 'Filters'}>
         Filters
         {n > 0 && (
           <span className="contacts-count-pill" aria-hidden="true">
