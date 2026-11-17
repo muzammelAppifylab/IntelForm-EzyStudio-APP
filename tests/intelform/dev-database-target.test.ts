@@ -127,7 +127,11 @@ describe('wired into the dev server (astro.config.mjs)', () => {
     vi.resetModules();
     try {
       const {default: config} = await import('../../astro.config.mjs');
-      const integration = config.integrations?.find((i: {name: string}) => i.name === 'dev-database-target');
+      // Loosely typed: the hook is called with a stub logger, not Astro's full setup options.
+      type SetupHook = (options: Record<string, unknown>) => void;
+      const integration = (config.integrations ?? [])
+        .flat()
+        .find((i) => !!i && i.name === 'dev-database-target') as unknown as {hooks: Record<string, SetupHook>};
       expect(integration).toBeTruthy();
       const logger = {info: vi.fn(), warn: vi.fn()};
       process.chdir(dir);
