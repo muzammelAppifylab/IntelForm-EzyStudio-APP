@@ -44,6 +44,33 @@ describe('restoreFocusIfLost', () => {
   it('does nothing when the target is gone', () => {
     expect(() => run(body, null)).not.toThrow();
   });
+  it('with `frames`, puts focus back again when a later re-order drops it a second time (a keyboard drop)', () => {
+    // Seen in Chrome: the drop focuses the handle, then React moves the card's node a frame later
+    // and focus falls to <body> again. One frame of watching was not enough.
+    const handle = el('handle');
+    const doc = {activeElement: body as unknown, body: body as never};
+    handle.focus.mockImplementation(() => (doc.activeElement = handle));
+    const queue: (() => void)[] = [];
+    restoreFocusIfLost(() => handle, {doc: doc as never, frame: cb => queue.push(cb), frames: 5});
+    queue.shift()!();
+    expect(doc.activeElement).toBe(handle);
+    doc.activeElement = body; // the re-order
+    queue.shift()!();
+    expect(handle.focus).toHaveBeenCalledTimes(2);
+    expect(doc.activeElement).toBe(handle);
+    const search = el('search');
+    doc.activeElement = search; // the person moved on: never taken back
+    while (queue.length) queue.shift()!();
+    expect(handle.focus).toHaveBeenCalledTimes(2);
+    expect(doc.activeElement).toBe(search);
+  });
+  it('stops watching after `frames` frames', () => {
+    const queue: (() => void)[] = [];
+    restoreFocusIfLost(() => el('x'), {doc: {activeElement: body as never, body: body as never}, frame: cb => queue.push(cb), frames: 3});
+    let n = 0;
+    while (queue.length) (queue.shift()!(), n++);
+    expect(n).toBe(3);
+  });
 });
 
 describe('neighbourAfterRemoval (question Delete)', () => {
@@ -88,6 +115,9 @@ describe('focus restoration is wired at each place the audit found', () => {
     const build = src('src/portal/screens/builder/build.tsx');
     expect(build).toMatch(/if \(source && isSortable\(source\)\) refocusHandle\(String\(source\.id\)\);\s*if \(event\.canceled\) return;/);
     expect(build).toContain('.if-drag-handle');
+    // Watched past the re-order React does after the drop, in the canvas and in option lists.
+    expect(build).toMatch(/frames: DROP_FOCUS_FRAMES/);
+    expect(src('src/portal/intelform/builder/OptionsEditor.tsx')).toMatch(/frames: DROP_FOCUS_FRAMES/);
   });
   it('deleting a question moves focus to its neighbour', () => {
     expect(src('src/portal/intelform/builder/build/Canvas.tsx')).toMatch(/useFocusAfterRemoval\(draft\.fields\)/);

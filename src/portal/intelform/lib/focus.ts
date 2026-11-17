@@ -17,17 +17,26 @@ export function focusIsLost(doc: FocusDoc = document): boolean {
 /**
  * On the next frame (after React commits and a dialog closes), focus `target()` if focus was lost.
  * Never steals focus from an element the person (or another handler) has moved to.
+ *
+ * `frames` keeps watching for that many frames, putting focus back each time it is lost again: a
+ * drag-and-drop drop re-orders the DOM a frame or two after the drop event (the library puts the
+ * dragged node back, then React moves it), and moving a focused node drops focus to <body> again.
  */
 export function restoreFocusIfLost(
   target: () => Focusable | null | undefined,
-  env: {doc?: FocusDoc; frame?: (cb: () => void) => unknown} = {}
+  env: {doc?: FocusDoc; frame?: (cb: () => void) => unknown; frames?: number} = {}
 ): void {
   const frame = env.frame ?? ((cb: () => void) => requestAnimationFrame(cb));
-  frame(() => {
-    if (!focusIsLost(env.doc ?? document)) return;
-    target()?.focus({preventScroll: false});
-  });
+  let left = Math.max(1, env.frames ?? 1);
+  const check = () => {
+    if (focusIsLost(env.doc ?? document)) target()?.focus({preventScroll: false});
+    if (--left > 0) frame(check);
+  };
+  frame(check);
 }
+
+/** How long (in frames, about half a second) a drop is watched: the drop animation and React's re-order. */
+export const DROP_FOCUS_FRAMES = 30;
 
 /**
  * After one id leaves an ordered list, the id to move focus to: the item now in its place (the

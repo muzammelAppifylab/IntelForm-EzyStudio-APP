@@ -12,13 +12,15 @@ import {Palette} from '../../intelform/builder/build/Palette';
 import {useBuildShortcuts} from '../../intelform/builder/lifecycle';
 import {SettingsPanel} from '../../intelform/builder/panel/SettingsPanel';
 import {useBuilderStore} from '../../intelform/builder/store';
-import {restoreFocusIfLost} from '../../intelform/lib/focus';
+import {DROP_FOCUS_FRAMES, restoreFocusIfLost} from '../../intelform/lib/focus';
 import {cn} from '../../intelform/lib/utils';
 import {Icon} from '../../ui';
 import '../../intelform/builder/build/dnd.css';
 
 function refocusHandle(fieldId: string) {
-  restoreFocusIfLost(() => document.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(fieldId)}"] .if-drag-handle`));
+  restoreFocusIfLost(() => document.querySelector<HTMLElement>(`[data-card-id="${CSS.escape(fieldId)}"] .if-drag-handle`), {
+    frames: DROP_FOCUS_FRAMES,
+  });
 }
 
 /**
