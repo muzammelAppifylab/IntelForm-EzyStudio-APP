@@ -9,7 +9,7 @@ import {notFound, RespondentError, respondentError} from '../intelform/responden
 import {handleEvent} from '../intelform/respondent/events';
 import {payloadForSlug, publicPayload, requireForm} from '../intelform/respondent/load';
 import {limitPublicGet} from '../intelform/respondent/page';
-import {rateLimit, release} from '../intelform/respondent/rate-limit';
+import {hit, peek, rateLimit, release} from '../intelform/respondent/rate-limit';
 import {requestMeta} from '../intelform/respondent/request-meta';
 import {handleSubmit} from '../intelform/respondent/submit';
 import {unlockToken} from '../intelform/respondent/tokens';
@@ -30,11 +30,30 @@ export {loadPublicForm, safeJson, type PublicFormPage} from '../intelform/respon
  * a render token and per-request state: never cached.
  */
 
-/** Wrong passwords per form per hour from everyone together (guessing spread over many addresses). */
+/**
+ * Form password guessing, bounded without letting anyone lock real respondents out (F-006):
+ *
+ * - every caller (keyed IP hash) gets UNLOCK_IP_LIMIT tries per form per minute and
+ *   UNLOCK_IP_FAILURE_LIMIT wrong passwords per form per hour;
+ * - wrong passwords from everyone together are counted per form per hour. Past
+ *   UNLOCK_FORM_FAILURE_LIMIT the form is "under attack": each caller then gets only
+ *   UNLOCK_ATTACK_IP_FAILURES wrong passwords of their own this hour. The form-wide count never
+ *   refuses a caller by itself, so a respondent with the right password still gets in, while
+ *   guessing spread over many addresses drops to a few tries per address.
+ *
+ * Why this route calls `verifyPassword` (docs/agent/security.md A07 says not to): this is not a
+ * sign-in. It checks a form's shared password, which the built-in auth has no check for, and the
+ * managed limiter has fixed kinds; the limits above are the bound that rule asks for, kept in
+ * IntelForm's own indexed `intelform_rate_limits` table (security.md "Limit what costs").
+ */
 export const UNLOCK_FORM_FAILURE_LIMIT = 100;
-const UNLOCK_FORM_WINDOW = 60 * 60;
+const UNLOCK_FAILURE_WINDOW = 60 * 60;
 /** Password tries per IP per form per minute. */
 export const UNLOCK_IP_LIMIT = 10;
+/** Wrong passwords per IP per form per hour (normal times). */
+export const UNLOCK_IP_FAILURE_LIMIT = 30;
+/** Wrong passwords per IP per form per hour while the form is under attack. */
+export const UNLOCK_ATTACK_IP_FAILURES = 3;
 
 /** The caller's keyed rate-limit id (never the raw address). */
 async function callerKey(c: Context, secret: string): Promise<string> {
@@ -77,7 +96,8 @@ export const publicFormsRoutes = new Hono()
       const secret = requireSecret();
       const db = c.var.db;
       const form = await requireForm(db, c.req.param('slug'));
-      await rateLimit(db, `unlock:${await callerKey(c, secret)}:${form.id}`, UNLOCK_IP_LIMIT, 60, 'Too many tries. Wait a minute and try again.');
+      const caller = await callerKey(c, secret);
+      await rateLimit(db, `unlock:${caller}:${form.id}`, UNLOCK_IP_LIMIT, 60, 'Too many tries. Wait a minute and try again.');
       let raw: unknown;
       try {
         raw = JSON.parse(await readText(c));
@@ -89,14 +109,26 @@ export const publicFormsRoutes = new Hono()
         throw new RespondentError(422, 'validation_failed', SYSTEM_LABELS.wrongPassword, {password: [SYSTEM_LABELS.wrongPassword]});
       }
       const hash = form.settings.passwordHash;
-      // Every attempt takes a slot before the check (parallel guesses can't overshoot); a correct
-      // password gives it back, so only failures count.
-      const formKey = `unlock-fail:form:${form.id}`;
       if (hash) {
-        await rateLimit(db, formKey, UNLOCK_FORM_FAILURE_LIMIT, UNLOCK_FORM_WINDOW, 'This form has had too many wrong passwords. Try again later.');
+        const formKey = `unlock-fail:form:${form.id}`;
+        const callerFailKey = `unlock-fail:ip:${caller}:${form.id}`;
+        // The form-wide count only picks this caller's own budget; it never refuses anyone itself.
+        const underAttack = (await peek(db, formKey, UNLOCK_FAILURE_WINDOW)) >= UNLOCK_FORM_FAILURE_LIMIT;
+        // The attempt takes one of the caller's failure slots before the check (their parallel
+        // guesses can't overshoot); a correct password gives it back, so only failures count.
+        await rateLimit(
+          db,
+          callerFailKey,
+          underAttack ? UNLOCK_ATTACK_IP_FAILURES : UNLOCK_IP_FAILURE_LIMIT,
+          UNLOCK_FAILURE_WINDOW,
+          underAttack ? 'This form has had too many wrong passwords. Try again later.' : 'Too many wrong passwords. Try again later.'
+        );
         const {ok} = await verifyPassword(parsed.data.password, hash);
-        if (!ok) throw new RespondentError(422, 'validation_failed', SYSTEM_LABELS.wrongPassword, {password: [SYSTEM_LABELS.wrongPassword]});
-        await release(db, formKey, UNLOCK_FORM_WINDOW);
+        if (!ok) {
+          await hit(db, formKey, UNLOCK_FAILURE_WINDOW);
+          throw new RespondentError(422, 'validation_failed', SYSTEM_LABELS.wrongPassword, {password: [SYSTEM_LABELS.wrongPassword]});
+        }
+        await release(db, callerFailKey, UNLOCK_FAILURE_WINDOW);
       }
       const token = hash ? await unlockToken(secret, form.id, hash) : '';
       const payload = await publicPayload(db, secret, form, token);

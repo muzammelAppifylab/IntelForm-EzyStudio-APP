@@ -23,6 +23,15 @@ export async function hit(db: RawDb, key: string, windowSeconds: number): Promis
   return Number(rows[0]?.count ?? 1);
 }
 
+/** The current window's count for `key` without counting a hit (0 when nothing was counted yet). */
+export async function peek(db: RawDb, key: string, windowSeconds: number): Promise<number> {
+  const rows = await db.$queryRaw<{count: number}[]>`
+    SELECT count FROM intelform_rate_limits
+    WHERE key = ${key} AND window_start = date_bin(make_interval(secs => ${windowSeconds}::int), now(), 'epoch')
+  `;
+  return Number(rows[0]?.count ?? 0);
+}
+
 /** Seconds until a window of this length ends (at least 1). */
 export function retryAfter(windowSeconds: number, now = Date.now()): number {
   const ms = windowSeconds * 1000;

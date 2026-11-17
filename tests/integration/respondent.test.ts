@@ -143,4 +143,37 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form, {unlockToken: token}));
     expect(res.status).toBe(200);
   });
+
+  // F-006: 100 wrong passwords from many addresses used to refuse even the RIGHT password for
+  // everyone until the end of the hour.
+  it('wrong passwords from many addresses never lock out a respondent with the right password', async () => {
+    // The failure windows are fixed hours: don't straddle a boundary mid-test.
+    const leftInHour = 3600_000 - (Date.now() % 3600_000);
+    if (leftInHour < 90_000) await new Promise(r => setTimeout(r, leftInHour + 1000));
+    const form = await makeForm({passwordHash: await hashPassword('open sesame')});
+    const unlock = (ip: string, password: string) => new Browser(app, ip).post(`/site-api/public/forms/${form.slug}/unlock`, {password});
+
+    const attack = await Promise.all(
+      Array.from({length: 10}, async (_, i) => {
+        const statuses: number[] = [];
+        for (let n = 0; n < 10; n++) statuses.push((await unlock(`198.51.100.${10 + i}`, `guess-${i}-${n}`)).status);
+        return statuses;
+      })
+    );
+    expect(attack.flat().every(s => s === 422)).toBe(true);
+
+    // A new address with the right password gets in.
+    const right = await unlock('198.51.100.200', 'open sesame');
+    expect(right.status).toBe(200);
+    expect(typeof right.json.token).toBe('string');
+    expect((right.json.form as {status: string}).status).toBe('live');
+
+    // An 11th address may still try, but only a few wrong passwords while the form is under attack.
+    const eleventh: number[] = [];
+    for (let n = 0; n < 4; n++) eleventh.push((await unlock('198.51.100.201', `more-${n}`)).status);
+    expect(eleventh).toEqual([422, 422, 422, 429]);
+
+    // An attacking address is out of tries for the hour, even with the right password.
+    expect((await unlock('198.51.100.10', 'open sesame')).status).toBe(429);
+  }, 180_000);
 });
