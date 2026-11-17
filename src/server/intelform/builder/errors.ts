@@ -29,7 +29,7 @@ export const formGone = () => new BuilderError(404, 'not_found', GONE);
 
 /** The JSON body of a BuilderError, in the template's `problem()` shape. */
 export function errorBody(err: BuilderError): Record<string, unknown> {
-  return {...problem(err.code, err.message), ...(err.fields ? {fields: err.fields} : {}), ...(err.extra ?? {})};
+  return {...problem(err.code, err.message), ...(err.fields ? {fields: err.fields} : {}), ...err.extra};
 }
 
 /** Answers a BuilderError; rethrows anything else (the app's onError logs it and answers 500). */

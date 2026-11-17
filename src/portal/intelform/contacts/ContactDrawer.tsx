@@ -4,7 +4,7 @@ import type {ReactNode} from 'react';
 
 import type {ContactDetailResponse} from '../../../lib/intelform/api-contacts';
 import {ago, when} from '../../shared';
-import {Avatar, Button, buttonClass, Drawer, ErrorNote, Icon, LoadingBlock, StatCard} from '../../ui';
+import {Avatar, Button, Drawer, ErrorNote, Icon, LoadingBlock, StatCard} from '../../ui';
 import {contactDetailQuery} from '../queries/contacts';
 import {CopyButton, FormStatus} from './bits';
 import {contactTitle, countryLabel, deviceLabel, formatDate, formatDuration, formatNumber, formatPhone, plural} from './format';

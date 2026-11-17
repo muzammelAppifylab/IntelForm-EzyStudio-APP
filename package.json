@@ -11,9 +11,11 @@
     "build": "prisma generate && astro build",
     "preview": "astro preview",
     "test": "prisma generate && vitest run",
+    "test:coverage": "prisma generate && vitest run --coverage --pool=threads",
     "studio": "prisma studio --browser none --port 5555",
     "platform": "node scripts/platform.mjs",
-    "check": "npm test && npm run build",
+    "lint": "oxlint -c oxlint.json --deny-warnings src tests scripts/check.mjs vitest.config.ts astro.config.mjs prisma.config.ts",
+    "check": "node scripts/check.mjs",
     "setup": "node scripts/platform.mjs setup",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
@@ -38,7 +40,6 @@
     "astro": "^7.4.7",
     "bowser": "^2.14.1",
     "country-flag-icons": "^1.6.20",
-    "free-email-domains": "^1.15.8",
     "hono": "^4.13.16",
     "libphonenumber-js": "^1.13.15",
     "pg-types": "4.0.2",
@@ -54,7 +55,9 @@
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@vitest/coverage-v8": "4.1.12",
     "fast-check": "^4.10.2",
+    "oxlint": "1.88.0",
     "prisma": "7.10.1",
     "typescript": "~6.0.3",
     "vitest": "4.1.12"
@@ -62,7 +65,7 @@
   "allowScripts": {
     "esbuild@0.28.2": true,
     "prisma@7.10.1": true,
-    "workerd@1.20261006.1": true,
+    "workerd@1.20261101.1": true,
     "@prisma/engines@7.10.1": true,
     "fsevents": false
   }

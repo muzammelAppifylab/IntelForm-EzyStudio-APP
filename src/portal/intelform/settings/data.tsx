@@ -2,7 +2,7 @@ import {useState} from 'react';
 
 import {dataSettingsInput} from '../../../lib/intelform/settings-app';
 import type {AppSettingsResponse} from '../../../server/intelform/settings/view';
-import {Button, Checkbox, Field, Notice, useToast} from '../../ui';
+import {Button, Checkbox, Field, useToast} from '../../ui';
 import {useExport} from '../lib/exports';
 import {useFormErrors} from '../lib/form-errors';
 import {useSaveAppSettings} from '../queries/app-settings';

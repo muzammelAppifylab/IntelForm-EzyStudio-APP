@@ -168,6 +168,8 @@ async function readCapped(res: Response, max = MAX_BODY_CAPTURE): Promise<string
     at += part.length;
     if (at >= all.length) break;
   }
+  // Postgres text cannot hold NUL: strip it from the stored response body.
+  // oxlint-disable-next-line no-control-regex
   return new TextDecoder().decode(all).replace(/\u0000/g, '');
 }
 

@@ -296,8 +296,10 @@ locally.
 | `npm run setup` | checks Node.js and packages, makes `.env` (new `JWT_SECRET`), checks the database, creates the tables |
 | `npm run dev` | the dev server, http://localhost:4321 |
 | `npm run build` | the production build into `dist/` (what the platform builds) |
-| `npm test` | unit tests; integration tests too with `TEST_DATABASE_URL` ([Tests](#tests)) |
-| `npm run check` | `npm test`, then `npm run build`: run it before you push |
+| `npm test` | unit tests; integration tests too with `TEST_DATABASE_URL` (shell or `.env`, [Tests](#tests)) |
+| `npm run test:coverage` | the tests with a v8 coverage report in `coverage/` (worker threads: a forked worker could crash under coverage and drop a file) |
+| `npm run lint` | oxlint (`oxlint.json`); a warning fails it |
+| `npm run check` | the release gate (`scripts/check.mjs`): lint, `npm audit --omit=dev`, every test with the integration suite, the build. Stops without `TEST_DATABASE_URL` ([Tests](#tests)): run it before you push |
 | `npm run db:migrate` | applies new migrations (`prisma migrate deploy`) |
 | `npm run db:seed` | loads `prisma/seed.sql` |
 | `npm run dev-admin -- <email>` | a local admin ([Create your admin account](#create-your-admin-account)) |
@@ -385,6 +387,22 @@ The `migrate deploy` line points the Prisma CLI at `site_test` on purpose, so it
 DATABASE MISMATCH warning ([Which database each tool uses](#which-database-each-tool-uses)).
 
 With `DB_PORT` set, use that port in both addresses instead of 5432.
+
+`TEST_DATABASE_URL` can also go in `.env` (`npm test` and `npm run check` read that one name from
+it). Without it the integration tests are **skipped**: `npm test` prints a warning, and
+`npm run check` stops with the steps above. `npm run check -- --allow-no-db` runs the rest with a loud
+warning; it is never a release gate.
+
+`npm run check`, in order: `npm run lint`; `npm audit --omit=dev` (any moderate or worse advisory
+fails it; offline, it says it could not run); `npm test` with a JSON report, checked so that every
+`tests/**/*.test.ts` file reported (a crashed test worker can drop a file while the summary shows
+only passes) and no integration test was skipped; then `npm run build`.
+
+**On Windows, `node store-check.mjs` cannot run npm audit**: it starts `npm` directly, which Windows
+only finds as `npm.cmd`, and reports "npm audit could not run here (offline, or npm is missing)" even
+online. `store-check.mjs` is the template's file (never edit it). Run `npm audit --omit=dev` yourself,
+or `npm run check`, which runs it through npm's own CLI and works on Windows. The store runs the audit
+on every submit either way.
 
 ## Staying up to date
 

@@ -1,0 +1,29 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // The app's linter: `npm run lint` (part of `npm run check`), warnings fail it.
+  // Ignored: the template's own files. src/platform/ is checked byte for byte against the
+  // template, and the template tests and helpers below are replaced by each template upgrade
+  // (docs/agent/upgrade.md): report their warnings upstream, never edit them here.
+  "plugins": ["eslint", "typescript", "unicorn", "react", "oxc"],
+  "ignorePatterns": [
+    "src/platform/**",
+    "src/generated/**",
+    "src/components/payments/EmbeddedCheckout.tsx",
+    "src/lib/checkout-session.ts",
+    "src/lib/account.ts",
+    "tests/checkout-idempotency.test.ts",
+    "tests/integration/auth.test.ts",
+    "tests/integration/account-security.test.ts",
+    "tests/integration/code-sign-in.test.ts",
+    "tests/integration/preview.test.ts"
+  ],
+  "rules": {
+    "react/rules-of-hooks": "error",
+    // React Compiler purity checks: this app does not use the React Compiler, and these flag
+    // ordinary hook code (setState in an effect, a ref read for layout) that React supports.
+    "react/set-state-in-effect": "off",
+    "react/refs": "off",
+    "react/purity": "off",
+    "react/immutability": "off"
+  }
+}

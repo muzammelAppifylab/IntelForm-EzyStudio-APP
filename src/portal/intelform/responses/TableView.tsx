@@ -4,7 +4,6 @@ import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import type {CatalogField, ResponseRow} from '../../../lib/intelform/api-responses';
 import {
   Button,
-  buttonClass,
   Checkbox,
   DataTable,
   EmptyState,

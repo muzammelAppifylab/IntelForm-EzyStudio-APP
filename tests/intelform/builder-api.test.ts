@@ -158,7 +158,7 @@ describe('publish checks', () => {
     const blocked = publishCheck(normalizeDraft(draft([email])), settings);
     expect(blocked.ok).toBe(false);
     if (!blocked.ok) {
-      expect((blocked.error.extra?.issues as {code: string}[]).map(i => i.code)).toContain('one_per_email');
+      expect((blocked.error.extra!.issues as {code: string}[]).map(i => i.code)).toContain('one_per_email');
     }
     const fixed = publishCheck(normalizeDraft(draft([{...email, required: true}])), settings);
     expect(fixed.ok).toBe(true);

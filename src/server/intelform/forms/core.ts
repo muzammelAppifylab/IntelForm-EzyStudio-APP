@@ -41,7 +41,7 @@ export class FormsError extends Error {
       error: this.code,
       message: this.message,
       ...(this.fields ? {fields: this.fields} : {}),
-      ...(this.extra ?? {}),
+      ...this.extra,
     };
   }
 }
