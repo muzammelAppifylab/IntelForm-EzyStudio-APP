@@ -88,6 +88,22 @@ describe('devDatabaseTargets', () => {
     expect(t.devServer.url).toBe(OTHER_URL);
     expect(t.mismatch).toBe(false);
   });
+
+  it('only "true" turns CLOUDFLARE_INCLUDE_PROCESS_ENV on, as in wrangler', () => {
+    const t = devDatabaseTargets({files: {env: `DATABASE_URL=${ENV_URL}`}, shell: {DATABASE_URL: OTHER_URL, CLOUDFLARE_INCLUDE_PROCESS_ENV: '1'}});
+    expect(t.devServer.source).toBe('.env');
+    expect(t.mismatch).toBe(true);
+  });
+
+  it('CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false leaves the dev server with no database, even with the shell included', () => {
+    const t = devDatabaseTargets({
+      files: {env: `DATABASE_URL=${ENV_URL}`},
+      shell: {CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: 'false', CLOUDFLARE_INCLUDE_PROCESS_ENV: 'true', DATABASE_URL: ENV_URL},
+    });
+    expect(t.devServer.url).toBe('');
+    expect(t.mismatch).toBe(true);
+    expect(devDatabaseReport(t, 'prisma').lines.join('\n')).toContain('(none: DATABASE_URL is empty) (from nothing (CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false))');
+  });
 });
 
 describe('checkDevDatabase', () => {

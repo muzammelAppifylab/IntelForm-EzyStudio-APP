@@ -89,11 +89,16 @@ export interface DevDatabaseTargets {
 /** Works out which database the dev server and the Prisma CLI use (see the file comment). */
 export function devDatabaseTargets({files, shell}: DevDatabaseInputs): DevDatabaseTargets {
   const shellUrl = shell.DATABASE_URL;
-  const includeShell = /^(true|1)$/i.test(shell.CLOUDFLARE_INCLUDE_PROCESS_ENV ?? '');
+  // wrangler accepts only "true"/"false" (any case) for these two switches.
+  const includeShell = /^true$/i.test(shell.CLOUDFLARE_INCLUDE_PROCESS_ENV ?? '');
+  const loadDotEnv = !/^false$/i.test(shell.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV ?? '');
 
   let devServer: {url: string; source: string};
   if (files.devVars !== undefined) {
     devServer = {url: fileValue(files.devVars, 'DATABASE_URL') ?? '', source: '.dev.vars'};
+  } else if (!loadDotEnv) {
+    // wrangler then skips the .env files AND the shell: the Worker gets no DATABASE_URL at all.
+    devServer = {url: '', source: 'nothing (CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV=false)'};
   } else {
     const local = fileValue(files.envLocal, 'DATABASE_URL');
     const env = fileValue(files.env, 'DATABASE_URL');
