@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useRef, useState} from 'react';
 import {useQueryClient} from '@tanstack/react-query';
 import {useNavigate} from '@tanstack/react-router';
 
@@ -8,6 +8,7 @@ import {lintLogic, lintOnePerEmail} from '../../../lib/intelform/form/logic';
 import {siteFetch} from '../../../platform/browser';
 import {Button, Icon, Modal, useToast} from '../../ui';
 import {ApiRequestError, errorMessage, OFFLINE_MESSAGE} from '../lib/api';
+import {nearestEnabledControl, restoreFocusIfLost} from '../lib/focus';
 import {fieldName} from './ops';
 import {useBuilder, useBuilderStore} from './store';
 
@@ -112,6 +113,7 @@ export function PublishButton() {
   const draft = useBuilder(s => s.doc.draft);
   const [busy, setBusy] = useState(false);
   const [problems, setProblems] = useState<PublishProblem[] | null>(null);
+  const button = useRef<HTMLButtonElement | null>(null);
 
   const upToDate = status !== 'draft' && !hasUnpublished && saveStatus === 'saved';
 
@@ -142,6 +144,10 @@ export function PublishButton() {
       else toast.danger(errorMessage(err));
     } finally {
       setBusy(false);
+      // The button is disabled while publishing (and stays disabled as "Published"), which drops
+      // focus to <body>: put it back on the button, or the nearest enabled header control.
+      const el = button.current;
+      restoreFocusIfLost(() => nearestEnabledControl(el, el?.closest('.if-head-end') ?? el?.parentElement ?? null));
     }
   }
 
@@ -157,7 +163,16 @@ export function PublishButton() {
 
   return (
     <>
-      <Button icon="rocket" onClick={() => void publish()} pending={busy} pendingLabel="Publishing…" disabled={upToDate} size="sm">
+      <Button
+        icon="rocket"
+        onClick={event => {
+          button.current = event.currentTarget;
+          void publish();
+        }}
+        pending={busy}
+        pendingLabel="Publishing…"
+        disabled={upToDate}
+        size="sm">
         {upToDate ? 'Published' : status === 'draft' ? 'Publish' : 'Publish changes'}
       </Button>
       <Modal

@@ -5,6 +5,7 @@ import {isSortable, useSortable} from '@dnd-kit/react/sortable';
 import {newOptionId} from '../../../lib/intelform/form/definition';
 import {Button, Icon, IconButton, Modal, Spinner, useToast} from '../../ui';
 import {errorMessage} from '../lib/api';
+import {DROP_FOCUS_FRAMES, restoreFocusIfLost} from '../lib/focus';
 import {cn} from '../lib/utils';
 import {checkUpload, uploadImage} from './api';
 import './build/controls.css';
@@ -91,9 +92,13 @@ export function OptionsEditor<O extends EditableOption>({options, onChange, read
         onDragStart={() => document.documentElement.setAttribute('data-if-dragging', '')}
         onDragEnd={event => {
           document.documentElement.removeAttribute('data-if-dragging');
-          if (event.canceled) return;
           const {source} = event.operation;
-          if (isSortable(source)) move(source.initialIndex, source.index);
+          if (!isSortable(source)) return;
+          // Sorting moves the row's DOM node, dropping focus to <body> in a keyboard drag: back to its handle.
+          const at = event.canceled ? source.initialIndex : source.index;
+          restoreFocusIfLost(() => listRef.current?.querySelectorAll<HTMLElement>('.if-drag-handle')[at], {frames: DROP_FOCUS_FRAMES});
+          if (event.canceled) return;
+          move(source.initialIndex, source.index);
         }}>
         <ol ref={listRef} className="if-options-list" aria-label={`Options for ${fieldName}`}>
           {options.map((o, i) => (
