@@ -60,16 +60,26 @@ export function publishFailure(status: number, body: unknown): PublishBlocked | 
   return new ApiRequestError(status, {code, message});
 }
 
+/** A fresh Idempotency-Key for one Publish click (the server accepts 16-64 of [A-Za-z0-9_-]). */
+export function newPublishKey(): string {
+  return `publish-${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+/** The request for one publish: the key makes a retried or doubled request publish once. */
+export function publishRequest(key: string): RequestInit {
+  return {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {'Content-Type': 'application/json', 'Idempotency-Key': key},
+    body: '{}',
+  };
+}
+
 /** POST /site-api/forms/:id/publish, keeping the 422 issue list (`api()` drops extra keys). */
-async function postPublish(id: string): Promise<PublishResponse> {
+async function postPublish(id: string, key: string): Promise<PublishResponse> {
   let res: Response;
   try {
-    res = await siteFetch(`/site-api/forms/${encodeURIComponent(id)}/publish`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {'Content-Type': 'application/json'},
-      body: '{}',
-    });
+    res = await siteFetch(`/site-api/forms/${encodeURIComponent(id)}/publish`, publishRequest(key));
   } catch {
     throw new ApiRequestError(0, {code: 'offline', message: OFFLINE_MESSAGE});
   }
@@ -115,7 +125,7 @@ export function PublishButton() {
       if (store.queue.dirty)
         throw new Error(store.getState().save.error?.message ?? 'Your latest changes couldn’t be saved, so nothing was published. Try again.');
       const wasLive = store.getState().meta.publishedVersion !== null;
-      const res = await postPublish(store.getState().meta.id);
+      const res = await postPublish(store.getState().meta.id, newPublishKey());
       // Publishing moves the revision on; rebase so the next autosave isn't seen as a conflict.
       store.queue.rebase(res.revision);
       store.getState().setMeta({

@@ -11,7 +11,8 @@ import {parseNumberValue} from '../../src/portal/intelform/builder/condition-inp
 import {numberError} from '../../src/portal/intelform/builder/controls';
 import {countrySummary} from '../../src/portal/intelform/builder/CountryPicker';
 import {MAX_OPTIONS, moveOption, pasteOptionLines, splitLines} from '../../src/portal/intelform/builder/OptionsEditor';
-import {PublishBlocked, publishFailure, publishProblems} from '../../src/portal/intelform/builder/PublishButton';
+import {IDEMPOTENCY_KEY} from '../../src/platform/idempotency';
+import {newPublishKey, PublishBlocked, publishFailure, publishProblems, publishRequest} from '../../src/portal/intelform/builder/PublishButton';
 import {TABS, tabFromPath} from '../../src/portal/intelform/builder/tabs';
 import {ApiRequestError} from '../../src/portal/intelform/lib/api';
 import {ICON_NAMES} from '../../src/portal/ui';
@@ -87,6 +88,17 @@ describe('publish checks', () => {
     expect(err.message).toBe('Not allowed');
     expect((err as ApiRequestError).status).toBe(403);
     expect(publishFailure(500, null).message).toBe('Publishing failed. Try again.');
+  });
+
+  it('sends a valid Idempotency-Key, a new one per click (F-008)', () => {
+    const a = newPublishKey();
+    const b = newPublishKey();
+    expect(a).toMatch(IDEMPOTENCY_KEY);
+    expect(b).toMatch(IDEMPOTENCY_KEY);
+    expect(a).not.toBe(b);
+    const init = publishRequest(a);
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get('idempotency-key')).toBe(a);
   });
 });
 

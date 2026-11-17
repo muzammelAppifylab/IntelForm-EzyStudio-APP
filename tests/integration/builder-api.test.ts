@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
+import {renderToken} from '../../src/server/intelform/respondent/tokens';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -91,6 +92,31 @@ describe.skipIf(!DATABASE_URL)('builder API (integration, real Postgres)', () =>
     expect((versions.json.versions as {version: number; live: boolean}[])[0]).toMatchObject({version: 1, live: true});
     expect((await viewer.get(path('/versions/1'))).status).toBe(200);
     expect((await viewer.get(path('/versions/9'))).status).toBe(404);
+  });
+
+  it('concurrent publishes of one change write one version, and mid-form respondents still submit (F-008)', async () => {
+    const field = (label: string) => ({layout: 'all_at_once', fields: [{id: 'f_name0001', type: 'short_text', label, props: {}}]});
+    await patch(editor, {draft: field('Name')});
+    const v1 = await editor.post(path('/publish'));
+    expect(v1.json).toMatchObject({version: 1, status: 'live'});
+    const v1Id = (await db.formVersion.findFirstOrThrow({where: {formId, version: 1}, select: {id: true}})).id;
+    // A respondent opens version 1 now and submits after the owner republished.
+    const token = await renderToken('integration-test-secret-0123456789-abcdefghijklmnop', formId, Date.now() - 5000);
+
+    expect((await patch(editor, {draft: field('Your name')})).json.hasUnpublished).toBe(true);
+    // Two teammates, two tabs, retries: ten publishes of the same change at once, without keys.
+    const replies = await Promise.all(Array.from({length: 10}, (_, i) => (i % 2 ? other : editor).post(path('/publish'))));
+    expect(replies.map(r => r.status)).toEqual(Array(10).fill(200));
+    expect(replies.map(r => r.json.version)).toEqual(Array(10).fill(2));
+    expect(await db.formVersion.count({where: {formId}})).toBe(2);
+
+    const submit = await new Browser(app).post('/site-api/public/forms/first-form/responses', {
+      formVersionId: v1Id,
+      answers: {f_name0001: 'Ada'},
+      renderToken: token,
+      startedAt: Date.now() - 4000,
+    });
+    expect(submit.status).toBe(200);
   });
 
   it('presence: editors are seen, viewers are not', async () => {

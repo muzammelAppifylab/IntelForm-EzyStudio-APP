@@ -13,8 +13,7 @@ interface PublishRow {
   revision: number;
   response_count: number;
   has_unpublished: boolean;
-  published_version: number | null;
-  published_at: Date | null;
+  published_version_id: string | null;
 }
 
 /**
@@ -30,25 +29,35 @@ interface PublishRow {
  * `logic_issues` with `issues`), which rolls the transaction back.
  */
 export async function publishInTx(tx: Tx, formId: string, userId: number): Promise<PublishResponse> {
+  // Lock the form row ON ITS OWN first. A locking SELECT that also joins form_versions is not
+  // safe: under READ COMMITTED a publish that waited for the lock re-reads the form row (now
+  // pointing at the version the other publish just wrote) but re-checks the join against its old
+  // snapshot, so the join comes back empty, the "nothing changed" check fails and it writes an
+  // identical duplicate version (pushing mid-form respondents past the one-version grace).
   const [row] = await tx.$queryRaw<PublishRow[]>`
-    SELECT f.draft, f.theme, f.settings, f.status, f.revision, f.response_count, f.has_unpublished,
-      v.version AS published_version, v.published_at
-    FROM forms f LEFT JOIN form_versions v ON v.id = f.published_version_id
-    WHERE f.id = ${formId}::uuid
-    FOR UPDATE OF f`;
+    SELECT draft, theme, settings, status, revision, response_count, has_unpublished,
+      published_version_id::text AS published_version_id
+    FROM forms
+    WHERE id = ${formId}::uuid
+    FOR UPDATE`;
   if (!row) throw formGone();
 
   const checked = publishCheck(row.draft, row.settings);
   if (!checked.ok) throw checked.error;
 
-  if (row.published_version !== null && row.published_at && !row.has_unpublished) {
-    return {
-      version: row.published_version,
-      publishedAt: new Date(row.published_at).toISOString(),
-      status: row.status,
-      revision: row.revision,
-      responses: row.response_count,
-    };
+  // Holding the lock, a new statement sees the latest committed version.
+  if (row.published_version_id !== null && !row.has_unpublished) {
+    const [live] = await tx.$queryRaw<{version: number; published_at: Date}[]>`
+      SELECT version, published_at FROM form_versions WHERE id = ${row.published_version_id}::uuid`;
+    if (live) {
+      return {
+        version: live.version,
+        publishedAt: new Date(live.published_at).toISOString(),
+        status: row.status,
+        revision: row.revision,
+        responses: row.response_count,
+      };
+    }
   }
 
   // A closed form stays closed: publishing a fix must not reopen it by surprise. Reopen does that.
