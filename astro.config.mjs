@@ -2,6 +2,11 @@ import cloudflare from '@astrojs/cloudflare';
 import react from '@astrojs/react';
 import {defineConfig} from 'astro/config';
 
+import {checkDevDatabase} from './src/lib/dev-database-target.ts';
+
+// The shell's variables as they were before anything loaded a `.env` into `process.env`.
+const SHELL_ENV = {...process.env};
+
 // Pages render on request on a Cloudflare Worker (marketing and account pages
 // are prerendered). Beside them the same Worker serves the portal
 // (`/dashboard/*`, a React app) and the Site API (`/site-api/*`, a Hono app).
@@ -33,6 +38,20 @@ export default defineConfig({
   }),
   integrations: [
     react(),
+    {
+      // LOCAL DEVELOPMENT (F-032): the dev server's Worker reads DATABASE_URL from `.dev.vars`
+      // or `.env`, never from the shell, while the Prisma CLI and dev-admin prefer the shell. Say
+      // which database this dev server uses, and warn when the shell points somewhere else.
+      name: 'dev-database-target',
+      hooks: {
+        'astro:config:setup': ({command, logger}) => {
+          if (command !== 'dev') return;
+          const report = checkDevDatabase(process.cwd(), SHELL_ENV, 'dev-server');
+          if (!report) return;
+          for (const line of report.lines) (report.level === 'warn' ? logger.warn : logger.info).call(logger, line);
+        },
+      },
+    },
     {
       // `npm run build` while the Preview's dev server runs in the same folder
       // (the editor) must not rewrite the dev server's dependency cache under
