@@ -227,6 +227,27 @@ npm run dev                       # http://localhost:4321
 If `npm run dev` returns to the prompt with "Dev server running at…", it runs in the background:
 `npx astro dev logs` shows its output, `npx astro dev stop` stops it.
 
+### Which database each tool uses
+
+The dev server and the command-line tools read `DATABASE_URL` from different places:
+
+| Tool | Reads `DATABASE_URL` from |
+| --- | --- |
+| `npm run dev` / `npx astro dev` (the site itself) | `.dev.vars` if that file exists, else `.env` (then `.env.local`). **Never the shell.** |
+| `npm run db:migrate`, `npm run db:seed`, `npx prisma …`, `npm run dev-admin` | the shell first, else `.env` |
+
+So `DATABASE_URL=…/other npm run dev` still reads, writes and **deletes** in the `.env`
+database, while `DATABASE_URL=…/other npm run db:migrate` changes `other`. To make the site
+use another database, change `DATABASE_URL` in `.env` and restart `npm run dev`.
+
+Both say which database they use, by name, host and port (never the user or password): the dev
+server prints `Dev server database: "site" on localhost:5432 (from .env)` as it starts, and
+`db:migrate`, `db:seed` and `prisma studio` print `Prisma database: …`. When a `DATABASE_URL`
+set in the shell reaches a different database than the dev server's, both print a
+**DATABASE MISMATCH** warning naming the two. Pointing the Prisma CLI at the test database on
+purpose ([Tests](#tests)) prints it too: that is expected there. (`src/lib/dev-database-target.ts`,
+used by `astro.config.mjs` and `prisma.config.ts`.)
+
 ## Local development mode
 
 There is no `SITE_KEY` on your computer, so nothing can be emailed. While `npm run dev` runs with
@@ -358,6 +379,9 @@ DATABASE_URL=postgresql://postgres:dev@localhost:5432/site_test npx prisma migra
 TEST_DATABASE_URL=postgresql://postgres:dev@localhost:5432/site_test npm test
 ```
 
+The `migrate deploy` line points the Prisma CLI at `site_test` on purpose, so it prints a
+DATABASE MISMATCH warning ([Which database each tool uses](#which-database-each-tool-uses)).
+
 With `DB_PORT` set, use that port in both addresses instead of 5432.
 
 ## Staying up to date
@@ -415,6 +439,7 @@ of its own files (`git checkout --theirs <file>`), then commit.
 | no new code when you sign up again with the same address | account emails to one address are limited, so a repeat within a few minutes sends none | use the code printed the first time (it stays valid for a while), wait a few minutes, or sign up with another address |
 | `dev-admin` says `no account for …` | that address hasn't finished signing up in this database | sign up and type the code first |
 | `dev-admin` says `refused (local development only)` | `SITE_KEY`, `SITE_PREVIEW` or `NODE_ENV=production` is set, or `DATABASE_URL` isn't on this computer | empty them in `.env` (it only ever changes a local database) |
+| `DATABASE MISMATCH` when `npm run dev` or a `prisma` command starts | `DATABASE_URL` is set in your shell to another database than the one in `.env`; the dev server ignores the shell | to use that database, put it in `.env` and restart `npm run dev`; otherwise `unset DATABASE_URL` ([Which database each tool uses](#which-database-each-tool-uses)) |
 | `npm run dev` says port 4321 is in use, or opens another port | another dev server is running | use the address it prints, or stop the other one (`npx astro dev stop`) |
 | http://localhost:4321 shows a different project, or sign-up says "This form has expired" | another app already listens on 127.0.0.1:4321, so this one only got the IPv6 address (`[::1]:4321`) and your browser reaches the other app | stop the other app, or run this one on a free port: `npx astro dev stop && npx astro dev --port 4322` |
 | the dashboard shows nothing for admins after `dev-admin` | the page was open before | reload `/dashboard/` |
@@ -435,6 +460,11 @@ Postgres connection string.
 
 **How do I start over?** `docker compose down -v`, `docker compose up -d --wait db`,
 `npm run setup`.
+
+**What licence are the fonts under?** The theme fonts in `public/fonts/` are redistributed
+under the SIL Open Font License 1.1: `public/fonts/OFL.txt` (served at `/fonts/OFL.txt`) has
+each family's copyright line and the licence text. Adding or replacing a font: add its family,
+files and copyright line there (`tests/intelform/font-licences.test.ts` checks every file).
 
 **Can I deploy it somewhere else?** It is built to run on the platform it came from (one Worker,
 its database, its emails); there is no other deploy config.
