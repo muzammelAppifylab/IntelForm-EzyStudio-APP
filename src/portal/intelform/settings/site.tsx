@@ -58,25 +58,23 @@ function SearchGroup({view}: {view: AppSettingsResponse}) {
       />
       <Field id="as-contact-email" label="Contact email" optional hint="Shown on the public site so visitors can reach you. Leave empty to hide it." error={errors.fields.contactEmail}>
         <input
-          id="as-contact-email"
+          {...errors.control('contactEmail', 'as-contact-email', {hint: true})}
           type="email"
           value={v.contactEmail}
           placeholder="hello@example.com"
-          aria-invalid={errors.fields.contactEmail ? true : undefined}
           onChange={e => set('contactEmail', e.target.value)}
         />
       </Field>
       <Field id="as-description" label="Description" optional hint="For search results and link previews. About 150 characters works best." error={errors.fields.description}>
         <textarea
-          id="as-description"
+          {...errors.control('description', 'as-description', {hint: true})}
           rows={2}
           maxLength={300}
           value={v.description}
-          aria-invalid={errors.fields.description ? true : undefined}
           onChange={e => set('description', e.target.value)}
         />
       </Field>
-      <ImageUpload label="Social preview image" purpose="og" value={v.ogImage} onChange={url => set('ogImage', url)} error={errors.fields.ogImage} />
+      <ImageUpload label="Social preview image" purpose="og" value={v.ogImage} onChange={url => set('ogImage', url)} error={errors.fields.ogImage} controlId={errors.control('ogImage', 'as-og-image').id} />
     </SettingsCard>
   );
 }
@@ -117,19 +115,17 @@ function LegalGroup({view}: {view: AppSettingsResponse}) {
       formError={errors.form}>
       <Field id="as-privacy" label="Privacy policy" optional error={errors.fields.privacy}>
         <textarea
-          id="as-privacy"
+          {...errors.control('privacy', 'as-privacy')}
           rows={8}
           value={v.privacy}
-          aria-invalid={errors.fields.privacy ? true : undefined}
           onChange={e => setV(o => ({...o, privacy: e.target.value}))}
         />
       </Field>
       <Field id="as-terms" label="Terms" optional error={errors.fields.terms}>
         <textarea
-          id="as-terms"
+          {...errors.control('terms', 'as-terms')}
           rows={8}
           value={v.terms}
-          aria-invalid={errors.fields.terms ? true : undefined}
           onChange={e => setV(o => ({...o, terms: e.target.value}))}
         />
       </Field>

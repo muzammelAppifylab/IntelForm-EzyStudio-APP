@@ -130,7 +130,7 @@ function ProfileSection({viewer}: {viewer: Viewer}) {
         </div>
       </div>
       <form className="form-stack" noValidate onSubmit={profile.submit(values => saveProfile.mutate({name: values.name}))}>
-        <Field id="f-name" label="Your name" error={profile.error('name')}>
+        <Field id={profile.id('name')} label="Your name" error={profile.error('name')}>
           <input {...profile.field('name')} autoComplete="name" />
         </Field>
         {saveProfile.error && !(saveProfile.error instanceof ApiError && saveProfile.error.fields.name) && (
@@ -156,7 +156,8 @@ function EmailSection({viewer}: {viewer: Viewer}) {
   const needsPassword = usePasswordNeeded();
   const form = useForm(
     {email: '', password: ''},
-    {email: AUTH_RULES.email, password: needsPassword ? [rules.required('Enter your current password.')] : []}
+    {email: AUTH_RULES.email, password: needsPassword ? [rules.required('Enter your current password.')] : []},
+    {idPrefix: 'f-changeEmail-'}
   );
   const [sent, setSent] = useState<string | null>(null);
   const change = useMutation({
@@ -178,11 +179,11 @@ function EmailSection({viewer}: {viewer: Viewer}) {
           setSent(null);
           change.mutate({email: values.email, password: values.password});
         })}>
-        <Field id="f-newEmail" label="New email address" error={form.error('email')}>
+        <Field id={form.id('email')} label="New email address" error={form.error('email')}>
           <input {...form.field('email')} type="email" autoComplete="email" inputMode="email" />
         </Field>
         {needsPassword && (
-          <Field id="f-emailPassword" label="Current password" error={form.error('password')}>
+          <Field id={form.id('password')} label="Current password" error={form.error('password')}>
             <PasswordInput {...form.field('password')} autoComplete="current-password" />
           </Field>
         )}
@@ -235,12 +236,12 @@ function PasswordSection({viewer}: {viewer: Viewer}) {
             changePassword.mutate({currentPassword: values.currentPassword, newPassword: values.newPassword});
           })(event);
         }}>
-        <Field id="f-currentPassword" label="Current password" error={password.error('currentPassword')}>
+        <Field id={password.id('currentPassword')} label="Current password" error={password.error('currentPassword')}>
           <PasswordInput {...password.field('currentPassword')} autoComplete="current-password" />
         </Field>
         <div className="form-grid">
           <div className="pw-field">
-            <Field id="f-newPassword" label="New password" error={password.error('newPassword')}>
+            <Field id={password.id('newPassword')} label="New password" error={password.error('newPassword')}>
               <PasswordInput
                 {...password.field('newPassword')}
                 aria-describedby={`${password.field('newPassword')['aria-describedby']} f-newPassword-checks`}
@@ -254,7 +255,7 @@ function PasswordSection({viewer}: {viewer: Viewer}) {
             />
           </div>
           <div className="pw-field">
-            <Field id="f-confirm" label="Type it again" error={password.error('confirm')}>
+            <Field id={password.id('confirm')} label="Type it again" error={password.error('confirm')}>
               <PasswordInput
                 {...password.field('confirm')}
                 aria-describedby={`${password.field('confirm')['aria-describedby']} f-confirm-checks`}
@@ -288,8 +289,12 @@ function TwoFactorSection({codes, setCodes}: {codes: string[] | null; setCodes: 
   const status = useQuery(twoFactorQuery);
   const needsPassword = status.data?.hasPassword ?? true;
   const [setup, setSetup] = useState<{secret: string; uri: string; qr: string} | null>(null);
-  const passwordForm = useForm({password: ''}, {password: needsPassword ? [rules.required('Enter your current password.')] : []});
-  const codeForm = useForm({code: ''}, {code: [rules.required('Enter the 6-digit code from your app.')]});
+  const passwordForm = useForm(
+    {password: ''},
+    {password: needsPassword ? [rules.required('Enter your current password.')] : []},
+    {idPrefix: 'f-2fa-'}
+  );
+  const codeForm = useForm({code: ''}, {code: [rules.required('Enter the 6-digit code from your app.')]}, {idPrefix: 'f-2fa-'});
   const refresh = () => queryClient.invalidateQueries({queryKey: ['account', 'two-factor']});
 
   const start = useMutation({
@@ -348,7 +353,7 @@ function TwoFactorSection({codes, setCodes}: {codes: string[] | null; setCodes: 
   }
 
   const passwordField = needsPassword && (
-    <Field id="f-2faPassword" label="Current password" error={passwordForm.error('password')}>
+    <Field id={passwordForm.id('password')} label="Current password" error={passwordForm.error('password')}>
       <PasswordInput {...passwordForm.field('password')} autoComplete="current-password" />
     </Field>
   );
@@ -426,7 +431,7 @@ function TwoFactorSection({codes, setCodes}: {codes: string[] | null; setCodes: 
             <p className="muted account-secret">
               Can't scan? Enter this key in the app: <code>{setup.secret}</code>
             </p>
-            <Field id="f-2faCode" label="6-digit code" error={codeForm.error('code')}>
+            <Field id={codeForm.id('code')} label="6-digit code" error={codeForm.error('code')}>
               <input {...codeForm.field('code')} autoComplete="one-time-code" inputMode="numeric" maxLength={8} />
             </Field>
             {formError(enable.error)}
@@ -558,7 +563,8 @@ function DeleteSection() {
     {
       password: needsPassword ? [rules.required('Enter your current password.')] : [],
       confirm: [rules.required('Type DELETE to confirm.')],
-    }
+    },
+    {idPrefix: 'f-delete-'}
   );
   const remove = useMutation({
     mutationFn: (values: {password: string; confirm: string}) => read(api.auth['delete-account'].$post({json: values})),
@@ -572,11 +578,11 @@ function DeleteSection() {
         noValidate
         onSubmit={form.submit(values => remove.mutate({password: values.password, confirm: values.confirm.trim()}))}>
         {needsPassword && (
-          <Field id="f-deletePassword" label="Current password" error={form.error('password')}>
+          <Field id={form.id('password')} label="Current password" error={form.error('password')}>
             <PasswordInput {...form.field('password')} autoComplete="current-password" />
           </Field>
         )}
-        <Field id="f-deleteConfirm" label="Type DELETE to confirm" error={form.error('confirm')}>
+        <Field id={form.id('confirm')} label="Type DELETE to confirm" error={form.error('confirm')}>
           <input {...form.field('confirm')} autoComplete="off" spellCheck={false} />
         </Field>
         {formError(remove.error)}

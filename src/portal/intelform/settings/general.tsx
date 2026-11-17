@@ -11,7 +11,7 @@ import {
 } from '../../../lib/intelform/settings-app';
 import {type AppSettingsResponse, formatExample} from '../../../server/intelform/settings/view';
 import {Button, Combobox, Field, RadioCards, Select, useToast} from '../../ui';
-import {useFormErrors} from '../lib/form-errors';
+import {comboboxControl, useFormErrors} from '../lib/form-errors';
 import {settingsThemesQuery, useSaveAppSettings} from '../queries/app-settings';
 import {ImageUpload, same, SettingsCard} from './bits';
 
@@ -61,31 +61,29 @@ export function GeneralGroup({view}: {view: AppSettingsResponse}) {
       formError={errors.form}>
       <Field id="as-app-name" label="App name" hint="Shown in the sidebar, on the public site and in emails." error={errors.fields.appName}>
         <input
-          id="as-app-name"
+          {...errors.control('appName', 'as-app-name', {hint: true})}
           value={v.appName}
           maxLength={60}
-          aria-invalid={errors.fields.appName ? true : undefined}
           onChange={e => set('appName', e.target.value)}
         />
       </Field>
       <div className="settings-two-up">
-        <ImageUpload label="Logo" purpose="logo" shape="square" value={v.logoUrl} onChange={url => set('logoUrl', url)} error={errors.fields.logoUrl} />
-        <ImageUpload label="Favicon" purpose="favicon" shape="square" value={v.faviconUrl} onChange={url => set('faviconUrl', url)} error={errors.fields.faviconUrl} />
+        <ImageUpload label="Logo" purpose="logo" shape="square" value={v.logoUrl} onChange={url => set('logoUrl', url)} error={errors.fields.logoUrl} controlId={errors.control('logoUrl', 'as-logo').id} />
+        <ImageUpload label="Favicon" purpose="favicon" shape="square" value={v.faviconUrl} onChange={url => set('faviconUrl', url)} error={errors.fields.faviconUrl} controlId={errors.control('faviconUrl', 'as-favicon').id} />
       </div>
       <Field id="as-timezone" label="Default time zone" hint="Used for close dates and response times." error={errors.fields.timezone}>
         <Combobox
-          id="as-timezone"
+          {...comboboxControl(errors.control('timezone', 'as-timezone', {hint: true}))}
           value={v.timezone}
           onChange={tz => set('timezone', tz)}
           options={zones}
           searchLabel="Search time zones"
           emptyText="No time zone matches."
-          invalid={Boolean(errors.fields.timezone)}
         />
       </Field>
       <Field id="as-date-format" label="Date format" error={errors.fields.dateFormat}>
         <Select
-          id="as-date-format"
+          {...errors.control('dateFormat', 'as-date-format')}
           value={v.dateFormat}
           onChange={e => set('dateFormat', e.target.value as DateFormat)}
           options={DATE_FORMATS.map(f => ({value: f, label: `${formatExample(f)} (${f})`}))}
@@ -158,13 +156,12 @@ export function BrandingGroup({view}: {view: AppSettingsResponse}) {
             onChange={e => set('accentColor', e.target.value.toUpperCase())}
           />
           <input
-            id="as-accent"
+            {...errors.control('accentColor', 'as-accent', {hint: true})}
             className="settings-color-hex"
             value={v.accentColor ?? ''}
             placeholder="#C9C0FF"
             maxLength={7}
             spellCheck={false}
-            aria-invalid={errors.fields.accentColor ? true : undefined}
             onChange={e => set('accentColor', e.target.value.trim() ? e.target.value.trim() : null)}
           />
           {v.accentColor && (
@@ -188,13 +185,12 @@ export function BrandingGroup({view}: {view: AppSettingsResponse}) {
         hint="Each form can still change its theme in the Design tab."
         error={errors.fields.defaultThemeId}>
         <Combobox
-          id="as-default-theme"
+          {...comboboxControl(errors.control('defaultThemeId', 'as-default-theme', {hint: true}))}
           value={v.defaultThemeId ?? DEFAULT_THEME}
           onChange={id => set('defaultThemeId', id === DEFAULT_THEME ? null : id)}
           options={themeOptions}
           searchLabel="Search themes"
           emptyText="No theme matches."
-          invalid={Boolean(errors.fields.defaultThemeId)}
         />
       </Field>
     </SettingsCard>

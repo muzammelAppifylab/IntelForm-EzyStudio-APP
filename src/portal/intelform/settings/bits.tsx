@@ -77,6 +77,7 @@ export function ImageUpload({
   disabled,
   shape = 'wide',
   error,
+  controlId,
 }: {
   label: string;
   description?: string;
@@ -86,8 +87,14 @@ export function ImageUpload({
   disabled?: boolean;
   shape?: 'wide' | 'square';
   error?: string;
+  /**
+   * The Upload button's id (from `errors.control(name, id)`): the hint / error below are
+   * tied to it by `aria-describedby`, and a failed save can focus it (F-042).
+   */
+  controlId?: string;
 }) {
-  const id = useId();
+  const auto = useId();
+  const id = controlId ?? auto;
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -118,7 +125,16 @@ export function ImageUpload({
           {value ? <img src={value} alt="" /> : <Icon name="image-plus" size={20} />}
         </div>
         <div className="settings-image-buttons">
-          <Button size="sm" variant="secondary" icon="upload" pending={busy} pendingLabel="Uploading…" disabled={disabled} onClick={() => input.current?.click()}>
+          <Button
+            id={controlId}
+            size="sm"
+            variant="secondary"
+            icon="upload"
+            pending={busy}
+            pendingLabel="Uploading…"
+            disabled={disabled}
+            aria-describedby={shown ? `${id}-error` : `${id}-hint`}
+            onClick={() => input.current?.click()}>
             {value ? 'Replace' : 'Upload'}
             <span className="visually-hidden"> {label.toLowerCase()}</span>
           </Button>
@@ -130,9 +146,13 @@ export function ImageUpload({
         </div>
         <input ref={input} type="file" hidden accept={UPLOAD_TYPES[purpose].join(',')} onChange={pick} />
       </div>
-      {!shown && <p className="field-hint">{description ?? UPLOAD_HELP[purpose]}</p>}
+      {!shown && (
+        <p className="field-hint" id={`${id}-hint`}>
+          {description ?? UPLOAD_HELP[purpose]}
+        </p>
+      )}
       {shown && (
-        <p className="field-error" role="alert">
+        <p className="field-error" id={`${id}-error`} role="alert">
           {shown}
         </p>
       )}

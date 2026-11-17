@@ -43,7 +43,6 @@ export function DataGroup({view}: {view: AppSettingsResponse}) {
   const initialDays = view.data.retentionDays;
   const [on, setOn] = useState(initialDays !== null);
   const [days, setDays] = useState(initialDays === null ? '365' : String(initialDays));
-  const [missing, setMissing] = useState(false);
   const errors = useFormErrors();
   const save = useSaveAppSettings();
   const toast = useToast();
@@ -51,8 +50,7 @@ export function DataGroup({view}: {view: AppSettingsResponse}) {
   const dirty = value !== initialDays;
 
   function submit() {
-    setMissing(value === 'missing');
-    if (value === 'missing') return errors.clear();
+    if (value === 'missing') return errors.setFieldErrors({retentionDays: 'Enter a number of days'});
     const data = errors.validate(dataSettingsInput, {retentionDays: value});
     if (!data) return;
     save.mutate(
@@ -83,13 +81,12 @@ export function DataGroup({view}: {view: AppSettingsResponse}) {
         onChange={setOn}
       />
       {on && (
-        <Field id="as-retention" label="Delete responses older than" hint="In days, from 1 to 3650." error={missing ? 'Enter a number of days' : errors.fields.retentionDays}>
+        <Field id="as-retention" label="Delete responses older than" hint="In days, from 1 to 3650." error={errors.fields.retentionDays}>
           <div className="settings-days">
             <input
-              id="as-retention"
+              {...errors.control('retentionDays', 'as-retention', {hint: true})}
               inputMode="numeric"
               value={days}
-              aria-invalid={missing || errors.fields.retentionDays ? true : undefined}
               onChange={e => setDays(e.target.value.replace(/\D/g, ''))}
             />
             <span>days</span>

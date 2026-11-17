@@ -121,8 +121,14 @@ type Errors<V extends Values> = Partial<Record<keyof V, string>>;
  * - `submit(onValid)` validates everything, shows every error, focuses the
  *   first wrong field, and only then calls `onValid`.
  * - `setServerErrors` puts the server's answer on the fields it names.
+ * - Each control's id is `<idPrefix><name>` (default prefix `f-`). Give the
+ *   `Field` that same id with `form.id(name)` so its label names the control;
+ *   when two forms on one screen share a field name, give each its own
+ *   `idPrefix` so no id repeats.
  */
-export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
+export function useForm<V extends Values>(initial: V, schema: Schema<V>, options: {idPrefix?: string} = {}) {
+  const idPrefix = options.idPrefix ?? 'f-';
+  const idOf = (name: keyof V & string) => `${idPrefix}${name}`;
   const [values, setValues] = useState<V>(initial);
   const [touched, setTouched] = useState<Partial<Record<keyof V, boolean>>>({});
   const [submitted, setSubmitted] = useState(false);
@@ -149,7 +155,7 @@ export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
   /** Everything a text input, textarea or select needs. */
   const field = (name: keyof V & string) => {
     const error = errorOf(name);
-    const id = `f-${name}`;
+    const id = idOf(name);
     return {
       id,
       name,
@@ -186,6 +192,8 @@ export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
     values,
     set,
     field,
+    /** The id `field(name)` gives its control: pass it to the `Field` around it. */
+    id: idOf,
     error: errorOf,
     submit,
     reset,
