@@ -138,6 +138,29 @@ describe.skipIf(!DATABASE_URL)('exports lifecycle (integration, real Postgres)',
     await expectStopped(all);
   });
 
+  it('a delete that removes nothing leaves every export downloadable', async () => {
+    const rid = await respond(survey, 'ada@example.com', 1);
+    const contacts = await startExport({kind: 'contacts', query: {tz: 'UTC'}});
+    const surveyCsv = await startExport({kind: 'responses', formId: survey.id, query: {tz: 'UTC'}});
+    const all = await startExport({kind: 'all'});
+    // Retention on, but nothing is past the period: its DELETE statement removes no rows.
+    await db.intelformSettings.upsert({where: {id: 1}, create: {id: 1, retentionDays: 30}, update: {retentionDays: 30}});
+    try {
+      expect((await applyRetention(db as never)).responses).toBe(0);
+    } finally {
+      await db.intelformSettings.updateMany({data: {retentionDays: null}});
+    }
+    // Deleting a response id that isn't there, and erasing a contact with no responses.
+    const missing = '00000000-0000-4000-8000-0000000000ff';
+    await db.$executeRaw`DELETE FROM responses WHERE id = ${missing}::uuid`;
+    expect((await owner.post('/site-api/contacts/delete', {keys: ['e:nobody@example.com']})).json).toEqual({contacts: 0, responses: 0});
+    for (const id of [contacts, surveyCsv, all]) {
+      expect((await owner.get(`/site-api/exports/${id}`)).json).toMatchObject({status: 'ready'});
+      expect((await download(id)).status).toBe(200);
+    }
+    expect(rid).toBeTruthy();
+  });
+
   it('deleting a form stops the contacts and all-responses exports', async () => {
     await respond(survey, 'ada@example.com');
     const contacts = await startExport({kind: 'contacts', query: {tz: 'UTC'}});

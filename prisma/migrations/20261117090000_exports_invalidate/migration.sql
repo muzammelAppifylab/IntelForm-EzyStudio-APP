@@ -16,6 +16,11 @@ LANGUAGE plpgsql AS $$
 DECLARE
   hit uuid[];
 BEGIN
+  -- A statement-level trigger fires even when the DELETE removed nothing (a retention run with
+  -- nothing past the period, an id already gone): then no export changes.
+  IF NOT EXISTS (SELECT 1 FROM gone_exports) THEN
+    RETURN NULL;
+  END IF;
   WITH failed AS (
     UPDATE intelform_exports e SET
       status = 'failed',
