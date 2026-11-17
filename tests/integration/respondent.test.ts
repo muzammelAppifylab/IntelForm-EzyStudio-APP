@@ -5,7 +5,9 @@ import {formDefinition} from '../../src/lib/intelform/form/definition';
 import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {app} from '../../src/server/app';
+import {ipKeyFor} from '../../src/server/intelform/respondent/crypto';
 import {renderToken} from '../../src/server/intelform/respondent/tokens';
+import {UNLOCK_ATTACK_IP_FAILURES, UNLOCK_FORM_FAILURE_LIMIT, UNLOCK_IP_FAILURE_LIMIT} from '../../src/server/routes/public-forms';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
@@ -142,5 +144,69 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     expect((right.json.form as {status: string}).status).toBe('live');
     const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form, {unlockToken: token}));
     expect(res.status).toBe(200);
+  });
+
+  // F-006: 100 wrong passwords from many addresses used to refuse even the RIGHT password for
+  // everyone until the end of the hour.
+  it('wrong passwords from many addresses never lock out a respondent with the right password', async () => {
+    // The failure windows are fixed hours: don't straddle a boundary mid-test.
+    const leftInHour = 3600_000 - (Date.now() % 3600_000);
+    if (leftInHour < 90_000) await new Promise(r => setTimeout(r, leftInHour + 1000));
+    const form = await makeForm({passwordHash: await hashPassword('open sesame')});
+    const unlock = (ip: string, password: string) => new Browser(app, ip).post(`/site-api/public/forms/${form.slug}/unlock`, {password});
+
+    const attack = await Promise.all(
+      Array.from({length: 10}, async (_, i) => {
+        const statuses: number[] = [];
+        for (let n = 0; n < 10; n++) statuses.push((await unlock(`198.51.100.${10 + i}`, `guess-${i}-${n}`)).status);
+        return statuses;
+      })
+    );
+    expect(attack.flat().every(s => s === 422)).toBe(true);
+
+    // A new address with the right password gets in.
+    const right = await unlock('198.51.100.200', 'open sesame');
+    expect(right.status).toBe(200);
+    expect(typeof right.json.token).toBe('string');
+    expect((right.json.form as {status: string}).status).toBe('live');
+
+    // An 11th address may still try, but only a few wrong passwords while the form is under attack.
+    const eleventh: number[] = [];
+    for (let n = 0; n < 4; n++) eleventh.push((await unlock('198.51.100.201', `more-${n}`)).status);
+    expect(eleventh).toEqual([422, 422, 422, 429]);
+
+    // An attacking address is out of tries for the hour, even with the right password.
+    expect((await unlock('198.51.100.10', 'open sesame')).status).toBe(429);
+  }, 180_000);
+  // F-006: right passwords never use up a caller's failure budget, and the hourly per-caller cap
+  // holds in normal times too (counters seeded directly so the test needn't wait out the minute).
+  it('form password: successes cost nothing under attack; each caller has an hourly failure cap', async () => {
+    const leftInHour = 3600_000 - (Date.now() % 3600_000);
+    if (leftInHour < 60_000) await new Promise(r => setTimeout(r, leftInHour + 1000));
+    const form = await makeForm({passwordHash: await hashPassword('open sesame')});
+    const unlock = (ip: string, password: string) => new Browser(app, ip).post(`/site-api/public/forms/${form.slug}/unlock`, {password});
+    const seed = async (key: string, count: number) => {
+      await db.$executeRaw`
+        INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
+        VALUES (${key}, date_bin(make_interval(secs => 3600), now(), 'epoch'), 3600, ${count})
+        ON CONFLICT (key, window_start) DO UPDATE SET count = ${count}`;
+    };
+
+    // Normal times: 29 earlier wrong passwords from this caller, so one more is allowed, then 429
+    // (even for the right password).
+    const ip = '203.0.113.7';
+    await seed(`unlock-fail:ip:${await ipKeyFor(SECRET, ip)}:${form.id}`, UNLOCK_IP_FAILURE_LIMIT - 1);
+    expect((await unlock(ip, 'nope')).status).toBe(422);
+    expect((await unlock(ip, 'open sesame')).status).toBe(429);
+
+    // Under attack: a new caller's right password works every time; successes don't count.
+    await seed(`unlock-fail:form:${form.id}`, UNLOCK_FORM_FAILURE_LIMIT);
+    const fresh: number[] = [];
+    for (let n = 0; n < UNLOCK_ATTACK_IP_FAILURES + 3; n++) fresh.push((await unlock('203.0.113.8', 'open sesame')).status);
+    expect(fresh.every(s => s === 200)).toBe(true);
+    // ...and that caller still has its few wrong tries left.
+    const wrong: number[] = [];
+    for (let n = 0; n <= UNLOCK_ATTACK_IP_FAILURES; n++) wrong.push((await unlock('203.0.113.8', `x${n}`)).status);
+    expect(wrong).toEqual([...Array(UNLOCK_ATTACK_IP_FAILURES).fill(422), 429]);
   });
 });
