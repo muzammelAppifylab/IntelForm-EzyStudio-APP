@@ -20,8 +20,9 @@ import {formDraftRoutes} from '../intelform/builder/form-routes';
 import {leavePresence, pollPresence} from '../intelform/builder/presence';
 import {rateLimit} from '../intelform/builder/rate-limit';
 import {preparePatch, saveFormPatch} from '../intelform/builder/save';
-import {deliveryState, readWebhookConfig, testPayload} from '../intelform/builder/webhook-core';
-import {enqueueDelivery, insertDelivery, rotateWebhookSecret} from '../intelform/builder/webhook-delivery';
+import {deliveryState} from '../intelform/builder/webhook-core';
+import {enqueueDelivery, insertDelivery} from '../intelform/builder/webhook-delivery';
+import {readWebhookConfig, rotateWebhookSecret, sampleWebhookPayload, WEBHOOK_OFF} from '../intelform/webhooks';
 import {zodJson} from '../intelform/builder/validate';
 import type {Viewer} from '../../platform/types';
 import {grants} from '../../platform/auth/codenames';
@@ -49,7 +50,8 @@ type ViewerContext = Context<{Variables: {viewer: Viewer}}>;
  * Deliveries run in the background job list `intelform-webhooks` (webhook-delivery.ts): test
  * and resend answer at once with the delivery's id and `queued: true` while it is still on its
  * way (on a developer's machine and in the Preview it has already run, and the answer has the
- * outcome). Webhook URL and headers are secrets, so every webhook route needs FORM_WRITE.
+ * outcome). Test and Resend are one attempt each; real responses retry on their own (../notify).
+ * Webhook URL and headers are secrets, so every webhook route needs FORM_WRITE.
  */
 
 const notFound = problem('not_found', GONE);
@@ -83,7 +85,8 @@ const deliverySelect = {
 } as const;
 
 function deliveryView(r: DeliveryRow): WebhookDelivery & {pending: boolean} {
-  const {ok, pending} = deliveryState(r);
+  // A queued row whose job never finished (15 minutes) shows as failed, so the builder stops polling.
+  const {ok, pending, error} = deliveryState(r);
   return {
     id: r.id,
     createdAt: r.createdAt.toISOString(),
@@ -91,7 +94,7 @@ function deliveryView(r: DeliveryRow): WebhookDelivery & {pending: boolean} {
     statusCode: r.statusCode,
     durationMs: r.durationMs,
     responseBody: r.responseBody,
-    error: r.error,
+    error,
     isTest: r.isTest,
     responseId: r.responseId,
     ok,
@@ -103,8 +106,8 @@ function deliveryView(r: DeliveryRow): WebhookDelivery & {pending: boolean} {
 async function sendAnswer(db: PrismaClient, deliveryId: string): Promise<SendAnswer> {
   const row = await db.webhookDelivery.findUnique({where: {id: deliveryId}, select: deliverySelect});
   if (!row) throw new BuilderError(404, 'not_found', DELIVERY_GONE);
-  const {ok, pending} = deliveryState(row);
-  return {ok, statusCode: row.statusCode, durationMs: row.durationMs ?? 0, error: row.error, deliveryId, queued: pending};
+  const {ok, pending, error} = deliveryState(row);
+  return {ok, statusCode: row.statusCode, durationMs: row.durationMs ?? 0, error, deliveryId, queued: pending};
 }
 
 async function webhookView(db: PrismaClient, formId: string) {
@@ -203,6 +206,7 @@ export const builderRoutes = new Hono()
     if (!formId) return c.json(notFound, 404);
     try {
       const secret = await rotateWebhookSecret(c.var.db, formId);
+      if (!secret) throw formGone();
       return c.json<WebhookSecretResponse>({secret});
     } catch (err) {
       return builderError(c, err);
@@ -223,7 +227,7 @@ export const builderRoutes = new Hono()
       const cfg = readWebhookConfig(form.settings);
       if (!cfg.url) throw new BuilderError(422, 'webhook_not_configured', 'Add a webhook URL first');
       const parsed = formDefinition.safeParse(form.draft);
-      const payload = testPayload(
+      const payload = sampleWebhookPayload(
         {id: form.id, title: form.title, version: form.publishedVersion?.version ?? null},
         parsed.success ? parsed.data : null
       );
@@ -281,7 +285,6 @@ export const builderRoutes = new Hono()
         const d = await db.webhookDelivery.findFirst({
           where: {id: deliveryId, formId},
           select: {
-            url: true,
             payload: true,
             isTest: true,
             responseId: true,
@@ -294,17 +297,18 @@ export const builderRoutes = new Hono()
         if (!d.isTest && !d.responseId) {
           throw new BuilderError(410, 'response_deleted', 'That response was deleted, so its webhook can’t be resent');
         }
+        // Only ever to the form's CURRENT URL, never the one in the log: once the webhook is
+        // removed (or, for a real response, turned off) nothing is resent.
         const cfg = readWebhookConfig(d.form.settings);
-        if (!d.isTest && cfg.url && !cfg.enabled) {
-          throw new BuilderError(422, 'webhook_disabled', 'The webhook is turned off for this form');
-        }
+        if (!d.isTest && (!cfg.url || !cfg.enabled)) throw new BuilderError(422, 'webhook_disabled', WEBHOOK_OFF);
+        if (!cfg.url) throw new BuilderError(422, 'webhook_not_configured', 'Add a webhook URL first');
         const queued = await insertDelivery(db, {
           formId,
           responseId: d.responseId,
           payload: d.payload,
           isTest: d.isTest,
           webhookId: d.webhookId,
-          url: cfg.url ?? d.url,
+          url: cfg.url,
         });
         await enqueueDelivery(db, c.req.url, queued.deliveryId, `Webhook resend · ${d.form.title}`);
         return c.json<SendAnswer>(await sendAnswer(db, queued.deliveryId));

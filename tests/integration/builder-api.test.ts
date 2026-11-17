@@ -1,6 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
+import {insertDelivery, runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
 import {renderToken} from '../../src/server/intelform/respondent/tokens';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
 
@@ -141,5 +142,51 @@ describe.skipIf(!DATABASE_URL)('builder API (integration, real Postgres)', () =>
     const off = await editor.delete(path('/webhook'));
     expect(off.json).toMatchObject({hasSecret: false, webhook: {enabled: false, url: null}});
     expect((await editor.post(path('/webhook/test'))).json.error).toBe('webhook_not_configured');
+  });
+
+  it('never resends a real response to the old URL once the webhook is removed', async () => {
+    await patch(editor, {draft: {layout: 'all_at_once', fields: [{id: 'f_name0001', type: 'short_text', label: 'Name', props: {}}]}});
+    expect((await editor.post(path('/publish'))).status).toBe(200);
+    const form = await db.form.findUniqueOrThrow({where: {id: formId}, select: {publishedVersionId: true}});
+    const response = await db.response.create({
+      data: {formId, formVersionId: form.publishedVersionId!, answers: {f_name0001: 'Ada'}},
+      select: {id: true},
+    });
+    expect((await editor.request('PUT', path('/webhook'), {enabled: true, url: 'https://hooks.example.com/old'})).status).toBe(200);
+    // A real delivery in the log, and one still queued, both for the URL being removed.
+    const logged = await db.webhookDelivery.create({
+      data: {formId, responseId: response.id, url: 'https://hooks.example.com/old', webhookId: `msg_${response.id}`, isTest: false,
+        payload: {type: 'response.created', answers: {f_name0001: {value: 'Ada'}}}, statusCode: 500, durationMs: 5, error: 'The endpoint answered 500'},
+      select: {id: true},
+    });
+    const queued = await insertDelivery(db, {formId, responseId: response.id, payload: {type: 'response.created'}, isTest: false, url: 'https://hooks.example.com/old'});
+    expect((await editor.delete(path('/webhook'))).status).toBe(200);
+
+    const sent: string[] = [];
+    const fetchSpy = (async (input: RequestInfo | URL) => {
+      sent.push(String(input));
+      return new Response('ok');
+    }) as typeof fetch;
+    const before = await db.webhookDelivery.count({where: {formId}});
+    const resend = await editor.post(path(`/webhook/deliveries/${logged.id}/resend`));
+    expect(resend.status).toBe(422);
+    expect(resend.json).toMatchObject({error: 'webhook_disabled', message: 'The webhook is turned off for this form'});
+    expect(await db.webhookDelivery.count({where: {formId}})).toBe(before);
+
+    // The job of the delivery queued before the removal records why, and sends nothing.
+    expect(await runDelivery(db, queued.deliveryId, {fetch: fetchSpy})).toMatchObject({ok: false, error: 'The webhook is turned off for this form'});
+    expect(sent).toEqual([]);
+    // And the removed webhook's secret was not brought back.
+    expect((await db.form.findUniqueOrThrow({where: {id: formId}, select: {webhookSecret: true}})).webhookSecret).toBeNull();
+    const row = await db.webhookDelivery.findUniqueOrThrow({where: {id: queued.deliveryId}, select: {error: true, url: true}});
+    expect(row).toEqual({error: 'The webhook is turned off for this form', url: 'https://hooks.example.com/old'});
+  });
+
+  it('shows a delivery that never finished as failed, not pending', async () => {
+    expect((await editor.request('PUT', path('/webhook'), {enabled: true, url: 'https://hooks.example.com/hook'})).status).toBe(200);
+    const stuck = await insertDelivery(db, {formId, responseId: null, payload: {type: 'response.test'}, isTest: true, url: 'https://hooks.example.com/hook'});
+    await db.webhookDelivery.update({where: {id: stuck.deliveryId}, data: {createdAt: new Date(Date.now() - 20 * 60_000)}, select: {id: true}});
+    const one = await editor.get(path(`/webhook/deliveries/${stuck.deliveryId}`));
+    expect(one.json.delivery).toMatchObject({pending: false, ok: false, error: 'This delivery never finished. Resend it.'});
   });
 });

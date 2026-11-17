@@ -1,13 +1,14 @@
 import {readFileSync} from 'node:fs';
 
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 
 import {createDb} from '../../src/platform/db';
 import {publishInTx} from '../../src/server/intelform/builder/publish';
 import {leavePresence, pollPresence} from '../../src/server/intelform/builder/presence';
 import {rateLimit} from '../../src/server/intelform/builder/rate-limit';
 import {preparePatch, saveInTx} from '../../src/server/intelform/builder/save';
-import {ensureWebhookSecret, insertDelivery, rotateWebhookSecret, runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
+import {insertDelivery, runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
+import {ensureWebhookSecret, rotateWebhookSecret} from '../../src/server/intelform/webhooks';
 
 /**
  * The builder's SQL against a real Postgres, inside ONE transaction that is always rolled back
@@ -123,6 +124,13 @@ describe.skipIf(!url)('builder SQL (rolled back)', () => {
           const [d] = await tx.$queryRaw<{status_code: number; response_body: string}[]>`
             SELECT status_code, response_body FROM webhook_deliveries WHERE id = ${q.deliveryId}::uuid`;
           expect(d).toEqual({status_code: 202, response_body: 'ok'});
+
+          // A queued row whose job only runs after 15 minutes is not sent any more.
+          const late = await insertDelivery(tx, {formId, responseId: null, payload: {type: 'response.test'}, isTest: true, url: 'https://hooks.example.com/x'});
+          await tx.$executeRaw`UPDATE webhook_deliveries SET created_at = now() - interval '20 minutes' WHERE id = ${late.deliveryId}::uuid`;
+          const lateFetch = vi.fn();
+          expect(await runDelivery(tx, late.deliveryId, {fetch: lateFetch as never})).toMatchObject({ok: false, error: 'This delivery never finished. Resend it.'});
+          expect(lateFetch).not.toHaveBeenCalled();
 
           // Rate limit: the 3rd hit in the window is refused.
           await rateLimit(tx, `builder-sql:${userId}`, 2, 600);

@@ -1,31 +1,33 @@
 /**
- * IntelForm outbound webhooks: one import for routes and jobs.
+ * IntelForm outbound webhooks: the one implementation of the config, the signature, the sample
+ * payload and the signed POST, for both delivery paths.
  *
- *   builder routes:  ensureWebhookSecret / rotateWebhookSecret, deliverWebhook(db, formId,
- *                    sampleWebhookPayload(...), {test: true}), resendDelivery(db, formId, id);
- *                    map `WebhookError` to `c.json({...problem(e.code, e.message)}, e.status)`.
- *   forms PATCH:     assertWebhookUrl(url) before saving; `WebhookUrlError` → 422
- *                    `{error: 'validation_failed', message, fields: {url: [message]}}`.
- *   submit:          nothing here: `queueResponseJobs` (../notify) sends the job.
+ *   real responses:   the notify job (../notify) calls `deliverWebhook`; a failure worth
+ *                     retrying goes to `intelform-webhook-deliver`, which the platform retries.
+ *   builder:          "Send test" / "Resend" queue a row and run it once in `intelform-webhooks`
+ *                     (../builder/webhook-delivery.ts, built on `postSigned` and the secret here).
+ *   form settings:    the URL rule (`assertSafeUrl` with `urlPolicy()`) on save and before every send.
  */
 export { readWebhookConfig, type WebhookConfig } from './config'
 export {
-  assertWebhookUrl,
   deliveredOnce,
   deliverWebhook,
   describeError,
   ensureWebhookSecret,
   KEEP_DELIVERIES_PER_FORM,
-  resendDelivery,
+  postSigned,
+  readCapped,
   retryableStatus,
   rotateWebhookSecret,
   trimWebhookDeliveries,
   urlPolicy,
+  WEBHOOK_OFF,
   WEBHOOK_TIMEOUT_MS,
   WebhookError,
   type DeliverOptions,
   type DeliveryResult,
+  type PostOutcome,
 } from './deliver'
 export { sampleWebhookPayload, webhookPayload, type WebhookPayload } from './payload'
-export { generateWebhookSecret, signWebhook } from './sign'
+export { generateWebhookSecret, newWebhookId, signWebhook } from './sign'
 export { assertSafeUrl, HTTPS_REQUIRED, isPrivateAddress, WebhookUrlError, type UrlPolicy } from './ssrf'

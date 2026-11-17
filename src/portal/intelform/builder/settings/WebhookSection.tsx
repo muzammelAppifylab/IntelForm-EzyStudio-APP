@@ -106,7 +106,11 @@ export function WebhookSection() {
           />
           <Switch
             label="Send responses to this URL"
-            description={urlValid ? 'One attempt per response. Failed deliveries can be resent from the log below.' : 'Add a URL first.'}
+            description={
+              urlValid
+                ? 'Each response is sent once and retried automatically if your endpoint is down. Failed deliveries can be resent from the log below.'
+                : 'Add a URL first.'
+            }
             checked={webhook.enabled}
             disabled={!webhook.url}
             onChange={v => void save({webhook: {enabled: v}}, v ? 'Webhook on' : 'Webhook off')}
@@ -213,6 +217,9 @@ export function WebhookSection() {
 
 const when = new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'medium'});
 
+/** Why Resend is off for a real delivery whose response is gone (the server answers 410 response_deleted). */
+const RESPONSE_DELETED = 'The response was deleted, so this delivery can’t be resent.';
+
 function DeliveryLog({
   rows,
   loading,
@@ -258,54 +265,66 @@ function DeliveryLog({
               </tr>
             </thead>
             <tbody>
-              {rows.map(d => (
-                <Fragment key={d.id}>
-                  <tr>
-                    <td className="if-log-toggle">
-                      <IconButton
-                        icon={open === d.id ? 'chevron-down' : 'chevron-right'}
-                        size="sm"
-                        label={open === d.id ? 'Hide response body' : 'Show response body'}
-                        aria-expanded={open === d.id}
-                        onClick={() => setOpen(open === d.id ? null : d.id)}
-                      />
-                    </td>
-                    <td className="if-nowrap">{when.format(new Date(d.createdAt))}</td>
-                    <td>
-                      <span className="if-badges">
-                        {d.pending ? (
-                          <Badge tone="info">Sending</Badge>
-                        ) : (
-                          <Badge tone={d.ok ? 'success' : 'danger'}>{d.statusCode ?? 'No answer'}</Badge>
+              {rows.map(d => {
+                const gone = !d.isTest && d.responseId === null;
+                const goneId = `if-delivery-gone-${d.id}`;
+                return (
+                  <Fragment key={d.id}>
+                    <tr>
+                      <td className="if-log-toggle">
+                        <IconButton
+                          icon={open === d.id ? 'chevron-down' : 'chevron-right'}
+                          size="sm"
+                          label={open === d.id ? 'Hide response body' : 'Show response body'}
+                          aria-expanded={open === d.id}
+                          onClick={() => setOpen(open === d.id ? null : d.id)}
+                        />
+                      </td>
+                      <td className="if-nowrap">{when.format(new Date(d.createdAt))}</td>
+                      <td>
+                        <span className="if-badges">
+                          {d.pending ? (
+                            <Badge tone="info">Sending</Badge>
+                          ) : (
+                            <Badge tone={d.ok ? 'success' : 'danger'}>{d.statusCode ?? 'No answer'}</Badge>
+                          )}
+                          {d.isTest && <Badge>Test</Badge>}
+                        </span>
+                      </td>
+                      <td className="if-num">{d.durationMs !== null ? `${d.durationMs} ms` : '–'}</td>
+                      <td className="if-num">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon="rotate-cw"
+                          disabled={d.pending || gone}
+                          title={gone ? RESPONSE_DELETED : undefined}
+                          aria-describedby={gone ? goneId : undefined}
+                          pending={resending === d.id}
+                          onClick={() => onResend(d.id)}>
+                          Resend
+                        </Button>
+                        {gone && (
+                          <span id={goneId} className="visually-hidden">
+                            {RESPONSE_DELETED}
+                          </span>
                         )}
-                        {d.isTest && <Badge>Test</Badge>}
-                      </span>
-                    </td>
-                    <td className="if-num">{d.durationMs !== null ? `${d.durationMs} ms` : '–'}</td>
-                    <td className="if-num">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        icon="rotate-cw"
-                        disabled={d.pending}
-                        pending={resending === d.id}
-                        onClick={() => onResend(d.id)}>
-                        Resend
-                      </Button>
-                    </td>
-                  </tr>
-                  {open === d.id && (
-                    <tr className="if-log-detail">
-                      <td />
-                      <td colSpan={4}>
-                        <span className="if-break">{d.url}</span>
-                        {d.error && <span className="field-error">{d.error}</span>}
-                        <pre className="if-code">{d.responseBody || '(empty response body)'}</pre>
                       </td>
                     </tr>
-                  )}
-                </Fragment>
-              ))}
+                    {open === d.id && (
+                      <tr className="if-log-detail">
+                        <td />
+                        <td colSpan={4}>
+                          <span className="if-break">{d.url}</span>
+                          {gone && <span className="if-row-hint">{RESPONSE_DELETED}</span>}
+                          {d.error && <span className="field-error">{d.error}</span>}
+                          <pre className="if-code">{d.responseBody || '(empty response body)'}</pre>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

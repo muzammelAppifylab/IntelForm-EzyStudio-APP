@@ -273,7 +273,8 @@ export const formsRoutes = new Hono()
       const db = c.var.db;
       const row = await db.form.findUnique({where: {id}, select: {title: true, draft: true, theme: true, settings: true}});
       if (!row) throw notFound();
-      // Copies the definition, theme and settings only: never responses or the webhook secret.
+      // Copies the definition, theme and settings only: never responses or the webhook secret. The webhook
+      // keeps its URL and headers but is switched off until the owner sets up the new secret (copyableSettings).
       const created = await insertForm(db, {
         title: `Copy of ${row.title}`.slice(0, 200),
         draft: repairOrBlank(row.draft),

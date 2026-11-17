@@ -6,8 +6,9 @@ import {
   generateWebhookSecret,
   HTTPS_REQUIRED,
   isPrivateAddress,
+  describeError,
+  readCapped,
   readWebhookConfig,
-  resendDelivery,
   retryableStatus,
   sampleWebhookPayload,
   signWebhook,
@@ -15,7 +16,6 @@ import {
   WebhookError,
   WebhookUrlError,
 } from '../../src/server/intelform/webhooks'
-import { readCapped } from '../../src/server/intelform/webhooks/deliver'
 import { parseIPv6 } from '../../src/server/intelform/webhooks/ssrf'
 import { blankDefinition, newField, type FormDefinition } from '../../src/lib/intelform/form/definition'
 
@@ -180,41 +180,32 @@ describe('webhook payload', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Delivery with a stand-in database and fetch
+// Delivery of real responses, with a stand-in database and fetch
 // ---------------------------------------------------------------------------
 
 interface LogRow {
   values: unknown[]
 }
 
-function fakeDb(settings: unknown, opts: { secret?: string | null; responseExists?: boolean } = {}) {
+function fakeDb(settings: unknown, opts: { secret?: string | null } = {}) {
   const logs: LogRow[] = []
   let secret = opts.secret === undefined ? SECRET : opts.secret
+  const secretQueries: unknown[][] = []
   const db = {
     form: {
       findUnique: vi.fn(async () => ({ settings, webhookSecret: secret })),
-      updateMany: vi.fn(async ({ data }: { data: { webhookSecret: string } }) => {
-        if (secret === null) secret = data.webhookSecret
-        return { count: 1 }
-      }),
     },
-    webhookDelivery: {
-      findFirst: vi.fn(async () => ({
-        formId: 'form-1',
-        responseId: 'resp-1',
-        payload: { a: 1 },
-        webhookId: 'msg_resp-1',
-        isTest: false,
-        url: 'https://old.example.com/hook',
-      })),
-    },
-    response: { findUnique: vi.fn(async () => (opts.responseExists === false ? null : { id: 'resp-1' })) },
-    $queryRaw: vi.fn(async (_s: TemplateStringsArray, ...values: unknown[]) => {
+    $queryRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
+      if (s.join('?').includes('webhook_secret = COALESCE')) {
+        secretQueries.push(values)
+        secret ??= values[0] as string
+        return [{ secret }]
+      }
       logs.push({ values })
       return [{ id: `d${logs.length}` }]
     }),
   }
-  return { db: db as never, logs, raw: db }
+  return { db: db as never, logs, raw: db, secretQueries }
 }
 
 const ON = { webhook: { enabled: true, url: 'https://hooks.example.com/in', headers: [{ key: 'X-Token', value: 't' }] } }
@@ -228,9 +219,11 @@ describe('deliverWebhook', () => {
     const [url, init] = fetchImpl.mock.calls[0]
     expect(url).toBe('https://hooks.example.com/in')
     expect(init?.redirect).toBe('manual')
+    expect(init?.signal).toBeInstanceOf(AbortSignal)
     const h = init?.headers as Record<string, string>
     expect(h['x-token'] ?? h['X-Token']).toBe('t')
     expect(h['content-type']).toBe('application/json')
+    expect(h['user-agent']).toBe('IntelForm-Webhooks/1')
     expect(verify(SECRET, 'msg_resp-1', Number(h['webhook-timestamp']), String(init?.body), h['webhook-signature'])).toBe(
       true,
     )
@@ -281,34 +274,50 @@ describe('deliverWebhook', () => {
     expect(logs).toHaveLength(1)
   })
 
-  it('throws WebhookError when off, unset or gone; a test send works while off', async () => {
+  it('throws WebhookError when off, removed or gone, before any request', async () => {
+    const fetchImpl = vi.fn()
     const off = fakeDb({ webhook: { enabled: false, url: 'https://hooks.example.com/in', headers: [] } })
-    await expect(deliverWebhook(off.db, 'form-1', {}, { responseId: 'r' })).rejects.toMatchObject({ code: 'webhook_disabled', status: 422 })
-    const ok = vi.fn(async () => new Response(null, { status: 204 }))
-    const t = await deliverWebhook(off.db, 'form-1', {}, { test: true, fetchImpl: ok as never })
-    expect(t.ok).toBe(true)
-    expect(t.webhookId).toMatch(/^msg_test_[0-9a-f-]{36}$/)
-    const none = fakeDb({})
-    await expect(deliverWebhook(none.db, 'form-1', {}, {})).rejects.toBeInstanceOf(WebhookError)
+    await expect(deliverWebhook(off.db, 'form-1', {}, { responseId: 'r', fetchImpl: fetchImpl as never })).rejects.toMatchObject({
+      code: 'webhook_disabled',
+      status: 422,
+    })
+    const removed = fakeDb({ webhook: { enabled: false, url: null, headers: [] } }, { secret: null })
+    await expect(deliverWebhook(removed.db, 'form-1', {}, { responseId: 'r', fetchImpl: fetchImpl as never })).rejects.toBeInstanceOf(
+      WebhookError,
+    )
+    expect(removed.secretQueries).toHaveLength(0)
     const gone = fakeDb({})
     ;(gone.raw.form.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
-    await expect(deliverWebhook(gone.db, 'form-1', {}, {})).rejects.toMatchObject({ status: 404 })
+    await expect(deliverWebhook(gone.db, 'form-1', {}, { responseId: 'r' })).rejects.toMatchObject({ status: 404 })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('creates the secret on first use', async () => {
-    const { db, raw } = fakeDb(ON, { secret: null })
-    const ok = vi.fn(async () => new Response('', { status: 200 }))
+  it('creates the secret on first use, in one statement', async () => {
+    const { db, secretQueries } = fakeDb(ON, { secret: null })
+    const ok = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('', { status: 200 }))
     await deliverWebhook(db, 'form-1', {}, { responseId: 'resp-1', fetchImpl: ok as never })
-    expect(raw.form.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'form-1', webhookSecret: null } }))
+    expect(secretQueries).toHaveLength(1)
+    const made = secretQueries[0][0] as string
+    expect(made).toMatch(/^whsec_/)
+    const init = ok.mock.calls[0][1]
+    const h = init?.headers as Record<string, string>
+    expect(verify(made, 'msg_resp-1', Number(h['webhook-timestamp']), String(init?.body), h['webhook-signature'])).toBe(true)
   })
+})
 
-  it('resends with the same webhook-id, and refuses a deleted response', async () => {
-    const { db } = fakeDb(ON)
-    const fetchImpl = vi.fn(async () => new Response('', { status: 200 }))
-    const r = await resendDelivery(db, 'form-1', 'd1', fetchImpl as never)
-    expect(r.webhookId).toBe('msg_resp-1')
-    const gone = fakeDb(ON, { responseExists: false })
-    await expect(resendDelivery(gone.db, 'form-1', 'd1')).rejects.toMatchObject({ status: 410, code: 'response_deleted' })
+describe('describeError', () => {
+  it('puts network failures in words, never a stack', () => {
+    expect(describeError(new WebhookUrlError('Use an https:// address'))).toBe('Use an https:// address')
+    expect(describeError(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe('Timed out after 10 seconds')
+    expect(describeError(new Error('403 Egress blocked'))).toBe('Webhooks can’t be sent to that address')
+    expect(describeError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ENOTFOUND' } }))).toBe(
+      'The host name could not be found',
+    )
+    expect(describeError(new Error('getaddrinfo EAI_AGAIN x'))).toBe('The host name could not be found')
+    expect(describeError(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }))).toBe(
+      'The connection was refused',
+    )
+    expect(describeError(null)).toBe('The endpoint could not be reached')
   })
 })
 

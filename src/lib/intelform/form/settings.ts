@@ -239,12 +239,14 @@ export function publicSettings(settings: FormSettings): PublicFormSettings {
 
 /**
  * Settings to copy into a duplicate or a template (the webhook secret is a column, so it is
- * never copied). Templates also drop the password, webhook target and recipients, since the
+ * never copied). A duplicate keeps the webhook URL and headers but switched off: it gets a new
+ * secret, so the owner turns it on once the endpoint knows that secret (instead of every
+ * delivery being rejected). Templates also drop the password, webhook target and recipients, since the
  * whole team can use them.
  */
 export function copyableSettings(settings: FormSettings, forTemplate = false): FormSettings {
   const copy: FormSettings = { ...settings, closed: false, closeAt: null }
-  if (!forTemplate) return copy
+  if (!forTemplate) return { ...copy, webhook: { ...settings.webhook, enabled: false } }
   return {
     ...copy,
     passwordHash: null,

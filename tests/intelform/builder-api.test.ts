@@ -8,16 +8,18 @@ import {ifMatchRevision, normalizeDraft, publishCheck, readSettings, readTheme} 
 import {BuilderError, errorBody, isUniqueViolation, uuidOrNull} from '../../src/server/intelform/builder/errors';
 import {othersFrom} from '../../src/server/intelform/builder/presence';
 import {mergeSettings, preparePatch, statusAfterSettings} from '../../src/server/intelform/builder/save';
+import {deliveryState, NEVER_FINISHED} from '../../src/server/intelform/builder/webhook-core';
+import {runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
 import {
   assertSafeUrl,
-  deliveryState,
   generateWebhookSecret,
   readWebhookConfig,
+  sampleWebhookPayload,
   signWebhook,
-  testPayload,
-  UnsafeWebhookUrl,
-} from '../../src/server/intelform/builder/webhook-core';
-import {runDelivery, webhookUrlPolicy} from '../../src/server/intelform/builder/webhook-delivery';
+  urlPolicy,
+  WEBHOOK_OFF,
+  WebhookUrlError,
+} from '../../src/server/intelform/webhooks';
 import {config} from '../../src/platform/config';
 import {isIpLiteral, isPrivateAddress} from '../../src/server/intelform/webhooks/ssrf';
 
@@ -181,7 +183,7 @@ describe('webhook URLs', () => {
     expect(assertSafeUrl('https://hooks.example.com/x').hostname).toBe('hooks.example.com');
     expect(assertSafeUrl('https://[2606:4700:4700::1111]/x')).toBeTruthy();
     for (const bad of ['ftp://x.example.com', 'not a url', 'https://user:pw@hooks.example.com', 'https://2130706433/', 'https://intranet/x', 'https://printer.local/x']) {
-      expect(() => assertSafeUrl(bad), bad).toThrow(UnsafeWebhookUrl);
+      expect(() => assertSafeUrl(bad), bad).toThrow(WebhookUrlError);
     }
     expect(() => assertSafeUrl('http://localhost:4000/hook', {allowHttp: true, allowPrivate: true})).not.toThrow();
   });
@@ -192,7 +194,7 @@ describe('webhook URLs in the deployed Preview (production=false, localDev=false
     const prod = vi.spyOn(config, 'production', 'get').mockReturnValue(false);
     const local = vi.spyOn(config, 'localDev', 'get').mockReturnValue(false);
     try {
-      expect(webhookUrlPolicy()).toEqual({allowHttp: true, allowPrivate: false});
+      expect(urlPolicy()).toEqual({allowHttp: true, allowPrivate: false});
       for (const url of ['http://169.254.169.254/latest/meta-data', 'http://127.0.0.1:8080/x', 'http://localhost/x', 'http://db.internal/x', 'http://[::1]/x']) {
         await expect(preparePatch({settings: {webhook: {url}}}), url).rejects.toMatchObject({status: 422});
         const fetchFn = vi.fn();
@@ -241,26 +243,39 @@ describe('webhook signing and config', () => {
     const def = normalizeDraft(
       draft([field('f_email001', 'email', 'Email'), field('f_sect0001', 'section_break', 'Page 2'), field('f_nps00001', 'nps', 'Score')])
     );
-    const p = testPayload({id: 'form-1', title: 'Sign-up', version: 3}, def, new Date('2026-01-02T03:04:05Z'));
+    const p = sampleWebhookPayload({id: 'form-1', title: 'Sign-up', version: 3}, def, new Date('2026-01-02T03:04:05Z'));
     expect(p).toMatchObject({type: 'response.test', test: true, form_id: 'form-1', form_version: 3, response_id: null});
     expect(Object.keys(p.answers)).toEqual(['f_email001', 'f_nps00001']);
     expect(p.answers.f_email001).toEqual({label: 'Email', type: 'email', value: 'sam@example.com'});
-    expect(testPayload({id: 'x', title: 'x', version: null}, null).answers).toEqual({});
+    expect(sampleWebhookPayload({id: 'x', title: 'x', version: null}, null).answers).toEqual({});
   });
 
-  it('tells queued, delivered and failed apart', () => {
-    expect(deliveryState({statusCode: null, durationMs: null, error: null})).toEqual({pending: true, ok: false});
-    expect(deliveryState({statusCode: 204, durationMs: 12, error: null})).toEqual({pending: false, ok: true});
-    expect(deliveryState({statusCode: 500, durationMs: 12, error: 'The endpoint answered 500'})).toEqual({pending: false, ok: false});
+  it('tells queued, delivered and failed apart, and fails a row queued for over 15 minutes', () => {
+    const now = Date.parse('2026-01-02T03:00:00Z');
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+    const state = (row: {statusCode: number | null; durationMs: number | null; error: string | null}, minutesAgo = 1) =>
+      deliveryState({...row, createdAt: at(minutesAgo)}, now);
+    expect(state({statusCode: null, durationMs: null, error: null})).toEqual({pending: true, ok: false, error: null});
+    expect(state({statusCode: 204, durationMs: 12, error: null})).toEqual({pending: false, ok: true, error: null});
+    const failed = {statusCode: 500, durationMs: 12, error: 'The endpoint answered 500'};
+    expect(state(failed)).toEqual({pending: false, ok: false, error: 'The endpoint answered 500'});
+    // Never finished: no longer pending (the builder stops polling and Resend works again).
+    expect(state({statusCode: null, durationMs: null, error: null}, 14)).toMatchObject({pending: true});
+    expect(state({statusCode: null, durationMs: null, error: null}, 16)).toEqual({pending: false, ok: false, error: NEVER_FINISHED});
+    // An old row WITH an outcome keeps it.
+    expect(state({statusCode: 204, durationMs: 12, error: null}, 600)).toEqual({pending: false, ok: true, error: null});
+    expect(state(failed, 600).error).toBe('The endpoint answered 500');
   });
 });
 
 /** A stand-in for the two raw-query methods runDelivery uses. */
 function fakeDb(row: Record<string, unknown> | null, secret = generateWebhookSecret()) {
   const updates: unknown[][] = [];
+  const queries: string[] = [];
   const db = {
     $queryRaw: vi.fn(async (strings: TemplateStringsArray) => {
       const sql = strings.join('?');
+      queries.push(sql);
       if (sql.includes('FROM webhook_deliveries d JOIN forms')) return row ? [row] : [];
       if (sql.includes('webhook_secret = COALESCE')) return [{secret}];
       throw new Error(`unexpected query ${sql}`);
@@ -270,7 +285,7 @@ function fakeDb(row: Record<string, unknown> | null, secret = generateWebhookSec
       return 1;
     }),
   };
-  return {db: db as never, updates, secret};
+  return {db: db as never, updates, queries, secret};
 }
 
 const queued = (over: Record<string, unknown> = {}) => ({
@@ -282,6 +297,7 @@ const queued = (over: Record<string, unknown> = {}) => ({
   payload: {type: 'response.test'},
   is_test: true,
   done: false,
+  expired: false,
   settings: {webhook: {enabled: true, url: 'https://hooks.example.com/x', headers: [{key: 'X-Token', value: 't'}]}},
   ...over,
 });
@@ -338,6 +354,38 @@ describe('webhook delivery job', () => {
     });
     expect(unsafe?.error).toMatch(/private or local/);
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it('never sends a real delivery once the webhook is removed, and always to the current URL', async () => {
+    const removed = {webhook: {enabled: false, url: null, headers: []}};
+    const real = {is_test: false, response_id: '00000000-0000-4000-8000-0000000000a1', webhook_id: 'msg_x', url: 'https://old.example.com/hook'};
+    // Removed (no URL): nothing goes to the URL in the log, and no secret is created.
+    const gone = fakeDb(queued({...real, settings: removed}));
+    const fetchFn = vi.fn();
+    expect(await runDelivery(gone.db, 'id', {fetch: fetchFn as never})).toMatchObject({ok: false, statusCode: null, error: WEBHOOK_OFF});
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(gone.queries).not.toContainEqual(expect.stringContaining('webhook_secret'));
+    // The URL is kept on the row (the log shows where it would have gone), the error recorded.
+    expect(gone.updates[0]![0]).toBeNull();
+    expect(gone.updates[0]![4]).toBe(WEBHOOK_OFF);
+    // A test delivery queued before the webhook was removed doesn't fall back to the old URL either.
+    const test = fakeDb(queued({url: 'https://old.example.com/hook', settings: removed}));
+    expect(await runDelivery(test.db, 'id', {fetch: fetchFn as never})).toMatchObject({ok: false, error: WEBHOOK_OFF});
+    expect(fetchFn).not.toHaveBeenCalled();
+    // Still on, with a new URL: it goes to the new one.
+    const moved = fakeDb(queued({...real, settings: {webhook: {enabled: true, url: 'https://new.example.com/hook', headers: []}}}));
+    const ok = vi.fn(async (_url: string, _init: RequestInit) => new Response('', {status: 200}));
+    expect(await runDelivery(moved.db, 'id', {fetch: ok as never, policy: {allowHttp: false}})).toMatchObject({ok: true});
+    expect(ok.mock.calls[0]![0]).toBe('https://new.example.com/hook');
+    expect(moved.updates[0]![0]).toBe('https://new.example.com/hook');
+  });
+
+  it('does not send a row that waited over 15 minutes for its job', async () => {
+    const late = fakeDb(queued({expired: true}));
+    const fetchFn = vi.fn();
+    expect(await runDelivery(late.db, 'id', {fetch: fetchFn as never})).toMatchObject({ok: false, error: NEVER_FINISHED});
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(late.updates[0]![4]).toBe(NEVER_FINISHED);
   });
 
   it('keeps only the first 1 KB of the answer', async () => {

@@ -155,8 +155,11 @@ const LOCAL_NAME = /^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.intrane
 // The check
 // ---------------------------------------------------------------------------
 
-/** Validates a webhook URL before saving or sending. Throws `WebhookUrlError` with words for people. */
-export function assertSafeUrl(raw: string, policy: UrlPolicy): URL {
+/**
+ * Validates a webhook URL before saving or sending. Throws `WebhookUrlError` with words for people.
+ * A setting left out of `policy` is the strictest (the live site's): no http, no private hosts.
+ */
+export function assertSafeUrl(raw: string, policy: Partial<UrlPolicy> = {}): URL {
   if (typeof raw !== 'string' || !raw.trim()) throw new WebhookUrlError('Enter a full URL starting with https://')
   if (raw.length > 2000) throw new WebhookUrlError('Use a shorter URL')
   let url: URL

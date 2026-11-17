@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
-import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
+import {copyableSettings, defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {
   completionRate,
   countFields,
@@ -145,6 +145,16 @@ describe('settings', () => {
     // Never published: unclosing doesn't make it live.
     expect(statusAfterSettings({status: 'closed', publishedVersionId: null}, closed, open)).toBe('closed');
     expect(statusAfterSettings({status: 'draft', publishedVersionId: null}, open, closed)).toBe('draft');
+  });
+
+  it('copies a duplicate with its webhook switched off, and a template without one', () => {
+    const webhook = {enabled: true, url: 'https://example.com/a', headers: [{key: 'X-Key', value: 'v'}]};
+    const settings = {...defaultFormSettings(), webhook, closed: true};
+    const dup = copyableSettings(settings);
+    expect(dup.webhook).toEqual({...webhook, enabled: false});
+    expect(dup.closed).toBe(false);
+    expect(settings.webhook.enabled).toBe(true);
+    expect(copyableSettings(settings, true).webhook).toEqual({enabled: false, url: null, headers: []});
   });
 
   it('reads an old or broken settings row with defaults', () => {

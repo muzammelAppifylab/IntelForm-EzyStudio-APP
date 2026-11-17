@@ -25,6 +25,11 @@ function fromBase64(text: string): Uint8Array<ArrayBuffer> {
   return out
 }
 
+/** A new delivery's `webhook-id`: `msg_<responseId>` for a response, `msg_test_<uuid>` for a test. */
+export function newWebhookId(responseId: string | null): string {
+  return responseId ? `msg_${responseId}` : `msg_test_${crypto.randomUUID()}`
+}
+
 export function generateWebhookSecret(): string {
   return `whsec_${toBase64(randomBytes(32))}`
 }

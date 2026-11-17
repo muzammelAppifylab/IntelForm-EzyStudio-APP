@@ -1,60 +1,39 @@
 import type {Prisma} from '../../../generated/prisma/client';
 import {DontRetry, JobRejected, sendJob, type JobInfo} from '../../../platform/background';
 import {getDb} from '../../../platform/db';
-import {urlPolicy} from '../webhooks/deliver';
-import type {UrlPolicy} from '../webhooks/ssrf';
-import {BuilderError, formGone} from './errors';
 import {
-  assertSafeUrl,
-  describeFetchError,
-  generateWebhookSecret,
-  MAX_BODY_CAPTURE,
+  ensureWebhookSecret,
+  KEEP_DELIVERIES_PER_FORM,
+  newWebhookId,
+  postSigned,
   readWebhookConfig,
-  signWebhook,
-  UnsafeWebhookUrl,
-  WEBHOOK_TIMEOUT_MS,
-} from './webhook-core';
+  WEBHOOK_OFF,
+  type PostOutcome,
+  type UrlPolicy,
+} from '../webhooks';
+import {BuilderError} from './errors';
+import {NEVER_FINISHED, QUEUED_EXPIRES_MS} from './webhook-core';
 
 /**
- * Outbound webhook deliveries: a `webhook_deliveries` row is written first ("queued": no
- * status, no duration, no error), then ONE background job (list `intelform-webhooks`, data
- * `{deliveryId}`) sends it and records the outcome on that row. One attempt per delivery (PRD:
- * no automatic retries; the person uses Resend), and a job that runs twice finds the row already
- * done and stops. A response deleted before its job runs takes its delivery row with it
- * (ON DELETE CASCADE), so its answers never go out.
+ * The builder's "Send test" and "Resend": a `webhook_deliveries` row is written first ("queued":
+ * no status, no duration, no error), then ONE background job (list `intelform-webhooks`, data
+ * `{deliveryId}`) sends it and records the outcome on that row.
  *
- * Real deliveries for new responses: the submit route calls `queueWebhookDelivery()` after its
- * transaction commits. "Send test" and "Resend" are the builder's (src/server/routes/builder.ts).
+ * Test and Resend are one attempt each: a failure is recorded and never sent again on its own
+ * (the person can Resend). The list's retries in background.json only cover a job that couldn't
+ * reach the database; a job that runs twice finds the row already done and stops. Real responses
+ * are a different path with automatic retries: the notify job's first attempt, then
+ * `intelform-webhook-deliver` (../notify, ../webhooks/deliver.ts), retried up to 4 times.
+ *
+ * A real (non-test) delivery is only ever sent while the form's webhook is on, and always to the
+ * form's CURRENT URL, never the one in the log: removing the webhook stops every queued or resent
+ * delivery. A response deleted before its job runs takes its delivery row with it (ON DELETE
+ * CASCADE), so its answers never go out.
  */
 
 export const WEBHOOK_LIST = 'intelform-webhooks';
-/** Log rows kept per form (the newest). */
-export const KEEP_PER_FORM = 100;
 
 type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
-
-/**
- * What a webhook URL may point at on this site: https and public hosts live; plain http off
- * production; private and local hosts on your own machine only (never in the deployed Preview).
- */
-export const webhookUrlPolicy = (): UrlPolicy => urlPolicy();
-
-/** Replaces the form's secret and returns the new one (shown to the person once). */
-export async function rotateWebhookSecret(db: Db, formId: string): Promise<string> {
-  const secret = generateWebhookSecret();
-  const n = await db.$executeRaw`UPDATE forms SET webhook_secret = ${secret} WHERE id = ${formId}::uuid`;
-  if (!n) throw formGone();
-  return secret;
-}
-
-/** The form's secret, created on first use (one statement, so two first uses agree). */
-export async function ensureWebhookSecret(db: Db, formId: string): Promise<string | null> {
-  const [row] = await db.$queryRaw<{secret: string}[]>`
-    UPDATE forms SET webhook_secret = COALESCE(webhook_secret, ${generateWebhookSecret()})
-    WHERE id = ${formId}::uuid
-    RETURNING webhook_secret AS secret`;
-  return row?.secret ?? null;
-}
 
 export interface QueueInput {
   formId: string;
@@ -64,7 +43,7 @@ export interface QueueInput {
   isTest: boolean;
   /** Reuse an id (Resend keeps the original so receivers can dedupe). */
   webhookId?: string | null;
-  /** The URL the delivery goes to (the form's current one, or the old one on a Resend). */
+  /** The form's current webhook URL, for the log (the job sends to the URL current when it runs). */
   url: string;
 }
 
@@ -75,8 +54,7 @@ export interface QueuedDelivery {
 
 /** Writes the queued log row and trims the form's log to the newest 100. */
 export async function insertDelivery(db: Db, input: QueueInput): Promise<QueuedDelivery> {
-  const webhookId =
-    input.webhookId ?? (input.isTest || !input.responseId ? `msg_test_${crypto.randomUUID()}` : `msg_${input.responseId}`);
+  const webhookId = input.webhookId ?? newWebhookId(input.isTest ? null : input.responseId);
   const [row] = await db.$queryRaw<{id: string}[]>`
     INSERT INTO webhook_deliveries (form_id, response_id, webhook_id, url, payload, is_test)
     VALUES (${input.formId}::uuid, ${input.responseId}::uuid, ${webhookId}, ${input.url.slice(0, 2000)},
@@ -85,7 +63,7 @@ export async function insertDelivery(db: Db, input: QueueInput): Promise<QueuedD
   await db.$executeRaw`
     DELETE FROM webhook_deliveries WHERE id IN (
       SELECT id FROM webhook_deliveries WHERE form_id = ${input.formId}::uuid
-      ORDER BY created_at DESC, id DESC OFFSET ${KEEP_PER_FORM}
+      ORDER BY created_at DESC, id DESC OFFSET ${KEEP_DELIVERIES_PER_FORM}
     )`;
   return {deliveryId: row!.id, webhookId};
 }
@@ -107,70 +85,17 @@ export async function enqueueDelivery(db: Db, requestUrl: string, deliveryId: st
   }
 }
 
-/**
- * For the submit route: queues the delivery of a new response when the form's webhook is on.
- * Call it AFTER the response's transaction commits. Never throws for a refused job (the row says
- * why); returns null when the webhook is off.
- */
-export async function queueWebhookDelivery(
-  db: Db,
-  requestUrl: string,
-  input: {formId: string; formTitle: string; responseId: string; settings: unknown; payload: unknown}
-): Promise<QueuedDelivery | null> {
-  const cfg = readWebhookConfig(input.settings);
-  if (!cfg.enabled || !cfg.url) return null;
-  const queued = await insertDelivery(db, {
-    formId: input.formId,
-    responseId: input.responseId,
-    payload: input.payload,
-    isTest: false,
-    url: cfg.url,
-  });
-  await enqueueDelivery(db, requestUrl, queued.deliveryId, `Webhook · ${input.formTitle}`).catch(() => undefined);
-  return queued;
-}
-
 interface DeliveryRow {
   id: string;
   form_id: string;
   response_id: string | null;
   webhook_id: string | null;
-  url: string;
   payload: unknown;
   is_test: boolean;
   done: boolean;
+  /** Queued longer than QUEUED_EXPIRES_MS. */
+  expired: boolean;
   settings: unknown;
-}
-
-/** Reads at most `max` bytes of a body, then lets go of the rest. */
-async function readCapped(res: Response, max = MAX_BODY_CAPTURE): Promise<string> {
-  const reader = res.body?.getReader();
-  if (!reader) return '';
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (size < max) {
-      const {done, value} = await reader.read();
-      if (done || !value) break;
-      chunks.push(value);
-      size += value.length;
-    }
-  } catch {
-    // a truncated body is fine: only the start is kept
-  } finally {
-    reader.cancel().catch(() => undefined);
-  }
-  const all = new Uint8Array(Math.min(size, max));
-  let at = 0;
-  for (const c of chunks) {
-    const part = c.subarray(0, all.length - at);
-    all.set(part, at);
-    at += part.length;
-    if (at >= all.length) break;
-  }
-  // Postgres text cannot hold NUL: strip it from the stored response body.
-  // oxlint-disable-next-line no-control-regex
-  return new TextDecoder().decode(all).replace(/\u0000/g, '');
 }
 
 export interface DeliveryOutcome {
@@ -181,8 +106,10 @@ export interface DeliveryOutcome {
 }
 
 /**
- * Sends one signed POST and records it. Safe to repeat: a delivery that already has an
- * outcome is left alone. Never throws for the endpoint's failures (they are recorded).
+ * Sends one queued delivery and records it. Safe to repeat: a delivery that already has an
+ * outcome is left alone. Never throws for the endpoint's failures (they are recorded). Nothing is
+ * sent, and the reason is recorded, when the row waited too long (QUEUED_EXPIRES_MS), when the
+ * form's webhook has no URL any more, or when a real delivery's webhook is turned off.
  */
 export async function runDelivery(
   db: Db,
@@ -190,60 +117,50 @@ export async function runDelivery(
   opts: {fetch?: typeof fetch; policy?: Partial<UrlPolicy>} = {}
 ): Promise<DeliveryOutcome | null> {
   const [d] = await db.$queryRaw<DeliveryRow[]>`
-    SELECT d.id::text AS id, d.form_id::text AS form_id, d.response_id::text AS response_id, d.webhook_id, d.url,
-      d.payload, d.is_test, (d.duration_ms IS NOT NULL OR d.error IS NOT NULL) AS done, f.settings
+    SELECT d.id::text AS id, d.form_id::text AS form_id, d.response_id::text AS response_id, d.webhook_id,
+      d.payload, d.is_test, (d.duration_ms IS NOT NULL OR d.error IS NOT NULL) AS done,
+      (d.created_at < now() - make_interval(secs => ${QUEUED_EXPIRES_MS / 1000})) AS expired, f.settings
     FROM webhook_deliveries d JOIN forms f ON f.id = d.form_id
     WHERE d.id = ${deliveryId}::uuid`;
   // Gone with its form or response, or already sent: nothing to do.
   if (!d || d.done) return null;
 
   const cfg = readWebhookConfig(d.settings);
-  const url = cfg.url ?? d.url;
-  const started = Date.now();
-  let statusCode: number | null = null;
-  let body: string | null = null;
-  let error: string | null = null;
-
-  if (!d.is_test && cfg.url && !cfg.enabled) error = 'The webhook is turned off for this form';
-  else if (d.payload === null) error = 'Nothing to send: the delivery has no payload';
-
-  if (error === null) {
-    try {
-      assertSafeUrl(url, opts.policy ?? webhookUrlPolicy());
-      const secret = await ensureWebhookSecret(db, d.form_id);
-      if (!secret) return null; // the form was deleted meanwhile
-      const webhookId = d.webhook_id ?? `msg_test_${crypto.randomUUID()}`;
-      const text = JSON.stringify(d.payload);
-      const timestamp = Math.floor(Date.now() / 1000);
-      const res = await (opts.fetch ?? fetch)(url, {
-        method: 'POST',
-        redirect: 'manual',
-        headers: {
-          ...Object.fromEntries(cfg.headers),
-          'content-type': 'application/json',
-          'user-agent': 'IntelForm-Webhooks/1',
-          'webhook-id': webhookId,
-          'webhook-timestamp': String(timestamp),
-          'webhook-signature': await signWebhook(secret, webhookId, timestamp, text),
-        },
-        body: text,
-        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
-      });
-      statusCode = res.status;
-      body = await readCapped(res);
-      if (statusCode >= 300 && statusCode < 400) error = 'Redirects are not followed. Use the final URL.';
-      else if (statusCode < 200 || statusCode >= 300) error = `The endpoint answered ${statusCode}`;
-    } catch (err) {
-      error = err instanceof UnsafeWebhookUrl ? err.message : describeFetchError(err);
-    }
+  let out: PostOutcome;
+  let sentTo: string | null = null;
+  // Only ever to the form's current URL (never the logged one); a real delivery also needs it on.
+  const refused = d.expired
+    ? NEVER_FINISHED
+    : !cfg.url || (!d.is_test && !cfg.enabled)
+      ? WEBHOOK_OFF
+      : d.payload === null
+        ? 'Nothing to send: the delivery has no payload'
+        : null;
+  if (refused !== null || !cfg.url) {
+    out = {ok: false, retryable: false, statusCode: null, durationMs: 0, responseBody: null, error: refused ?? WEBHOOK_OFF};
+  } else {
+    // After the checks above, so a form whose webhook was removed never gets a new secret here.
+    const secret = await ensureWebhookSecret(db, d.form_id);
+    if (!secret) return null; // the form was deleted meanwhile
+    sentTo = cfg.url;
+    out = await postSigned(
+      {
+        url: cfg.url,
+        headers: cfg.headers,
+        secret,
+        webhookId: d.webhook_id ?? newWebhookId(d.is_test ? null : d.response_id),
+        payload: d.payload,
+      },
+      {fetchImpl: opts.fetch, policy: opts.policy}
+    );
   }
-  const durationMs = Math.max(0, Date.now() - started);
   await db.$executeRaw`
     UPDATE webhook_deliveries
-    SET url = ${url.slice(0, 2000)}, status_code = ${statusCode}, duration_ms = ${durationMs},
-      response_body = ${body === null ? null : body.slice(0, 1024)}, error = ${error === null ? null : error.slice(0, 500)}
+    SET url = COALESCE(${sentTo === null ? null : sentTo.slice(0, 2000)}, url), status_code = ${out.statusCode}::int,
+      duration_ms = ${out.durationMs}::int, response_body = ${out.responseBody === null ? null : out.responseBody.slice(0, 1024)},
+      error = ${out.error === null ? null : out.error.slice(0, 500)}
     WHERE id = ${deliveryId}::uuid AND duration_ms IS NULL AND error IS NULL`;
-  return {ok: error === null, statusCode, durationMs, error};
+  return {ok: out.ok, statusCode: out.statusCode, durationMs: out.durationMs, error: out.error};
 }
 
 /** The `intelform-webhooks` handler for src/server/background.ts. */

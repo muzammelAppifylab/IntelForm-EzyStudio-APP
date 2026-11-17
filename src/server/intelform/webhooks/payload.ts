@@ -60,13 +60,17 @@ export function webhookPayload(form: PayloadForm, def: FormDefinition, r: Payloa
 
 /**
  * "Send test": the same keys and answer shapes as a real delivery, with sample answers, so a
- * receiver built against a test also handles real responses (legacy builder testPayload).
+ * receiver built against a test also handles real responses. Fields are the editor's draft.
  */
-export function sampleWebhookPayload(form: PayloadForm & { version: number | null }, def: Pick<FormDefinition, 'fields'> | null): WebhookPayload {
+export function sampleWebhookPayload(
+  form: PayloadForm & { version: number | null },
+  def: Pick<FormDefinition, 'fields'> | null,
+  now = new Date(),
+): WebhookPayload {
   const answers: Record<string, WebhookAnswer> = {}
   for (const f of def?.fields ?? []) {
     if (f.type === 'section_break') continue
-    answers[f.id] = { label: f.label, type: f.type, value: sampleValue(f) }
+    answers[f.id] = { label: f.label, type: f.type, value: sampleValue(f, now) }
   }
   return {
     type: 'response.test',
@@ -75,12 +79,12 @@ export function sampleWebhookPayload(form: PayloadForm & { version: number | nul
     form_title: form.title,
     form_version: form.version,
     response_id: null,
-    submitted_at: new Date().toISOString(),
+    submitted_at: now.toISOString(),
     answers,
   }
 }
 
-function sampleValue(f: FormField): unknown {
+function sampleValue(f: FormField, now: Date): unknown {
   switch (f.type) {
     case 'email':
       return 'sam@example.com'
@@ -97,7 +101,7 @@ function sampleValue(f: FormField): unknown {
     case 'url':
       return 'https://example.com'
     case 'date':
-      return new Date().toISOString().slice(0, 10)
+      return now.toISOString().slice(0, 10)
     case 'time':
       return '09:30'
     case 'single_choice':
@@ -115,7 +119,7 @@ function sampleValue(f: FormField): unknown {
     case 'signature':
       return { url: 'https://example.com/signature.png' }
     case 'consent':
-      return { accepted: true, at: new Date().toISOString(), text: f.props.text }
+      return { accepted: true, at: now.toISOString(), text: f.props.text }
     default:
       return 'Sample answer'
   }
