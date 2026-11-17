@@ -44,6 +44,7 @@ describe('controlProps', () => {
   it('the described-by id exists in the Field markup (empty App name)', () => {
     const props = controlProps('as-app-name', 'Enter the app name.', true);
     const html = renderToStaticMarkup(
+      // oxlint-disable-next-line react/no-children-prop -- createElement from a .ts test; children is a required prop
       createElement(Field, {id: 'as-app-name', label: 'App name', hint: 'Shown in the sidebar.', error: 'Enter the app name.', children: createElement('input', props)})
     );
     expect(html).toContain('aria-describedby="as-app-name-error"');

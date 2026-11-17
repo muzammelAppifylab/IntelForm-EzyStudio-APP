@@ -1,4 +1,3 @@
-import type {FieldType} from '../lib/intelform/form/field-types';
 import AddressConditionValue from './address/ConditionValue';
 import AddressSettings from './address/Settings';
 import ConsentSettings from './consent/Settings';

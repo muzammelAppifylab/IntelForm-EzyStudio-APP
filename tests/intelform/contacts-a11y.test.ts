@@ -9,6 +9,7 @@ import {Icon, Popover} from '../../src/portal/ui';
 /** F-040: an icon-only Popover trigger (Contacts "Show or hide columns") must have a name (axe button-name). */
 describe('Popover trigger accessible name', () => {
   const render = (trigger?: Parameters<typeof Popover>[0]['trigger']) =>
+    // oxlint-disable-next-line react/no-children-prop -- createElement from a .ts test; children is a required prop
     renderToStaticMarkup(createElement(Popover, {label: 'Show or hide columns', trigger, children: null}));
   const triggerTag = (html: string) => /<button[^>]*>/.exec(html)![0];
 

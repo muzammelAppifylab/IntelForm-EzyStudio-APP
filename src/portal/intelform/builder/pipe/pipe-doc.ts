@@ -1,5 +1,5 @@
 import { coreRegistry } from '../../../../lib/intelform/form/types/registry'
-import { PIPE_RE, pipeToken } from '../../../../lib/intelform/form/logic'
+import { PIPE_RE } from '../../../../lib/intelform/form/logic'
 import type { FormDefinition, FormField } from '../../../../lib/intelform/form/definition'
 import { fieldName } from '../ops'
 

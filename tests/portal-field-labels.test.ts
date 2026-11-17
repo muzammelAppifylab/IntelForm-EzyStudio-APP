@@ -77,6 +77,7 @@ describe('useForm ids', () => {
   it('form.id(name) is the id field(name) gives its control, with or without idPrefix', () => {
     function Demo({prefix}: {prefix?: string}) {
       const form = useForm({email: ''}, {}, prefix ? {idPrefix: prefix} : {});
+      // oxlint-disable-next-line react/no-children-prop -- createElement from a .ts test; children is a required prop
       return createElement(Field, {id: form.id('email'), label: 'Email', children: createElement('input', form.field('email'))});
     }
     for (const prefix of [undefined, 'x-']) {

@@ -9,7 +9,6 @@ import {
   newOptionId,
   fieldId,
   optionId,
-  type FormField,
 } from '../../src/lib/intelform/form/definition'
 import { SYSTEM_LABELS, errorMessage, formatLabel } from '../../src/lib/intelform/form/labels'
 import { isSafeUrl, safeUrl } from '../../src/lib/intelform/form/safe-url'

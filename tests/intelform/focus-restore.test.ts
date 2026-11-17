@@ -68,7 +68,10 @@ describe('restoreFocusIfLost', () => {
     const queue: (() => void)[] = [];
     restoreFocusIfLost(() => el('x'), {doc: {activeElement: body as never, body: body as never}, frame: cb => queue.push(cb), frames: 3});
     let n = 0;
-    while (queue.length) (queue.shift()!(), n++);
+    while (queue.length) {
+      queue.shift()!();
+      n++;
+    }
     expect(n).toBe(3);
   });
 });
