@@ -19,9 +19,9 @@ import {
   repairOrBlank,
   savedTemplateSlug,
   statusAfterSettings,
-  webhookUrlProblem,
 } from '../../src/server/intelform/forms/core';
 import {Hono} from 'hono';
+import {assertSafeUrl, WebhookUrlError} from '../../src/server/intelform/webhooks/ssrf';
 
 import {formDraftRoutes} from '../../src/server/intelform/builder/form-routes';
 import {formsRoutes} from '../../src/server/routes/forms';
@@ -153,9 +153,12 @@ describe('settings', () => {
   });
 });
 
+// The one webhook URL rule (save and send) is webhooks/ssrf.ts; forms/core no longer has its own copy.
 describe('webhook URL', () => {
+  const LIVE = {allowHttp: false, allowPrivate: false};
+
   it('accepts a public https address', () => {
-    expect(webhookUrlProblem('https://hooks.example.com/services/T000')).toBeNull();
+    expect(assertSafeUrl('https://hooks.example.com/services/T000', LIVE).hostname).toBe('hooks.example.com');
   });
 
   it.each([
@@ -177,9 +180,13 @@ describe('webhook URL', () => {
     'https://[::1]/x',
     'https://[fd00::1]/x',
     'https://[::ffff:10.0.0.1]/x',
+    // The dead forms/core copy let these through; the live check refuses them.
+    'https://foo.corp/a',
+    'https://nas.lan/a',
+    'https://intranet/a',
     `https://example.com/${'a'.repeat(2100)}`,
   ])('refuses %s', url => {
-    expect(webhookUrlProblem(url)).not.toBeNull();
+    expect(() => assertSafeUrl(url, LIVE)).toThrow(WebhookUrlError);
   });
 });
 

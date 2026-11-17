@@ -66,8 +66,6 @@ export function findBuiltinTemplate(idOrSlug: string | null | undefined): Server
   return byId.get(idOrSlug.toLowerCase()) ?? bySlug.get(idOrSlug);
 }
 
-export const isBuiltinTemplateId = (id: string) => byId.has(id.toLowerCase());
-
 /** The gallery card of a built-in. */
 export function builtinTemplateSummary(t: ServerBuiltinTemplate): TemplateSummary {
   return {

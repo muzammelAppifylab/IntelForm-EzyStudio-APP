@@ -9,7 +9,7 @@ import {ipHashFor, ipKeyFor, safeEqual} from '../../src/server/intelform/respond
 import {parseEvent} from '../../src/server/intelform/respondent/events';
 import {isClosed, loadBySlug, parseSettings, SLUG_RE} from '../../src/server/intelform/respondent/load';
 import {safeJson} from '../../src/server/intelform/respondent/page';
-import {crc32, validatePng} from '../../src/server/intelform/respondent/png';
+import {crc32, validatePng} from '../../src/server/intelform/uploads/png';
 import {retryAfter, tooMany} from '../../src/server/intelform/respondent/rate-limit';
 import {countryOf, deviceOf} from '../../src/server/intelform/respondent/request-meta';
 import {
@@ -106,7 +106,7 @@ async function reason(buf: Uint8Array): Promise<string> {
 
 const TINY = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 
-describe('validatePng (Worker port)', () => {
+describe('validatePng (uploads/png, the live signature check)', () => {
   it('matches the standard CRC-32', () => {
     expect(crc32(Buffer.from('IEND'))).toBe(0xae426082);
   });
@@ -131,7 +131,7 @@ describe('validatePng (Worker port)', () => {
     expect(await reason(broken)).toMatch(/bad CRC/);
     // zlib data with bytes hidden after the stream
     const z = Buffer.concat([deflateSync(rows(4, 4)), Buffer.from('hidden')]);
-    expect(await reason(png([head!, chunk('IDAT', z), iend!]))).toBe('bad image data');
+    expect(await reason(png([head!, chunk('IDAT', z), iend!]))).toBe('bytes after image data');
     // too short, too long, bad filter
     expect(await reason(png([head!, chunk('IDAT', deflateSync(rows(4, 3))), iend!]))).toBe('image data too short');
     expect(await reason(png([head!, chunk('IDAT', deflateSync(rows(4, 9))), iend!]))).toBe('image data too long');

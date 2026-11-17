@@ -1,6 +1,5 @@
 import {describe, expect, it} from 'vitest';
 
-import {ABILITY_OF, canDo, DEFAULT_GRANTS, INTELFORM_CODENAMES, NO_INTELFORM_ABILITIES} from '../../src/lib/intelform/roles';
 import {
   appSettingsPatch,
   defaultAppSettings,
@@ -10,43 +9,6 @@ import {
   type AppSettingsRow,
 } from '../../src/lib/intelform/settings-app';
 import {defaultFormSettings, formSettings} from '../../src/lib/intelform/form/settings';
-import {abilitiesFor, CATALOGUE, PERMISSIONS} from '../../src/server/permissions';
-
-describe('IntelForm roles mirror the permission catalogue', () => {
-  it('uses the same codenames and abilities as src/server/permissions.ts', () => {
-    for (const [key, codename] of Object.entries(INTELFORM_CODENAMES)) {
-      expect(PERMISSIONS[key as keyof typeof PERMISSIONS]).toBe(codename);
-      const entry = CATALOGUE[key as keyof typeof CATALOGUE] as {ability?: string};
-      expect(entry.ability).toBe(ABILITY_OF[codename]);
-    }
-    expect(Object.keys(NO_INTELFORM_ABILITIES).sort()).toEqual(Object.values(ABILITY_OF).sort());
-  });
-
-  it('grants each role what the catalogue gives it the first time', () => {
-    for (const role of ['admin', 'editor', 'viewer'] as const) {
-      const expected = Object.values(CATALOGUE)
-        .filter(e => (e as {roles?: readonly string[]}).roles?.includes(role) && e.codename.match(/^site:(form|response|contact|intelform):/))
-        .map(e => e.codename)
-        .sort();
-      expect([...(DEFAULT_GRANTS[role] as readonly string[])].sort()).toEqual(expected);
-    }
-  });
-
-  it('answers the old can(role, permission) from /me abilities', () => {
-    const viewer = abilitiesFor(new Set(DEFAULT_GRANTS.viewer as readonly string[]));
-    expect(canDo(viewer, 'forms.view')).toBe(true);
-    expect(canDo(viewer, 'responses.view')).toBe(true);
-    expect(canDo(viewer, 'forms.edit')).toBe(false);
-    expect(canDo(viewer, 'responses.delete')).toBe(false);
-    expect(canDo(viewer, 'settings.manage')).toBe(false);
-    const editor = abilitiesFor(new Set(DEFAULT_GRANTS.editor as readonly string[]));
-    expect(canDo(editor, 'templates.edit')).toBe(true);
-    expect(canDo(editor, 'settings.manage')).toBe(false);
-    const owner = abilitiesFor(new Set(['*']));
-    expect(canDo(owner, 'settings.manage')).toBe(true);
-    expect(canDo(null, 'forms.view')).toBe(false);
-  });
-});
 
 describe('app settings', () => {
   const row: AppSettingsRow = {

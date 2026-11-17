@@ -90,9 +90,6 @@ export const CONDITION_VALUE_INPUTS: ConditionValueRegistry = {
   country: CountryConditionValue,
 };
 
-/** Types that have a logic value input (the rest take no value or store no answer). */
-export const TYPES_WITH_CONDITION_VALUE = Object.keys(CONDITION_VALUE_INPUTS) as FieldType[];
-
 /** Aliases. */
 export const settingsEditors = FIELD_SETTINGS;
 export const conditionValueInputs = CONDITION_VALUE_INPUTS;

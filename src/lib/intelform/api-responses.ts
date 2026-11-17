@@ -92,13 +92,6 @@ export type TablePrefsInput = z.infer<typeof tablePrefsInput>
 
 export const SUMMARY_RANGES = ['7d', '30d', '90d', 'all', 'custom'] as const
 export type SummaryRange = (typeof SUMMARY_RANGES)[number]
-export const SUMMARY_RANGE_LABEL: Record<SummaryRange, string> = {
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  '90d': 'Last 90 days',
-  all: 'All time',
-  custom: 'Custom',
-}
 
 /** Longest custom summary range in days, both ends included (about ten years): the series has one row per day. */
 export const MAX_SUMMARY_DAYS = 3660

@@ -5,7 +5,8 @@ import { coreRegistry } from './types/registry'
  * Answer → CSV cells (PRD "Responses → CSV export"). One column per field, except a split
  * name (first, last) and an address (one per enabled line). Multiple choice is joined with
  * "; ", a signature is its URL, choices are option labels ("Other" answers show their text).
- * Cells are plain text: CSV escaping, formula guarding and the BOM are server/lib/csv.ts.
+ * Cells are plain text: CSV escaping, formula guarding and the BOM are
+ * src/server/intelform/responses/csv-text.ts.
  * Section breaks have no columns.
  */
 
@@ -28,12 +29,3 @@ export function answerToCsv(field: FormField, value: unknown): string[] {
   }
 }
 
-/** Headers for a whole form (fields in order). */
-export function csvHeadersFor(fields: readonly FormField[]): string[] {
-  return fields.flatMap(csvHeaders)
-}
-
-/** One response row (fields in order). */
-export function csvRowFor(fields: readonly FormField[], answers: Record<string, unknown>): string[] {
-  return fields.flatMap((f) => answerToCsv(f, answers[f.id]))
-}

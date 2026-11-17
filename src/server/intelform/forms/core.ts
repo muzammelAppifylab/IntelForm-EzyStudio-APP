@@ -8,7 +8,7 @@ import {coreRegistry} from '../../../lib/intelform/form/types/registry';
 
 /**
  * The forms API's pure logic (no database, no request): slugs, drafts, settings, the If-Match
- * revision, the list's keyset cursor, the webhook URL rule. Ported from IntelForm's
+ * revision, the list's keyset cursor. (The webhook URL rule is ../webhooks/ssrf.ts.) Ported from IntelForm's
  * server/routes/forms.ts; the routes are src/server/routes/forms.ts.
  */
 
@@ -203,60 +203,6 @@ export function statusAfterSettings(
 /** Responses ÷ starts (0–1), or null before anyone started the form. */
 export const completionRate = (responses: number, starts: number): number | null =>
   starts > 0 ? Math.min(1, responses / starts) : null;
-
-// ---------------------------------------------------------------------------
-// Webhook URL (SSRF: refused when saving, not only when sending)
-// ---------------------------------------------------------------------------
-
-export const HTTPS_REQUIRED = 'Use an https:// address. Webhooks carry answers, so plain http:// isn’t allowed.';
-
-function isPrivateIPv4(host: string): boolean {
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 192 && b === 0) ||
-    (a === 198 && (b === 18 || b === 19)) ||
-    a >= 224
-  );
-}
-
-function isPrivateIPv6(host: string): boolean {
-  if (!host.includes(':')) return false;
-  const h = host.toLowerCase();
-  if (h === '::' || h === '::1') return true;
-  // IPv4-mapped / -compatible (::ffff:10.0.0.1, ::ffff:a00:1): refused outright.
-  if (h.startsWith('::ffff:') || /^::\d/.test(h) || h.startsWith('0:0:0:0:0:ffff:')) return true;
-  return /^(fc|fd|fe8|fe9|fea|feb|ff)/.test(h) || h.startsWith('64:ff9b:') || h.startsWith('2001:db8:');
-}
-
-/** The message why a webhook URL can't be used, or null when it can. */
-export function webhookUrlProblem(raw: string): string | null {
-  if (raw.length > 2048) return 'Use a shorter URL';
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return 'Enter a full URL starting with https://';
-  }
-  if (url.protocol === 'http:') return HTTPS_REQUIRED;
-  if (url.protocol !== 'https:') return 'Use an https:// address';
-  if (url.username || url.password) return 'Remove the user name and password from the URL; use a custom header instead';
-  // "localhost." and "db.internal." are the same names as without the final dot.
-  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.+$/, '');
-  if (!host) return 'Enter a full URL starting with https://';
-  // The WHATWG parser already turns 0x7f.1, 2130706433 and friends into dotted IPv4.
-  if (isPrivateIPv4(host) || isPrivateIPv6(host)) return 'Webhooks can’t be sent to private or local network addresses';
-  if (/^(localhost|.*\.localhost|.*\.local|.*\.internal|.*\.home\.arpa)$/i.test(host)) return 'Webhooks can’t be sent to local host names';
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // The forms list: query and keyset cursor

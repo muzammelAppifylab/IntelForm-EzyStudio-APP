@@ -1,16 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import { blankDefinition, newField } from '../../src/lib/intelform/form/definition'
-import { docToText, filterSources, pipeSources, textToDoc } from '../../src/portal/intelform/builder/pipe/pipe-doc'
+import { filterSources, pipeSources, textToDoc } from '../../src/portal/intelform/builder/pipe/pipe-doc'
 
 describe('pipe text ↔ editor document', () => {
-  it('round-trips text with tokens, parts and fallbacks', () => {
-    for (const text of ['Hi {f_abcd1234.first|there}!', '{f_abcd1234} and {f_wxyz9876}', 'Plain', '', 'Line one\nLine {f_abcd1234}']) {
-      expect(docToText(textToDoc(text, true))).toBe(text)
-    }
+  // The editor turns its DOM back into text itself (serialize in PipeEditor.tsx); this checks the
+  // document it is given: one paragraph per line, text and chip nodes in order.
+  it('splits lines into paragraphs of text and chip nodes', () => {
+    expect(textToDoc('Hi {f_abcd1234.first|there}!\nLine two', true)).toEqual({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Hi ' },
+            { type: 'pipe', attrs: { id: 'f_abcd1234', part: 'first', fallback: 'there' } },
+            { type: 'text', text: '!' },
+          ],
+        },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Line two' }] },
+      ],
+    })
+    expect(textToDoc('', true)).toEqual({ type: 'doc', content: [{ type: 'paragraph' }] })
   })
 
   it('single-line mode folds newlines into spaces', () => {
-    expect(docToText(textToDoc('a\nb', false))).toBe('a b')
+    expect(textToDoc('a\nb', false)).toEqual({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'a b' }] }] })
   })
 
   it('makes chip nodes for tokens', () => {

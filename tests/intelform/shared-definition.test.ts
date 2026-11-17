@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { csvHeaders, answerToCsv, csvRowFor } from '../../src/lib/intelform/form/csv'
+import { csvHeaders, answerToCsv } from '../../src/lib/intelform/form/csv'
 import {
   OTHER_OPTION_ID,
   blankDefinition,
-  fieldsByPage,
   formDefinition,
   newField,
   newFieldId,
@@ -104,24 +103,6 @@ describe('ids', () => {
   })
 })
 
-describe('fieldsByPage', () => {
-  it('splits at section breaks', () => {
-    const fields: FormField[] = [
-      newField('email', { id: 'f_aaaa' }),
-      newField('section_break', { id: 'f_sec1', label: 'Two' }),
-      newField('yes_no', { id: 'f_bbbb' }),
-      newField('section_break', { id: 'f_sec2' }),
-    ]
-    const pages = fieldsByPage({ fields })
-    expect(pages.map((p) => [p.section?.id ?? null, p.fields.map((f) => f.id)])).toEqual([
-      [null, ['f_aaaa']],
-      ['f_sec1', ['f_bbbb']],
-      ['f_sec2', []],
-    ])
-    expect(fieldsByPage({ fields: fields.slice(1) })[0].section?.id).toBe('f_sec1')
-  })
-})
-
 describe('csv', () => {
   it('builds headers and cells per type', () => {
     const name = newField('name', { id: 'f_name', label: 'Your name', props: { split: true } })
@@ -137,7 +118,9 @@ describe('csv', () => {
     expect(answerToCsv(addr, { street: '1 Main', city: 'Leeds', country: 'GB' })).toEqual(['1 Main', 'Leeds', 'GB'])
     expect(answerToCsv(multi, [{ option: 'o_a1' }, { option: 'o_other', other: 'Radio' }])).toEqual(['Search; Radio'])
     expect(answerToCsv(sig, { url: 'https://cdn.example.com/s.png' })).toEqual(['https://cdn.example.com/s.png'])
-    expect(csvRowFor([name, sec, sig], { f_name: 'garbage' })).toEqual(['garbage', '', ''])
+    // A malformed answer still fills its columns; a section break has none.
+    expect(answerToCsv(name, 'garbage')).toEqual(['garbage', ''])
+    expect(answerToCsv(sec, 'x')).toEqual([])
   })
 })
 

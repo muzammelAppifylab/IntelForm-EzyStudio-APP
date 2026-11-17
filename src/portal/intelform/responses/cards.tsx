@@ -7,9 +7,8 @@ import {FIELD_ICON} from '../builder/build/field-icons';
 import {formatDuration, formatNumber, formatShare, formatShortDate, plural} from './format';
 
 /**
- * Summary cards, one per question (legacy src/pages/builder/responses/cards.tsx). Each field
- * type's `src/form-types/<type>/SummaryCard.tsx` re-exports one of these; `CARD_BY_KIND` picks
- * the same card from the data the server sent, so the summary never depends on the registry.
+ * Summary cards, one per question (legacy src/pages/builder/responses/cards.tsx). `CARD_BY_KIND`
+ * picks the card from the data kind the server sent (questionData in responses/summary.ts).
  * Bars are SVG sized by attributes (no inline styles: CSP).
  */
 
@@ -257,7 +256,7 @@ export function CountCard(p: SummaryCardProps) {
   );
 }
 
-/** The card for a question's summary data (the same pairing as the per-type SummaryCard files). */
+/** The card for a question's summary data. */
 export const CARD_BY_KIND: Record<QuestionData['kind'], ComponentType<SummaryCardProps>> = {
   choice: ChoiceCard,
   rating: RatingCard,

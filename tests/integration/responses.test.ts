@@ -3,6 +3,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 import {app} from '../../src/server/app';
 // Registers the job handlers: locally an export job runs as soon as it is sent.
 import '../../src/server/background';
+import {unzip} from '../intelform/unzip';
 import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -267,5 +268,19 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect(zip.headers.get('content-type')).toBe('application/zip');
     // The parts stay until the hourly sweep, a day later.
     expect(await db.intelformExportPart.count()).toBeGreaterThan(0);
+    // The bytes the live export job wrote (exports/builders.ts) read back as a valid ZIP: every
+    // record signature, offset and CRC-32 checks out, one CSV per form.
+    const parts = await db.intelformExportPart.findMany({
+      where: {exportId: started.json.id as string},
+      orderBy: {seq: 'asc'},
+      select: {data: true},
+    });
+    const entries = unzip(Buffer.concat(parts.map(p => Buffer.from(p.data))));
+    expect(entries.map(e => e.name).sort()).toEqual(['feedback.csv', 'other.csv']);
+    for (const e of entries) {
+      expect(e.crcOk, e.name).toBe(true);
+      expect(e.text.startsWith('﻿'), e.name).toBe(true);
+      expect(e.text, e.name).toContain('Favourite fruit');
+    }
   });
 });

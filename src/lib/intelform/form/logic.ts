@@ -135,28 +135,6 @@ export function validateField(
 }
 
 /**
- * Browser helper for Next / Submit: errors for the given (visible) fields only.
- * Fields that are hidden right now are skipped.
- */
-export function validatePage(
-  def: FormDefinition,
-  answers: Answers,
-  fieldIds: readonly string[],
-  opts: Omit<ValidateOptions, 'hidden'> = {},
-): Record<string, string> {
-  const labels = SYSTEM_LABELS
-  const vis = computeVisibility(def, answers)
-  const errors: Record<string, string> = {}
-  for (const id of fieldIds) {
-    const f = indexOf(def).get(id)?.field
-    if (!f || !vis.fields.has(id)) continue
-    const r = validateField(f, answers[id], labels, opts.context)
-    if (!r.ok) errors[id] = r.error
-  }
-  return errors
-}
-
-/**
  * Server (and final client) check: re-run visibility, reject or drop answers to hidden
  * fields, require only visible required fields, validate every answer with its type.
  * Unknown keys and section breaks are dropped. Errors are keyed by field id ("_form" for
@@ -377,24 +355,6 @@ export function dependentsOf(def: FormDefinition, fieldId: string): Dependent[] 
   if ([e.title, e.message].some((t) => parsePipes(t).some((p) => p.fieldId === fieldId))) {
     out.push({ fieldId: 'endScreen', via: 'pipe' })
   }
-  return out
-}
-
-/** Rules whose source sits at or below their target (after a reorder). One entry per pair. */
-export function orderViolations(def: Def): { target: string; source: string }[] {
-  const idx = indexOf(def)
-  const out: { target: string; source: string }[] = []
-  const seen = new Set<string>()
-  def.fields.forEach((target, ti) => {
-    for (const c of target.logic?.conditions ?? []) {
-      const s = idx.get(c.field)
-      const key = `${target.id}>${c.field}`
-      if (s && s.index >= ti && !seen.has(key)) {
-        seen.add(key)
-        out.push({ target: target.id, source: c.field })
-      }
-    }
-  })
   return out
 }
 

@@ -1,7 +1,7 @@
 /**
  * IntelForm's upload limits: ONE place for the routes, the browser checks and the pickers' help
  * text (docs/agent/files.md "Your own limits"). Browser-safe: no server imports, so the portal
- * (`src/portal/intelform/upload.ts`) and the respondent page (`src/respondent/upload.ts`) read
+ * (`src/portal/intelform/builder/api.ts`) and the respondent page (`src/respondent/upload.ts`) read
  * the same numbers the routes enforce.
  *
  * Two kinds of file:
