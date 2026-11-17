@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 
 import {afterAll, describe, expect, it} from 'vitest';
 
-import {readAudit, readReport, testDatabaseUrl, testFiles} from '../scripts/check.mjs';
+import {devDatabaseUrls, readAudit, readReport, sameDatabase, testDatabaseUrl, testFiles} from '../scripts/check.mjs';
 
 /**
  * The release gate (`npm run check` = scripts/check.mjs). Audit findings F-021 (the gate went
@@ -57,6 +57,36 @@ describe('testDatabaseUrl', () => {
   });
 });
 
+describe('the test database is never the dev database', () => {
+  it('sameDatabase compares host, port and database name only', () => {
+    const dev = 'postgresql://postgres:pw@localhost:5432/site';
+    expect(sameDatabase(dev, 'postgresql://other:pw2@127.0.0.1/site?schema=public')).toBe(true);
+    expect(sameDatabase(dev, 'postgresql://postgres:pw@LOCALHOST:5432/site')).toBe(true);
+    expect(sameDatabase(dev, 'postgresql://postgres:pw@localhost:5432/site_test')).toBe(false);
+    expect(sameDatabase(dev, 'postgresql://postgres:pw@localhost:5433/site')).toBe(false);
+    expect(sameDatabase(dev, 'postgresql://postgres:pw@db.example.com:5432/site')).toBe(false);
+    expect(sameDatabase('', dev)).toBe(false);
+  });
+
+  it('devDatabaseUrls reads DATABASE_URL from the shell and .env', () => {
+    const envFile = join(scratch, 'dev.env');
+    writeFileSync(envFile, 'DATABASE_URL=postgresql://localhost/from_file\n');
+    expect(devDatabaseUrls({DATABASE_URL: 'postgresql://localhost/from_shell'}, envFile)).toEqual([
+      'postgresql://localhost/from_shell',
+      'postgresql://localhost/from_file',
+    ]);
+  });
+
+  it('npm run check stops when TEST_DATABASE_URL is the dev database', () => {
+    const envFile = join(scratch, 'same.env');
+    writeFileSync(envFile, 'DATABASE_URL=postgresql://u:p@localhost:5432/site\nTEST_DATABASE_URL=postgresql://u:p@127.0.0.1/site\n');
+    const env = {...process.env, TEST_DATABASE_URL: '', DATABASE_URL: '', CHECK_ENV_FILE: envFile};
+    const run = spawnSync(process.execPath, [join(ROOT, 'scripts/check.mjs')], {cwd: scratch, env, encoding: 'utf8'});
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('TEST_DATABASE_URL names the same database as DATABASE_URL');
+  });
+});
+
 describe('readReport', () => {
   const file = (name: string, ...statuses: string[]) => ({
     name: join(ROOT, name),
@@ -76,6 +106,7 @@ describe('readReport', () => {
     };
     const r = readReport(report, ['tests/integration/auth.test.ts', 'tests/intelform/x.test.ts'], ROOT);
     expect(r.integrationSkipped).toEqual(['tests/integration/auth.test.ts > t1']);
+    expect(r.otherSkipped).toEqual(['tests/intelform/x.test.ts']);
     expect(r.missingFiles).toEqual([]);
   });
 

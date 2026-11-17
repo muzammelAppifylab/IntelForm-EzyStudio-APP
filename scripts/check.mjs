@@ -32,6 +32,38 @@ export function testDatabaseUrl(env = process.env, envFile = env.CHECK_ENV_FILE 
   return {url: '', source: null};
 }
 
+/**
+ * True when two Postgres connection strings name the same database (host, port, database name),
+ * whatever the user, password or query. The integration tests EMPTY the test database, so it must
+ * never be the dev database (DATABASE_URL). Unparseable strings compare as trimmed text.
+ */
+export function sameDatabase(a, b) {
+  if (!a?.trim() || !b?.trim()) return false;
+  const key = s => {
+    const u = new URL(s.trim());
+    const host = decodeURIComponent(u.hostname).toLowerCase().replace(/^\[|\]$/g, '');
+    const local = host === '' || host === '127.0.0.1' || host === '::1' || host === 'localhost';
+    const sock = u.searchParams.get('host') ?? '';
+    return [local ? 'localhost' : host, sock, u.port || '5432', decodeURIComponent(u.pathname.replace(/^\/+/, '')) || decodeURIComponent(u.username)].join('|');
+  };
+  try {
+    return key(a) === key(b);
+  } catch {
+    return a.trim() === b.trim();
+  }
+}
+
+/** DATABASE_URL from the shell or `.env` (either one can point at the dev database). */
+export function devDatabaseUrls(env = process.env, envFile = env.CHECK_ENV_FILE || join(ROOT, '.env')) {
+  const urls = [];
+  if (env.DATABASE_URL?.trim()) urls.push(env.DATABASE_URL.trim());
+  if (envFile && existsSync(envFile)) {
+    const fromFile = parseEnv(readFileSync(envFile, 'utf8')).DATABASE_URL?.trim();
+    if (fromFile) urls.push(fromFile);
+  }
+  return urls;
+}
+
 /** Every `*.test.ts` under tests/, as vitest's `include` (`tests/**\/*.test.ts`) finds them. */
 export function testFiles(root = ROOT) {
   const out = [];
@@ -54,16 +86,21 @@ export function testFiles(root = ROOT) {
 export function readReport(report, expectedFiles, root = ROOT) {
   const ran = new Set();
   const integrationSkipped = [];
+  const otherSkipped = new Set();
   for (const file of report.testResults ?? []) {
     const rel = relative(root, file.name).split(sep).join('/');
     ran.add(rel);
-    if (!rel.startsWith('tests/integration/')) continue;
     for (const test of file.assertionResults ?? [])
-      if (test.status !== 'passed' && test.status !== 'failed') integrationSkipped.push(rel + ' > ' + test.fullName);
+      if (test.status !== 'passed' && test.status !== 'failed') {
+        if (rel.startsWith('tests/integration/')) integrationSkipped.push(rel + ' > ' + test.fullName);
+        else otherSkipped.add(rel);
+      }
   }
   return {
     missingFiles: expectedFiles.filter(f => !ran.has(f)),
     integrationSkipped,
+    // Opt-in tests outside tests/integration (their own env var): named, never a failure.
+    otherSkipped: [...otherSkipped].sort(),
     totals: {
       files: ran.size,
       passed: report.numPassedTests ?? 0,
@@ -134,6 +171,13 @@ function main(argv) {
     ]));
     process.exit(1);
   }
+  if (db.url && devDatabaseUrls().some(dev => sameDatabase(dev, db.url))) {
+    console.error(banner([
+      'TEST_DATABASE_URL names the same database as DATABASE_URL.',
+      'The integration tests EMPTY it: point TEST_DATABASE_URL at a separate, throwaway database.',
+    ]));
+    process.exit(1);
+  }
   if (!db.url)
     console.warn(banner(['NO TEST_DATABASE_URL: the integration tests will be SKIPPED.', 'This run is not a release gate.']));
   else console.log('TEST_DATABASE_URL from ' + (db.source === 'shell' ? 'the shell' : '.env') + ' (a throwaway database: the tests empty it).');
@@ -167,6 +211,8 @@ function main(argv) {
           r.totals.failed + ' failed, ' + r.totals.skipped + ' skipped.',
         db.url ? 'Integration suite: ' + (r.integrationSkipped.length ? r.integrationSkipped.length + ' SKIPPED' : 'ran') : 'Integration suite: SKIPPED (no TEST_DATABASE_URL)',
       ]));
+      if (r.otherSkipped.length)
+        console.warn('Opt-in tests skipped (each file says which variable turns it on):\n  ' + r.otherSkipped.join('\n  '));
       if (r.missingFiles.length) {
         console.error('These test files never reported (a test worker crashed?):\n  ' + r.missingFiles.join('\n  '));
         failures.push('tests (files missing from the report)');
