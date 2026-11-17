@@ -74,7 +74,7 @@ function SearchGroup({view}: {view: AppSettingsResponse}) {
           onChange={e => set('description', e.target.value)}
         />
       </Field>
-      <ImageUpload label="Social preview image" purpose="og" value={v.ogImage} onChange={url => set('ogImage', url)} error={errors.fields.ogImage} />
+      <ImageUpload label="Social preview image" purpose="og" value={v.ogImage} onChange={url => set('ogImage', url)} error={errors.fields.ogImage} controlId={errors.control('ogImage', 'as-og-image').id} />
     </SettingsCard>
   );
 }

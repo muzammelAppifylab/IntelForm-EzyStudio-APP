@@ -68,8 +68,8 @@ export function GeneralGroup({view}: {view: AppSettingsResponse}) {
         />
       </Field>
       <div className="settings-two-up">
-        <ImageUpload label="Logo" purpose="logo" shape="square" value={v.logoUrl} onChange={url => set('logoUrl', url)} error={errors.fields.logoUrl} />
-        <ImageUpload label="Favicon" purpose="favicon" shape="square" value={v.faviconUrl} onChange={url => set('faviconUrl', url)} error={errors.fields.faviconUrl} />
+        <ImageUpload label="Logo" purpose="logo" shape="square" value={v.logoUrl} onChange={url => set('logoUrl', url)} error={errors.fields.logoUrl} controlId={errors.control('logoUrl', 'as-logo').id} />
+        <ImageUpload label="Favicon" purpose="favicon" shape="square" value={v.faviconUrl} onChange={url => set('faviconUrl', url)} error={errors.fields.faviconUrl} controlId={errors.control('faviconUrl', 'as-favicon').id} />
       </div>
       <Field id="as-timezone" label="Default time zone" hint="Used for close dates and response times." error={errors.fields.timezone}>
         <Combobox

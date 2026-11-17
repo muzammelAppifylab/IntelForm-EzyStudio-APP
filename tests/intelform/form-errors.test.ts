@@ -52,6 +52,21 @@ describe('controlProps', () => {
   });
 });
 
+describe('ImageUpload (logo, favicon, social image)', () => {
+  it('ties its hint / error to the Upload button, which is the focus target', async () => {
+    const {ImageUpload} = await import('../../src/portal/intelform/settings/bits');
+    const base = {label: 'Logo', purpose: 'logo' as const, value: null, onChange: () => {}, controlId: 'as-logo'};
+    const bad = renderToStaticMarkup(createElement(ImageUpload, {...base, error: 'Upload a PNG or JPEG.'}));
+    const button = bad.match(/<button[^>]*>/)![0];
+    expect(button).toContain('id="as-logo"');
+    expect(button).toContain('aria-describedby="as-logo-error"');
+    expect(bad).toContain('id="as-logo-error"');
+    const ok = renderToStaticMarkup(createElement(ImageUpload, base));
+    expect(ok.match(/<button[^>]*>/)![0]).toContain('aria-describedby="as-logo-hint"');
+    expect(ok).toContain('id="as-logo-hint"');
+  });
+});
+
 describe('focusFirstInvalid', () => {
   const ids = {appName: 'as-app-name', timezone: 'as-timezone', dateFormat: 'as-date-format'};
 
@@ -88,9 +103,8 @@ describe('every useFormErrors screen wires its controls', () => {
     expect(src).not.toMatch(/aria-invalid=\{[^}]*errors\.fields/);
     expect(src).not.toMatch(/invalid=\{Boolean\(errors\.fields/);
     const errored = [...src.matchAll(/error=\{errors\.fields\.(\w+)\}/g)].map(m => m[1]!);
-    // ImageUpload (a button group, no single control) shows its own error in place.
-    const ImageUploadFields = [...src.matchAll(/<ImageUpload\b[^\n]*error=\{errors\.fields\.(\w+)\}/g)].map(m => m[1]!);
-    for (const name of errored.filter(n => !ImageUploadFields.includes(n))) {
+    // Every errored field, ImageUpload included (its Upload button is the control).
+    for (const name of errored) {
       expect(src, `${file}: ${name}`).toMatch(new RegExp(`errors\\.control\\('${name}'`));
     }
   });
