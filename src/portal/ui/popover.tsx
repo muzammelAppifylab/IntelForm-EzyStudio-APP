@@ -265,6 +265,7 @@ export function Combobox({
     const at = shown.findIndex(option => option.value === value);
     setActive(at >= 0 ? at : 0);
     // Only when it opens (typing resets the active row in onChange).
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   useEffect(() => {
     panel.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({block: 'nearest'});

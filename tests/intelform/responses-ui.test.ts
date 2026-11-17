@@ -23,7 +23,6 @@ import {
 } from '../../src/portal/intelform/responses/state';
 
 const field = (id: string, label = id): CatalogField => ({id, type: 'short_text', label, deleted: false, filterable: false});
-const FID = '00000000-0000-4000-8000-00000000f001';
 const tz = encodeURIComponent(browserTz);
 
 describe('responses-ui: URL state', () => {

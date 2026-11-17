@@ -17,7 +17,7 @@ export function siteOrigin(): string {
 
 /** `path` (or an https URL) as an absolute URL; null when the origin is not known. */
 export function absoluteUrl(path: string): string | null {
-  if (/^https:\/\//.test(path)) return path;
+  if (path.startsWith('https://')) return path;
   const origin = siteOrigin();
   return origin ? new URL(path, `${origin}/`).href : null;
 }

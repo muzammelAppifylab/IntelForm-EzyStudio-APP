@@ -95,8 +95,8 @@ describe('mail messages', () => {
     await resendProvider('re_key', 'f@acme.test', fetchImpl as never).send({ to: 'a@x.com', subject: 's', text: 't', replyTo: 'r@acme.test' }, { idempotencyKey: 'k1' })
     const [url, init] = fetchImpl.mock.calls[0]
     expect(url).toBe('https://api.resend.com/emails')
-    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer re_key')
-    expect((init?.headers as Record<string, string>)['Idempotency-Key']).toBe('k1')
+    expect((init!.headers as Record<string, string>).Authorization).toBe('Bearer re_key')
+    expect((init!.headers as Record<string, string>)['Idempotency-Key']).toBe('k1')
     expect(JSON.parse(String(init?.body))).toEqual({ from: 'f@acme.test', to: ['a@x.com'], subject: 's', text: 't', reply_to: 'r@acme.test' })
   })
 

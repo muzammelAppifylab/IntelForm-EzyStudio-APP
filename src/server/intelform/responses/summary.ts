@@ -90,7 +90,7 @@ type NumbersRow = {
  */
 const SUMMARY_PREFIX = 'report:summary:';
 const SUMMARY_TTL = 5 * 60;
-const KEY_SAFE = /^[A-Za-z0-9_.\/:-]{0,64}$/;
+const KEY_SAFE = /^[A-Za-z0-9_./:-]{0,64}$/;
 
 /**
  * formSummary through the cache (a key from ids, the range and the zone only). Only the

@@ -128,7 +128,7 @@ describe('api client', () => {
     const [url, init] = siteFetch.mock.calls[0];
     expect(url).toBe('/site-api/forms/abc');
     expect(init?.method).toBe('PATCH');
-    expect((init?.headers as Record<string, string>)['If-Match']).toBe('"3"');
+    expect((init!.headers as Record<string, string>)['If-Match']).toBe('"3"');
 
     siteFetch.mockResolvedValueOnce(new Response(JSON.stringify({error: {code: 'too_large', message: 'Too big'}}), {status: 413}));
     await expect(patchForm('abc', {title: 'T'}, 4)).rejects.toMatchObject({status: 413, message: 'Too big'});

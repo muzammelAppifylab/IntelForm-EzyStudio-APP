@@ -1,7 +1,7 @@
 import type {FormField} from '../../../lib/intelform/form/definition';
 import {answerToCsv, csvHeaders} from '../../../lib/intelform/form/csv';
 import type {FormCatalog} from './catalog';
-import {CSV_BOM, csvRow, type CsvCell} from './csv-text';
+import {csvRow, type CsvCell} from './csv-text';
 import {displayAnswer} from './format';
 
 /**
