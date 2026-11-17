@@ -8,7 +8,7 @@ import {JobRejected} from '../../platform/background';
 import {permissionScope, problem, requireAuth, withDb, withViewer} from '../../platform/guards';
 import {CSV_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
 import {contactsCsvFilename} from '../intelform/contacts/query';
-import {loadExport, sendExportRun, statusOf} from '../intelform/exports/job';
+import {failStaleExports, loadExport, sendExportRun, STALE_MINUTES, statusOf} from '../intelform/exports/job';
 import {csvFilename} from '../intelform/responses/csv';
 import {contentDisposition} from '../intelform/responses/csv-text';
 import {safeTz, todayIn} from '../intelform/responses/query';
@@ -115,8 +115,13 @@ export const exportsRoutes = new Hono()
 
   .get('/:id', withViewer, requireAuth, withDb, async c => {
     const id = c.req.param('id');
-    const row = UUID.test(id) ? await loadExport(c.var.db, id) : null;
+    const db = c.var.db;
+    let row = UUID.test(id) ? await loadExport(db, id) : null;
     if (!row || row.user_id !== c.var.viewer.id || !(await mayExport(c, row.kind))) return c.json(problem('not_found', NOT_FOUND), 404);
+    // A run that stopped (out of tries, lost) never finishes: say so now, not after the sweep.
+    if (row.status === 'running' && Date.now() - new Date(row.updated_at).getTime() > STALE_MINUTES * 60_000) {
+      if (await failStaleExports(db, id)) row = (await loadExport(db, id)) ?? row;
+    }
     c.header('Cache-Control', 'private, no-store');
     return c.json<ExportStatus>(statusOf(row));
   })

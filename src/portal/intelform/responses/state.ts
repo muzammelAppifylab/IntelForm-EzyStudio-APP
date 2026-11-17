@@ -179,7 +179,7 @@ export function deleteCopy(count: number) {
   const one = count === 1;
   return {
     title: one ? 'Delete this response?' : `Delete ${count} responses?`,
-    body: `${one ? 'Its answers are removed for good' : 'Their answers are removed for good'} and the summary updates. Export a CSV first if you need a copy.`,
+    body: `${one ? 'Its answers are removed for good' : 'Their answers are removed for good'} and the summary updates. Exports already made that include them are removed. Download a CSV first if you need a copy.`,
     confirmLabel: one ? 'Delete response' : `Delete ${count} responses`,
   };
 }

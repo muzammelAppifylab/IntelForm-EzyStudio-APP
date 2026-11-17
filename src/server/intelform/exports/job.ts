@@ -27,6 +27,14 @@ const PART_BYTES = 768 * 1024;
 export const MAX_EXPORT_BYTES = 512 * 1024 * 1024;
 /** Exports are kept this long (hours) after they are started. */
 export const KEEP_HOURS = 24;
+/**
+ * A running export with no progress saved for this long has stopped: its job ran out of tries
+ * (1 + 2 + 10 minutes of retry delays, each run up to 1 minute) or was lost. It is marked failed
+ * so the dashboard says "didn't finish, try again" instead of "running" until the sweep.
+ */
+export const STALE_MINUTES = 20;
+/** What a person sees for an export that stopped. */
+export const UNFINISHED = 'The export didn’t finish. Try again.';
 
 export interface ExportRow {
   id: string;
@@ -43,6 +51,7 @@ export interface ExportRow {
   content_type: string;
   error: string | null;
   created_at: Date;
+  updated_at: Date;
 }
 
 export function statusOf(row: Pick<ExportRow, 'id' | 'kind' | 'status' | 'rows' | 'file_name' | 'error' | 'created_at'>): ExportStatus {
@@ -52,7 +61,7 @@ export function statusOf(row: Pick<ExportRow, 'id' | 'kind' | 'status' | 'rows' 
     status: row.status,
     rows: Number(row.rows),
     fileName: row.file_name,
-    error: row.status === 'failed' ? (row.error ?? 'The export didn’t finish. Try again.') : null,
+    error: row.status === 'failed' ? (row.error ?? UNFINISHED) : null,
     createdAt: (row.created_at instanceof Date ? row.created_at : new Date(row.created_at)).toISOString(),
   };
 }
@@ -62,7 +71,7 @@ type Db = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
 export async function loadExport(db: Db, id: string): Promise<ExportRow | null> {
   const rows = await db.$queryRaw<ExportRow[]>`
     SELECT id::text AS id, user_id, kind, form_id::text AS form_id, params, status, state, rows, bytes, parts,
-      file_name, content_type, error, created_at
+      file_name, content_type, error, created_at, updated_at
     FROM intelform_exports WHERE id = ${id}::uuid
   `;
   return rows[0] ?? null;
@@ -83,15 +92,54 @@ async function fail(db: Db, id: string, message: string): Promise<void> {
   await db.$executeRaw`DELETE FROM intelform_export_parts WHERE export_id = ${id}::uuid`;
 }
 
-/** The job handler: `{exportId}`. */
+/**
+ * Marks running exports with no progress for STALE_MINUTES failed (their parts go): one export
+ * (`id`, the status route) or up to 500 (the hourly maintenance). Returns how many.
+ */
+export async function failStaleExports(db: Db, id?: string): Promise<number> {
+  const only = id ?? null;
+  const stale = await db.$queryRaw<{id: string}[]>`
+    UPDATE intelform_exports SET status = 'failed', error = ${UNFINISHED}, state = '{}'::jsonb, updated_at = now()
+    WHERE id IN (
+      SELECT id FROM intelform_exports
+      WHERE status = 'running' AND updated_at < now() - make_interval(mins => ${STALE_MINUTES}::int)
+        AND (${only}::uuid IS NULL OR id = ${only}::uuid)
+      LIMIT 500
+    ) AND status = 'running'
+    RETURNING id::text AS id
+  `;
+  if (stale.length) {
+    await db.$executeRaw`DELETE FROM intelform_export_parts WHERE export_id = ANY(${stale.map(s => s.id)}::uuid[])`;
+  }
+  return stale.length;
+}
+
+/**
+ * The job handler: `{exportId}`. `lastTry` (the platform's last attempt): a run that fails then
+ * marks the export failed, so it never shows "running" with nothing left to run it.
+ */
 export async function runExportJob(
   db: Db,
   requestUrl: string,
   data: unknown,
-  deps: {now?: () => number; send?: typeof sendExportRun} = {}
+  deps: {now?: () => number; send?: typeof sendExportRun; lastTry?: boolean} = {}
 ): Promise<void> {
   const id = String((data as {exportId?: unknown} | null)?.exportId ?? '');
   if (!UUID.test(id)) throw new DontRetry('This export job has no export id.');
+  try {
+    await runExport(db, requestUrl, id, deps);
+  } catch (err) {
+    if (deps.lastTry || err instanceof DontRetry) await fail(db, id, UNFINISHED).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function runExport(
+  db: Db,
+  requestUrl: string,
+  id: string,
+  deps: {now?: () => number; send?: typeof sendExportRun}
+): Promise<void> {
   const now = deps.now ?? Date.now;
   const started = now();
   const row = await loadExport(db, id);
@@ -137,11 +185,14 @@ export async function runExportJob(
 
   // ONE statement: the part (seq = the parts count this run saw) and the progress. A run that
   // repeats finds the part there (ON CONFLICT) and the parts count moved: it changes nothing.
+  // An export that stopped meanwhile (failed: responses in it were deleted, or it went stale)
+  // gets no part.
   const saved = await db.$queryRaw<{id: string}[]>`
     WITH p AS (
       INSERT INTO intelform_export_parts (export_id, seq, data)
       SELECT ${id}::uuid, ${row.parts}::int, ${bytes}
       WHERE ${size}::int > 0
+        AND EXISTS (SELECT 1 FROM intelform_exports WHERE id = ${id}::uuid AND status = 'running' AND parts = ${row.parts}::int)
       ON CONFLICT (export_id, seq) DO NOTHING
       RETURNING 1
     )
@@ -156,7 +207,16 @@ export async function runExportJob(
       AND (${size}::int = 0 OR EXISTS (SELECT 1 FROM p))
     RETURNING id::text AS id
   `;
-  if (!saved.length || done) return;
+  if (!saved.length) {
+    // Stopped while this run built (a delete committed while this statement ran): no part of a
+    // stopped export stays behind.
+    await db.$executeRaw`
+      DELETE FROM intelform_export_parts p USING intelform_exports e
+      WHERE p.export_id = e.id AND e.id = ${id}::uuid AND e.status <> 'running'
+    `;
+    return;
+  }
+  if (done) return;
 
   try {
     await (deps.send ?? sendExportRun)(requestUrl, id, row.parts + 1);

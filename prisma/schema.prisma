@@ -693,6 +693,7 @@ model IntelformExport {
   @@index([userId, createdAt(sort: Desc)])
   @@index([createdAt])
   @@index([formId])
+  @@index([status, updatedAt])
   @@map("intelform_exports")
 }
 

@@ -7,6 +7,8 @@ import {
   RETENTION_BATCH,
   RETENTION_MAX_BATCHES,
 } from '../../src/server/background'
+import { cache } from '../../src/platform/cache'
+import { OVERVIEW_KEY } from '../../src/server/intelform/contacts/query'
 
 describe('background lists', () => {
   it('has a handler for every list and schedule in background.json', () => {
@@ -75,6 +77,21 @@ describe('applyRetention', () => {
     expect(out.more).toBe(true)
   })
 
+  it('clears the cached Summary and contacts strip once responses went (F-029)', async () => {
+    const summaryKey = 'report:summary:00000000-0000-4000-8000-000000000001:30d:::UTC'
+    await cache.set(summaryKey, { n: 1 }, 300)
+    await cache.set(OVERVIEW_KEY, { n: 1 }, 600)
+    expect(await cache.get(summaryKey)).not.toBeNull()
+    expect(await cache.get(OVERVIEW_KEY)).not.toBeNull()
+    // Nothing deleted: the cache stays.
+    await applyRetention(fakeDb(30, [batch(0)]).db as never)
+    expect(await cache.get(OVERVIEW_KEY)).not.toBeNull()
+    // Rows deleted: both go.
+    await applyRetention(fakeDb(30, [batch(3)]).db as never)
+    expect(await cache.get(summaryKey)).toBeNull()
+    expect(await cache.get(OVERVIEW_KEY)).toBeNull()
+  })
+
   it('stops starting batches when the time budget is spent', async () => {
     let t = 0
     const { db } = fakeDb(7, Array.from({ length: 5 }, () => batch(RETENTION_BATCH)))
@@ -87,7 +104,11 @@ describe('applyRetention', () => {
 describe('hourlyMaintenance', () => {
   it('runs each bounded sweep once, then empties the file trash for a while', async () => {
     // 2 rows each: under a full sweep batch, so the rate-limit sweep stops after one statement.
-    const db = { $executeRaw: vi.fn(async (_s: TemplateStringsArray, ..._v: unknown[]) => 2) }
+    const db = {
+      $executeRaw: vi.fn(async (_s: TemplateStringsArray, ..._v: unknown[]) => 2),
+      // Exports whose job stopped: none.
+      $queryRaw: vi.fn(async (_s: TemplateStringsArray, ..._v: unknown[]) => [] as unknown[]),
+    }
     const drain = vi.fn(async () => ({ removed: 4, failed: 0, more: false }))
     expect(await hourlyMaintenance(db as never, { drain })).toEqual({
       closedForms: 2,
@@ -96,6 +117,7 @@ describe('hourlyMaintenance', () => {
       presence: 2,
       responseHours: 2,
       exports: 2,
+      staleExports: 0,
       files: 4,
     })
     const sql = db.$executeRaw.mock.calls.map((c) => c[0].join('?'))
@@ -105,6 +127,7 @@ describe('hourlyMaintenance', () => {
     expect(sql[3]).toContain('form_presence')
     expect(sql[4]).toContain('form_response_hours')
     expect(sql[5]).toContain('intelform_exports')
+    expect(db.$queryRaw.mock.calls[0]![0].join('?')).toContain("status = 'failed'")
     expect(drain).toHaveBeenCalledTimes(1)
   })
 })
