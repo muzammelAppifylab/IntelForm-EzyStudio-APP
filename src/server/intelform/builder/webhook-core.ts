@@ -1,12 +1,5 @@
 import type {FormDefinition, FormField} from '../../../lib/intelform/form/definition';
-import {
-  assertSafeUrl as checkUrl,
-  HTTPS_REQUIRED,
-  isIpLiteral,
-  isPrivateAddress as isPrivateLiteral,
-  WebhookUrlError,
-  type UrlPolicy,
-} from '../webhooks/ssrf';
+import {assertSafeUrl as checkUrl, WebhookUrlError, type UrlPolicy} from '../webhooks/ssrf';
 
 /**
  * Outbound webhooks, the pure parts (no database, no network): URL rules, the signing secret,
@@ -29,18 +22,12 @@ import {
 
 export const WEBHOOK_TIMEOUT_MS = 10_000;
 export const MAX_BODY_CAPTURE = 1024;
-export {HTTPS_REQUIRED};
 
 export class UnsafeWebhookUrl extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'UnsafeWebhookUrl';
   }
-}
-
-/** True for a loopback, private, link-local, CGNAT, metadata, multicast or other non-public IP literal (false for a name). */
-export function isPrivateAddress(host: string): boolean {
-  return isIpLiteral(host) && isPrivateLiteral(host);
 }
 
 /**

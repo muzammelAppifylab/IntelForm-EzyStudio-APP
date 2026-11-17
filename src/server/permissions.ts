@@ -24,7 +24,7 @@ export const CATALOGUE = definePermissions({
   // ------------------------------------------------------------- IntelForm
   // IntelForm's old team roles map onto the template's: Owner is `owner` (holds `*`), Editor and
   // Viewer are the `editor` / `viewer` roles the intelform migration creates, and `admin` gets
-  // what an Editor has plus the app settings. src/lib/intelform/roles.ts mirrors this for the UI.
+  // what an Editor has plus the app settings.
 
   /** Open the forms list, the builder (read only) and a form's settings. */
   FORM_READ: {

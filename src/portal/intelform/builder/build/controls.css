@@ -1,6 +1,6 @@
 /*
  * The builder's dense controls (src/portal/intelform/builder/{controls,condition-inputs,
- * OptionsEditor,CountryPicker,ImageUpload}.tsx), used by the Build panel and the Design,
+ * OptionsEditor,CountryPicker}.tsx), used by the Build panel and the Design,
  * Settings and Share tabs. Tokens only (src/styles/global.css); no inline styles (CSP).
  */
 

@@ -12,7 +12,6 @@ import {
   assertSafeUrl,
   deliveryState,
   generateWebhookSecret,
-  isPrivateAddress,
   readWebhookConfig,
   signWebhook,
   testPayload,
@@ -20,6 +19,7 @@ import {
 } from '../../src/server/intelform/builder/webhook-core';
 import {runDelivery, webhookUrlPolicy} from '../../src/server/intelform/builder/webhook-delivery';
 import {config} from '../../src/platform/config';
+import {isIpLiteral, isPrivateAddress} from '../../src/server/intelform/webhooks/ssrf';
 
 const field = (id: string, type: string, label: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -170,9 +170,11 @@ describe('webhook URLs', () => {
     for (const host of ['127.0.0.1', '10.0.0.1', '172.20.1.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '0.0.0.0', '::1', '[::1]', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '::ffff:7f00:1', 'ff02::1']) {
       expect(isPrivateAddress(host), host).toBe(true);
     }
-    for (const host of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111', 'hooks.example.com']) {
+    for (const host of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111']) {
       expect(isPrivateAddress(host), host).toBe(false);
     }
+    // A name is not a literal: assertSafeUrl checks names by their suffix instead.
+    expect(isIpLiteral('hooks.example.com')).toBe(false);
   });
 
   it('accepts public https only, with no credentials', () => {

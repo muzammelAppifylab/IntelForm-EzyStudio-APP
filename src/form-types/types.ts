@@ -16,9 +16,9 @@ import type {ChangeMeta, FieldRendererProps} from '../respondent/types';
  *   Renderer.tsx        default export: ComponentType<FieldRendererProps<'<type>'>>  (respondent)
  *   Settings.tsx        default export: FieldSettingsComponent<'<type>'>             (builder panel)
  *   ConditionValue.tsx  default export: ConditionValueComponent<'<type>'>            (logic editor)
- *   SummaryCard.tsx     default export: ComponentType<SummaryCardProps>              (responses)
  *
- * The registries that collect them are src/form-types/{renderers,settings,summaries}.tsx.
+ * The registries that collect them are src/form-types/{renderers,settings}.tsx. Responses → Summary
+ * cards are picked by the summary's data kind (CARD_BY_KIND in src/portal/intelform/responses/cards.tsx).
  */
 export type {
   ChangeMeta,
@@ -43,10 +43,8 @@ export interface SummaryCardProps {
 }
 
 export type FieldRendererComponent<T extends FieldType = FieldType> = ComponentType<FieldRendererProps<T>>;
-export type SummaryCardComponent = ComponentType<SummaryCardProps>;
 
 /** Registry shapes, so each registry file can be typed without repeating the mapped types. */
 export type RendererRegistry = Record<FieldType, ComponentType<FieldRendererProps>>;
 export type SettingsRegistry = {[K in FieldType]: FieldSettingsComponent<K>};
 export type ConditionValueRegistry = {[K in FieldType]?: ConditionValueComponent<K>};
-export type SummaryRegistry = Record<FieldType, SummaryCardComponent | null>;

@@ -11,7 +11,7 @@ import {
   type DeleteContactsResponse,
 } from '../../../lib/intelform/api-contacts';
 import {cache} from '../../../platform/cache';
-import {CSV_BOM, csvRow} from './csv';
+import {CSV_BOM, csvRow} from '../responses/csv-text';
 import {
   afterFragment,
   CONTACT_COLUMNS,

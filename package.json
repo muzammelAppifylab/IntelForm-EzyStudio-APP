@@ -22,7 +22,6 @@
   "dependencies": {
     "@astrojs/cloudflare": "^14.3.4",
     "@astrojs/react": "^7.0.1",
-    "@dnd-kit/helpers": "^0.5.1",
     "@dnd-kit/react": "^0.5.1",
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/adapter-ppg": "7.10.1",

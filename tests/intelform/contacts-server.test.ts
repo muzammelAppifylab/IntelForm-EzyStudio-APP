@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 
 import {contactsCsvQuery, contactsListQuery, deleteContactsInput} from '../../src/lib/intelform/api-contacts';
-import {contentDisposition, CSV_BOM, csvEscape, csvRow} from '../../src/server/intelform/contacts/csv';
+import {contentDisposition, CSV_BOM, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
 import {CSV_KEYS, LIST_KEYS, parseWith, rawQuery} from '../../src/server/intelform/contacts/input';
 import {
   clearContactsOverview,

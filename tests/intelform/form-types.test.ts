@@ -14,12 +14,12 @@ import {FIELD_RENDERERS, respondentRenderers} from '../../src/form-types/rendere
 import {LETTERS, OTHER_VALUE, toggleValue} from '../../src/form-types/_respondent/constants';
 import {faceFor, ratingStepName, ratingSteps} from '../../src/form-types/_respondent/scales';
 import {CONDITION_VALUE_INPUTS, FIELD_SETTINGS, settingsEditors} from '../../src/form-types/settings';
-import {SUMMARY_CARDS, summaryRenderers} from '../../src/form-types/summaries';
 import {allowedHours, allowedMinutes, stepMinutes, timeAnswer, to24} from '../../src/form-types/time/options';
 import {OTHER_OPTION_ID} from '../../src/lib/intelform/form/base';
 import {FIELD_TYPES, type FieldType} from '../../src/lib/intelform/form/field-types';
 import {SYSTEM_LABELS} from '../../src/lib/intelform/form/labels';
 import {createField} from '../../src/portal/intelform/builder/ops';
+import {CARD_BY_KIND} from '../../src/portal/intelform/responses/cards';
 import {ICON_NAMES} from '../../src/portal/ui';
 import type {FieldRendererProps} from '../../src/respondent/types';
 
@@ -50,16 +50,13 @@ describe('form-types registries', () => {
     for (const t of FIELD_TYPES) {
       expect(FIELD_RENDERERS[t], `renderer for ${t}`).toBeTypeOf('function');
       expect(FIELD_SETTINGS[t], `settings for ${t}`).toBeTypeOf('function');
-      expect(t in SUMMARY_CARDS, `summary for ${t}`).toBe(true);
       expect(ICON_NAMES).toContain(FIELD_ICONS[t]);
     }
   });
 
-  it('have no summary card for section breaks only', () => {
-    for (const t of FIELD_TYPES) {
-      if (t === 'section_break') expect(SUMMARY_CARDS[t]).toBeNull();
-      else expect(SUMMARY_CARDS[t], t).toBeTruthy();
-    }
+  it('have a summary card for every kind of summary data', () => {
+    expect(Object.keys(CARD_BY_KIND).sort()).toEqual(['choice', 'count', 'latest', 'nps', 'number', 'rating']);
+    for (const card of Object.values(CARD_BY_KIND)) expect(card).toBeTypeOf('function');
   });
 
   it('have a logic value input exactly for the types whose operators take a value', () => {
@@ -69,7 +66,6 @@ describe('form-types registries', () => {
   it('export the aliases the contract names', () => {
     expect(respondentRenderers).toBe(FIELD_RENDERERS);
     expect(settingsEditors).toBe(FIELD_SETTINGS);
-    expect(summaryRenderers).toBe(SUMMARY_CARDS);
   });
 });
 
