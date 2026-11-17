@@ -11,3 +11,6 @@ src/generated
 
 # Live platform docs fetched by `npm run platform -- docs`.
 .platform/
+
+# `npm run test:coverage` reports.
+coverage/

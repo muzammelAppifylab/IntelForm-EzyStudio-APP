@@ -1,4 +1,6 @@
+import {existsSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
+import {parseEnv} from 'node:util';
 
 import {defineConfig} from 'vitest/config';
 
@@ -9,9 +11,21 @@ import {defineConfig} from 'vitest/config';
  *
  *   TEST_DATABASE_URL=postgresql://…/site_tpl_test npm test
  *
- * Use a throwaway database: the integration tests empty its tables.
+ * or `TEST_DATABASE_URL=…` in `.env` (the dev server reads `.env` too; only that one name is
+ * taken from it here). Use a throwaway database: the integration tests empty its tables.
+ * `npm run check` (scripts/check.mjs) refuses to run without it.
  */
 // Unit tests run without any of this; `npm test` runs `prisma generate` first.
+if (!process.env.TEST_DATABASE_URL?.trim() && existsSync('.env')) {
+  const fromFile = parseEnv(readFileSync('.env', 'utf8')).TEST_DATABASE_URL?.trim();
+  if (fromFile) process.env.TEST_DATABASE_URL = fromFile;
+}
+if (!process.env.TEST_DATABASE_URL?.trim())
+  console.warn(
+    '\n!!! No TEST_DATABASE_URL: the integration tests (tests/integration/*) are SKIPPED. ' +
+      'Set it in .env or the shell (a throwaway database) before trusting a green run.\n',
+  );
+
 export default defineConfig({
   resolve: {
     alias: [
@@ -33,5 +47,17 @@ export default defineConfig({
     // The integration files share one database: run files one after another.
     fileParallelism: false,
     testTimeout: 30_000,
+    // `npm run test:coverage` (v8). It runs with `--pool=threads`: under coverage a forked
+    // worker sometimes exited mid-file on Windows ("Worker exited unexpectedly") and that
+    // file's tests silently vanished from the summary (audit F-048); worker threads hand the
+    // coverage back over a MessagePort instead of the child-process pipe. `npm run check`
+    // also fails when any test file is missing from the report.
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      exclude: ['src/generated/**'],
+      reporter: ['text-summary', 'html'],
+      reportOnFailure: true,
+    },
   },
 });

@@ -11,7 +11,7 @@
     "build": "prisma generate && astro build",
     "preview": "astro preview",
     "test": "prisma generate && vitest run",
-    "test:coverage": "prisma generate && vitest run --coverage",
+    "test:coverage": "prisma generate && vitest run --coverage --pool=threads",
     "studio": "prisma studio --browser none --port 5555",
     "platform": "node scripts/platform.mjs",
     "lint": "oxlint -c oxlint.json --deny-warnings src tests scripts/check.mjs vitest.config.ts astro.config.mjs prisma.config.ts",
