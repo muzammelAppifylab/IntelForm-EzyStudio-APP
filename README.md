@@ -66,8 +66,10 @@ Background work (`background.json`, handlers in `src/server/background.ts`):
 `intelform-response-notify` (emails after a submission), `intelform-webhooks` and
 `intelform-webhook-deliver` (webhooks, with retries), `intelform-exports` (CSV and ZIP exports,
 in parts), `intelform-file-cleanup` (stored files of deleted responses), and two schedules:
-`intelform-retention` daily at 04:30 (deletes responses past their form's retention period) and
-`intelform-maintenance` hourly (closes forms past their close date, trims logs).
+`intelform-retention` daily at 04:30 (deletes responses older than the app-wide retention period,
+Settings > Data: one period for every form, off by default; exports holding them stop and the
+cached summary and contacts are cleared) and `intelform-maintenance` hourly (closes forms past
+their close date, trims logs, marks exports whose job stopped as failed).
 
 ## What an owner usually changes
 

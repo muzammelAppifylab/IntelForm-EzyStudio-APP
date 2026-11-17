@@ -145,7 +145,7 @@ export function Contacts() {
     const responses = target.responses === 1 ? 'the 1 response' : `all ${plural(target.responses, 'response')}`;
     void confirm({
       title: one ? `Delete ${target.name ?? 'this contact'}?` : `Delete ${formatNumber(target.keys.length)} contacts?`,
-      body: `This permanently deletes ${responses} from ${one ? 'this contact' : 'these contacts'} across all forms. Form summaries and counts update, and it can’t be undone. Export a CSV first if you need a copy.`,
+      body: `This permanently deletes ${responses} from ${one ? 'this contact' : 'these contacts'} across all forms. Form summaries and counts update, exports already made that include them are removed, and it can’t be undone. Copies already sent by email or webhook are outside this app. Download a CSV first if you need a copy.`,
       confirmLabel: one ? 'Delete contact' : `Delete ${formatNumber(target.keys.length)} contacts`,
       pendingLabel: 'Deleting…',
       action: async () => {

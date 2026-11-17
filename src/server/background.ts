@@ -6,7 +6,9 @@ import { webhookDeliveryJob } from './intelform/builder/webhook-delivery'
 import { clearPublicSiteCache } from './intelform/public-site/data'
 import { clearPublicFormCache } from './intelform/respondent/cache'
 import { drainFileTrash, fileCleanupJob, scheduleFileCleanup } from './intelform/uploads/trash'
-import { runExportJob, sweepExports } from './intelform/exports/job'
+import { failStaleExports, runExportJob, sweepExports } from './intelform/exports/job'
+import { clearSummaryCache } from './intelform/responses/summary'
+import { clearContactsOverview } from './intelform/contacts/query'
 
 /**
  * This site's BACKGROUND JOBS: one handler per list (docs/agent/background-jobs.md).
@@ -27,7 +29,8 @@ import { runExportJob, sweepExports } from './intelform/exports/job'
  *   intelform-retention        daily: responses past the retention period, old raw form events
  *   intelform-maintenance      hourly: close forms past their close date, trim the webhook log,
  *                              sweep rate-limit windows, stale builder presence, old hourly
- *                              counts and old exports; remove trashed files a send left behind
+ *                              counts and old exports, fail exports whose job stopped; remove
+ *                              trashed files a send left behind
  *   intelform-file-cleanup     stored files (signatures) of deleted responses, a few at a time
  *   intelform-exports          builds a CSV / ZIP export in bounded parts (intelform/exports/job.ts)
  */
@@ -59,8 +62,9 @@ export const background = defineBackground({
     const step = Number((data as { step?: unknown } | null)?.step ?? 0)
     await fileCleanupJob(db(), jobRequestUrl(), Number.isSafeInteger(step) && step >= 0 ? step : 0)
   },
-  'intelform-exports': async (data) => {
-    await runExportJob(db(), jobRequestUrl(), data)
+  'intelform-exports': async (data, job) => {
+    // The last try that fails marks the export failed (it never stays "running").
+    await runExportJob(db(), jobRequestUrl(), data, { lastTry: job.attempt >= job.maxAttempts })
   },
 })
 
@@ -108,10 +112,20 @@ export interface RetentionResult {
  * the newest response that stays (index on form_id, submitted_at), so no form is ever counted,
  * and a submit landing at the same moment is counted once (the UPDATE holds the form row).
  * Webhook log rows go with them (ON DELETE CASCADE); their signature files go to the file
- * trash (the delete trigger) for the cleanup job. Also deletes raw form_events older than
- * EVENTS_KEEP_DAYS.
+ * trash (the delete trigger) for the cleanup job, and exports that may hold them stop (the
+ * exports trigger). When responses went, the cached Summary and contacts strip are cleared, as
+ * the manual deletes do. Also deletes raw form_events older than EVENTS_KEEP_DAYS.
+ *
+ * The period is ONE app-wide setting (Settings > Data), not per form: it applies to every form.
  */
-export async function applyRetention(client: PrismaClient, deps: { now?: () => number } = {}): Promise<RetentionResult> {
+async function clearRetentionCaches(): Promise<void> {
+  await Promise.all([clearSummaryCache(), clearContactsOverview()])
+}
+
+export async function applyRetention(
+  client: PrismaClient,
+  deps: { now?: () => number; clearCaches?: () => Promise<void> } = {},
+): Promise<RetentionResult> {
   const now = deps.now ?? Date.now
   const started = now()
   const out: RetentionResult = { responses: 0, events: 0, more: false }
@@ -152,6 +166,8 @@ export async function applyRetention(client: PrismaClient, deps: { now?: () => n
       if (deleted < RETENTION_BATCH) break
       if (i === RETENTION_MAX_BATCHES - 1) out.more = true
     }
+    // Never show deleted responses (or the contacts they made) from the cache.
+    if (out.responses > 0) await (deps.clearCaches ?? clearRetentionCaches)()
   }
 
   // Raw funnel events: a few bounded batches a day keep up with any normal traffic.
@@ -219,6 +235,7 @@ export async function hourlyMaintenance(
     presence: await sweepPresence(client),
     responseHours: await sweepResponseHours(client),
     exports: await sweepExports(client),
+    staleExports: await failStaleExports(client),
   }
   // Files of deleted responses that a refused job send left behind.
   const drained = await (deps.drain ?? drainFileTrash)(client, jobRequestUrl(), { budgetMs: 15_000 })

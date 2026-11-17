@@ -76,7 +76,7 @@ export function DataGroup({view}: {view: AppSettingsResponse}) {
       formError={errors.form}>
       <Checkbox
         label="Delete old responses"
-        description="Off by default: responses are kept until you delete them. When on, a daily job removes responses older than the limit. Deleted responses can’t be brought back."
+        description="Off by default: responses are kept until you delete them. When on, a daily job removes responses older than the limit from every form (one setting for all forms). Deleted responses can’t be brought back."
         checked={on}
         onChange={setOn}
       />
