@@ -162,21 +162,19 @@ function RenameTemplateModal({template, onClose}: {template: TemplateSummary; on
         {errors.form && <Notice tone="danger">{errors.form}</Notice>}
         <Field id={`${id}-name`} label="Name" error={errors.fields.name}>
           <input
-            id={`${id}-name`}
+            {...errors.control('name', `${id}-name`)}
             autoFocus
             maxLength={120}
             value={values.name}
             onChange={e => setValues(v => ({...v, name: e.target.value}))}
-            aria-invalid={errors.fields.name ? true : undefined}
           />
         </Field>
         <Field id={`${id}-description`} label="Description" optional error={errors.fields.description}>
           <input
-            id={`${id}-description`}
+            {...errors.control('description', `${id}-description`)}
             maxLength={300}
             value={values.description}
             onChange={e => setValues(v => ({...v, description: e.target.value}))}
-            aria-invalid={errors.fields.description ? true : undefined}
           />
         </Field>
       </form>

@@ -58,13 +58,11 @@ function RenameModal({form, onClose}: {form: FormListItem; onClose: () => void})
         {errors.form && <Notice tone="danger">{errors.form}</Notice>}
         <Field id={`${id}-title`} label="Title" error={errors.fields.title}>
           <input
-            id={`${id}-title`}
+            {...errors.control('title', `${id}-title`)}
             autoFocus
             maxLength={200}
             value={title}
             onChange={e => setTitle(e.target.value)}
-            aria-invalid={errors.fields.title ? true : undefined}
-            aria-describedby={errors.fields.title ? `${id}-title-error` : undefined}
           />
         </Field>
       </form>
@@ -116,22 +114,19 @@ function SaveTemplateModal({form, onClose}: {form: FormListItem; onClose: () => 
         {errors.form && <Notice tone="danger">{errors.form}</Notice>}
         <Field id={`${id}-name`} label="Template name" error={errors.fields.name}>
           <input
-            id={`${id}-name`}
+            {...errors.control('name', `${id}-name`)}
             autoFocus
             maxLength={120}
             value={values.name}
             onChange={e => setValues(v => ({...v, name: e.target.value}))}
-            aria-invalid={errors.fields.name ? true : undefined}
           />
         </Field>
         <Field id={`${id}-description`} label="Description" optional hint="Shown on the template card." error={errors.fields.description}>
           <input
-            id={`${id}-description`}
+            {...errors.control('description', `${id}-description`, {hint: true})}
             maxLength={300}
             value={values.description}
             onChange={e => setValues(v => ({...v, description: e.target.value}))}
-            aria-invalid={errors.fields.description ? true : undefined}
-            aria-describedby={`${id}-description-hint`}
           />
         </Field>
       </form>

@@ -99,21 +99,19 @@ export function NotificationsGroup({view}: {view: AppSettingsResponse}) {
       )}
       <Field id="as-from-name" label="Sender name" optional hint={`Leave empty to use the app name (${view.general.appName}).`} error={errors.fields.fromName}>
         <input
-          id="as-from-name"
+          {...errors.control('fromName', 'as-from-name', {hint: true})}
           value={v.fromName}
           maxLength={100}
           placeholder={view.general.appName}
-          aria-invalid={errors.fields.fromName ? true : undefined}
           onChange={e => setV(p => ({...p, fromName: e.target.value}))}
         />
       </Field>
       <Field id="as-reply-to" label="Reply-to address" optional hint="Where replies to these emails go. Leave empty for no reply-to." error={errors.fields.replyTo}>
         <input
-          id="as-reply-to"
+          {...errors.control('replyTo', 'as-reply-to', {hint: true})}
           type="email"
           value={v.replyTo}
           placeholder="team@example.com"
-          aria-invalid={errors.fields.replyTo ? true : undefined}
           onChange={e => setV(p => ({...p, replyTo: e.target.value}))}
         />
       </Field>
