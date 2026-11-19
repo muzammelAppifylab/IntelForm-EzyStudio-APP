@@ -28,7 +28,6 @@ import {embedOptions} from '../../respondent/embed';
 import {PublicForm} from '../../respondent/PublicForm';
 import {
   allowFraming,
-  allowTurnstile,
   fontPreloads,
   loadFormPage,
   movedLocation,
@@ -56,9 +55,8 @@ if (state.kind === 'limited') Astro.response.headers.set('Retry-After', String(s
 const meta = pageMeta(state, opts);
 if (meta.noindex) Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
-// Any site may embed a form; Turnstile and signature uploads only where the form needs them.
+// Any site may embed a form; signature uploads only where the form needs them.
 allowFraming(Astro.csp);
-allowTurnstile(Astro.csp, state);
 if (state.kind === 'form') await allowFileUploads(Astro.csp, Astro.url);
 
 const style = await themeStyle(meta.theme);

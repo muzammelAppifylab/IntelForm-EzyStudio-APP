@@ -15,7 +15,7 @@ export const siteRoutes = new Hono().get('/', async c => {
   const site: Site | null = raw
     ? {
         id: Number(raw.id),
-        name: String(raw.name ?? '') || 'My site',
+        name: String(raw.name ?? '') || 'IntelForm',
         favIcon: (raw.favIcon as string | null) ?? null,
         logo: (raw.logo as string | null) ?? null,
       }

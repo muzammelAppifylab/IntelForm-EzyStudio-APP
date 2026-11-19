@@ -3,6 +3,7 @@ import {Hono} from 'hono';
 import {formPatchInput, type FormPatchResponse, type PublishResponse} from '../../../lib/intelform/api-forms';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../../platform/guards';
 import {IdempotencyConflict, idempotencyKeyOf, idempotent} from '../../../platform/idempotency';
+import {logActivity} from '../../activity';
 import {PERMISSIONS} from '../../permissions';
 import {clearPublicSiteCache} from '../public-site/data';
 import {clearPublicFormCache} from '../respondent/cache';
@@ -62,13 +63,12 @@ export const formDraftRoutes = new Hono()
     const userId = c.var.viewer.id!;
     const key = idempotencyKeyOf(c.req.raw);
     try {
-      const result = key
-        ? (
-            await idempotent(c.var.db, {scope: `form-publish:${userId}`, key, request: {formId}}, tx =>
-              publishInTx(tx, formId, userId)
-            )
-          ).value
-        : await c.var.db.$transaction(tx => publishInTx(tx, formId, userId));
+      const run = key
+        ? await idempotent(c.var.db, {scope: `form-publish:${userId}`, key, request: {formId}}, tx => publishInTx(tx, formId, userId))
+        : {value: await c.var.db.$transaction(tx => publishInTx(tx, formId, userId)), replayed: false};
+      const result = run.value;
+      // A replayed request published nothing new: it is already in the log.
+      if (!run.replayed) await logActivity(c, 'form_published', ['form', formId], {version: result.version});
       await Promise.all([clearPublicSiteCache(), clearPublicFormCache(), clearSummaryCache(formId)]);
       return c.json<PublishResponse>(result);
     } catch (err) {

@@ -10,11 +10,12 @@ import {
   useMemo,
   useRef,
   useState,
-} from 'react';
+} from "react";
+import { createPortal } from "react-dom";
 
-import {Button, IconButton} from './button';
-import {Notice} from './display';
-import {Icon, type IconName} from './icon';
+import { Button, IconButton } from "./button";
+import { Notice } from "./display";
+import { Icon, type IconName } from "./icon";
 
 /**
  * Dialogs, drawers, confirmations, toasts and menus. Dialogs are the native
@@ -41,14 +42,14 @@ function useDialog(open: boolean, onClose: () => void, dismissible: boolean) {
       event.preventDefault();
       if (dismissible) onClose();
     };
-    dialog.addEventListener('cancel', cancel);
-    return () => dialog.removeEventListener('cancel', cancel);
+    dialog.addEventListener("cancel", cancel);
+    return () => dialog.removeEventListener("cancel", cancel);
   }, [onClose, dismissible]);
   // A click on the backdrop (the dialog box itself, outside its content) closes it.
   const onClick = (event: React.MouseEvent<HTMLDialogElement>) => {
     if (dismissible && event.target === event.currentTarget) onClose();
   };
-  return {ref, onClick};
+  return { ref, onClick };
 }
 
 type DialogProps = {
@@ -61,18 +62,32 @@ type DialogProps = {
   footer?: ReactNode;
   /** False while an action runs: Esc, the backdrop and × do nothing. */
   dismissible?: boolean;
-  size?: 'sm' | 'md' | 'lg';
+  size?: "sm" | "md" | "lg";
 };
 
 /**
  * A centred dialog for a short task or a question (invite someone, rename,
  * confirm). Long forms and record details belong in a `Drawer`.
  */
-export function Modal({open, onClose, title, description, children, footer, dismissible = true, size = 'md'}: DialogProps) {
-  const {ref, onClick} = useDialog(open, onClose, dismissible);
+export function Modal({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+  dismissible = true,
+  size = "md",
+}: DialogProps) {
+  const { ref, onClick } = useDialog(open, onClose, dismissible);
   const id = useId();
   return (
-    <dialog ref={ref} className={`modal modal-${size}`} aria-labelledby={`${id}-title`} onClick={onClick}>
+    <dialog
+      ref={ref}
+      className={`modal modal-${size}`}
+      aria-labelledby={`${id}-title`}
+      onClick={onClick}
+    >
       {open && (
         <div className="modal-box">
           <div className="modal-head">
@@ -80,7 +95,13 @@ export function Modal({open, onClose, title, description, children, footer, dism
               <h2 id={`${id}-title`}>{title}</h2>
               {description && <p>{description}</p>}
             </div>
-            <IconButton icon="x" label="Close" size="sm" onClick={onClose} disabled={!dismissible} />
+            <IconButton
+              icon="x"
+              label="Close"
+              size="sm"
+              onClick={onClose}
+              disabled={!dismissible}
+            />
           </div>
           {children && <div className="modal-body">{children}</div>}
           {footer && <div className="modal-foot">{footer}</div>}
@@ -104,8 +125,10 @@ export function Drawer({
   footer,
   dismissible = true,
   onSubmit,
-}: DialogProps & {onSubmit?: (event: React.FormEvent<HTMLFormElement>) => void}) {
-  const {ref, onClick} = useDialog(open, onClose, dismissible);
+}: DialogProps & {
+  onSubmit?: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  const { ref, onClick } = useDialog(open, onClose, dismissible);
   const id = useId();
   const content = (
     <>
@@ -114,14 +137,25 @@ export function Drawer({
           <h2 id={`${id}-title`}>{title}</h2>
           {description && <p>{description}</p>}
         </div>
-        <IconButton icon="x" label="Close" size="sm" onClick={onClose} disabled={!dismissible} />
+        <IconButton
+          icon="x"
+          label="Close"
+          size="sm"
+          onClick={onClose}
+          disabled={!dismissible}
+        />
       </div>
       <div className="drawer-body">{children}</div>
       {footer && <div className="drawer-foot">{footer}</div>}
     </>
   );
   return (
-    <dialog ref={ref} className="drawer" aria-labelledby={`${id}-title`} onClick={onClick}>
+    <dialog
+      ref={ref}
+      className="drawer"
+      aria-labelledby={`${id}-title`}
+      onClick={onClick}
+    >
       {open &&
         (onSubmit ? (
           <form className="drawer-box" noValidate onSubmit={onSubmit}>
@@ -144,7 +178,7 @@ type ConfirmOptions = {
   /** While `action` runs ("Deleting…"). */
   pendingLabel?: string;
   /** `danger` (default) for destructive actions, `primary` for the rest. */
-  tone?: 'danger' | 'primary';
+  tone?: "danger" | "primary";
   /**
    * The work itself. The dialog stays open with the button pending while it
    * runs; a failure shows in the dialog in words (try again or cancel).
@@ -152,7 +186,9 @@ type ConfirmOptions = {
   action?: () => Promise<unknown>;
 };
 
-const ConfirmContext = createContext<((options: ConfirmOptions) => Promise<boolean>) | null>(null);
+const ConfirmContext = createContext<
+  ((options: ConfirmOptions) => Promise<boolean>) | null
+>(null);
 
 /**
  * `const confirm = useConfirm();` then
@@ -161,29 +197,34 @@ const ConfirmContext = createContext<((options: ConfirmOptions) => Promise<boole
  */
 export function useConfirm() {
   const confirm = useContext(ConfirmContext);
-  if (!confirm) throw new Error('useConfirm() needs <ConfirmProvider> (the portal shell mounts it).');
+  if (!confirm)
+    throw new Error(
+      "useConfirm() needs <ConfirmProvider> (the portal shell mounts it).",
+    );
   return confirm;
 }
 
-export function ConfirmProvider({children}: {children: ReactNode}) {
-  const [request, setRequest] = useState<(ConfirmOptions & {resolve: (ok: boolean) => void}) | null>(null);
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [request, setRequest] = useState<
+    (ConfirmOptions & { resolve: (ok: boolean) => void }) | null
+  >(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const confirm = useCallback(
     (options: ConfirmOptions) =>
-      new Promise<boolean>(resolve => {
+      new Promise<boolean>((resolve) => {
         setError(null);
         setPending(false);
-        setRequest({...options, resolve});
+        setRequest({ ...options, resolve });
       }),
-    []
+    [],
   );
   const close = useCallback(
     (ok: boolean) => {
       request?.resolve(ok);
       setRequest(null);
     },
-    [request]
+    [request],
   );
   const run = async () => {
     if (!request) return;
@@ -196,7 +237,9 @@ export function ConfirmProvider({children}: {children: ReactNode}) {
       close(true);
     } catch (err) {
       setPending(false);
-      setError(err instanceof Error ? err.message : 'That did not work. Try again.');
+      setError(
+        err instanceof Error ? err.message : "That did not work. Try again.",
+      );
     }
   };
   return (
@@ -210,14 +253,24 @@ export function ConfirmProvider({children}: {children: ReactNode}) {
         title={request?.title}
         footer={
           <>
-            <Button variant="secondary" onClick={() => close(false)} disabled={pending}>
+            <Button
+              variant="secondary"
+              onClick={() => close(false)}
+              disabled={pending}
+            >
               Cancel
             </Button>
-            <Button variant={request?.tone ?? 'danger'} pending={pending} pendingLabel={request?.pendingLabel} onClick={() => void run()}>
+            <Button
+              variant={request?.tone ?? "danger"}
+              pending={pending}
+              pendingLabel={request?.pendingLabel}
+              onClick={() => void run()}
+            >
               {request?.confirmLabel}
             </Button>
           </>
-        }>
+        }
+      >
         {request?.body && <p className="modal-text">{request.body}</p>}
         {error && <Notice tone="danger">{error}</Notice>}
       </Modal>
@@ -227,8 +280,8 @@ export function ConfirmProvider({children}: {children: ReactNode}) {
 
 // ----------------------------------------------------------------- toast --
 
-type ToastTone = 'success' | 'info' | 'danger';
-type ToastItem = {id: number; tone: ToastTone; message: string};
+type ToastTone = "success" | "info" | "danger";
+type ToastItem = { id: number; tone: ToastTone; message: string };
 type Toaster = Record<ToastTone, (message: string) => void>;
 
 const ToastContext = createContext<Toaster | null>(null);
@@ -241,32 +294,52 @@ const ToastContext = createContext<Toaster | null>(null);
  */
 export function useToast() {
   const toast = useContext(ToastContext);
-  if (!toast) throw new Error('useToast() needs <ToastProvider> (the portal shell mounts it).');
+  if (!toast)
+    throw new Error(
+      "useToast() needs <ToastProvider> (the portal shell mounts it).",
+    );
   return toast;
 }
 
-export function ToastProvider({children}: {children: ReactNode}) {
+export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const next = useRef(1);
-  const dismiss = useCallback((id: number) => setItems(current => current.filter(item => item.id !== id)), []);
+  const dismiss = useCallback(
+    (id: number) =>
+      setItems((current) => current.filter((item) => item.id !== id)),
+    [],
+  );
   const toaster = useMemo<Toaster>(() => {
     const push = (tone: ToastTone) => (message: string) => {
       const id = next.current++;
-      setItems(current => [...current.slice(-2), {id, tone, message}]);
+      setItems((current) => [...current.slice(-2), { id, tone, message }]);
       window.setTimeout(() => dismiss(id), 5000);
     };
-    return {success: push('success'), info: push('info'), danger: push('danger')};
+    return {
+      success: push("success"),
+      info: push("info"),
+      danger: push("danger"),
+    };
   }, [dismiss]);
-  const icons: Record<ToastTone, IconName> = {success: 'check-circle', info: 'info', danger: 'alert'};
+  const icons: Record<ToastTone, IconName> = {
+    success: "check-circle",
+    info: "info",
+    danger: "alert",
+  };
   return (
     <ToastContext.Provider value={toaster}>
       {children}
       <div className="toasts" role="status" aria-live="polite">
-        {items.map(item => (
+        {items.map((item) => (
           <div key={item.id} className={`toast toast-${item.tone}`}>
             <Icon name={icons[item.tone]} size={18} />
             <span>{item.message}</span>
-            <IconButton icon="x" label="Dismiss" size="sm" onClick={() => dismiss(item.id)} />
+            <IconButton
+              icon="x"
+              label="Dismiss"
+              size="sm"
+              onClick={() => dismiss(item.id)}
+            />
           </div>
         ))}
       </div>
@@ -277,8 +350,14 @@ export function ToastProvider({children}: {children: ReactNode}) {
 // ------------------------------------------------------------------ menu --
 
 export type MenuItem =
-  | {label: string; icon?: IconName; onSelect: () => void; danger?: boolean; disabled?: boolean}
-  | 'separator';
+  | {
+      label: string;
+      icon?: IconName;
+      onSelect: () => void;
+      danger?: boolean;
+      disabled?: boolean;
+    }
+  | "separator";
 
 /**
  * A dropdown of actions: a row's "More" (⋯), the user menu. Keyboard: Enter /
@@ -293,7 +372,7 @@ export function Menu({
   label,
   trigger,
   disabled,
-  align = 'end',
+  align = "end",
 }: {
   items: MenuItem[];
   /** What the menu is for ("Actions for Sam Rivera"): the trigger's label. */
@@ -301,16 +380,20 @@ export function Menu({
   /** A custom trigger's content (the user menu's avatar); default ⋯. */
   trigger?: ReactNode;
   disabled?: boolean;
-  align?: 'start' | 'end';
+  align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const id = useId();
-  const actions = items.filter((item): item is Exclude<MenuItem, 'separator'> => item !== 'separator');
+  const actions = items.filter(
+    (item): item is Exclude<MenuItem, "separator"> => item !== "separator",
+  );
 
   const focusItem = (index: number) => {
-    const nodes = list.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+    const nodes = list.current?.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled)',
+    );
     if (!nodes?.length) return;
     nodes[(index + nodes.length) % nodes.length]?.focus();
   };
@@ -326,33 +409,42 @@ export function Menu({
       const menu = list.current!;
       const below = window.innerHeight - rect.bottom > menu.offsetHeight + 12;
       menu.style.top = `${below ? rect.bottom + 6 : rect.top - menu.offsetHeight - 6}px`;
-      const left = align === 'end' ? rect.right - menu.offsetWidth : rect.left;
+      const left = align === "end" ? rect.right - menu.offsetWidth : rect.left;
       menu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - menu.offsetWidth - 8))}px`;
     };
     place();
     focusItem(0);
     const outside = (event: PointerEvent) => {
-      if (!list.current?.contains(event.target as Node) && !button.current?.contains(event.target as Node)) close(false);
+      if (
+        !list.current?.contains(event.target as Node) &&
+        !button.current?.contains(event.target as Node)
+      )
+        close(false);
     };
     const away = () => close(false);
-    document.addEventListener('pointerdown', outside);
-    window.addEventListener('resize', away);
-    window.addEventListener('scroll', away, true);
+    document.addEventListener("pointerdown", outside);
+    window.addEventListener("resize", away);
+    window.addEventListener("scroll", away, true);
     return () => {
-      document.removeEventListener('pointerdown', outside);
-      window.removeEventListener('resize', away);
-      window.removeEventListener('scroll', away, true);
+      document.removeEventListener("pointerdown", outside);
+      window.removeEventListener("resize", away);
+      window.removeEventListener("scroll", away, true);
     };
   }, [open, align]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const nodes = [...(list.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const nodes = [
+      ...(list.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]:not(:disabled)',
+      ) ?? []),
+    ];
     const at = nodes.indexOf(document.activeElement as HTMLButtonElement);
-    if (event.key === 'ArrowDown') focusItem(at + 1);
-    else if (event.key === 'ArrowUp') focusItem(at - 1);
-    else if (event.key === 'Home') focusItem(0);
-    else if (event.key === 'End') focusItem(nodes.length - 1);
-    else if (event.key === 'Escape' || event.key === 'Tab') return close(event.key === 'Escape');
+    if (event.key === "ArrowDown") focusItem(at + 1);
+    else if (event.key === "ArrowUp") focusItem(at - 1);
+    else if (event.key === "Home") focusItem(0);
+    else if (event.key === "End") focusItem(nodes.length - 1);
+    // The menu sits at the end of <body>, away from its trigger: Tab goes back to the trigger.
+    else if (event.key === "Escape" || event.key === "Tab") close();
     else return;
     event.preventDefault();
   };
@@ -362,46 +454,68 @@ export function Menu({
       <button
         ref={button}
         type="button"
-        className={trigger ? 'menu-trigger' : 'button button-ghost button-sm icon-button'}
+        className={
+          trigger ? "menu-trigger" : "button button-ghost button-sm icon-button"
+        }
         aria-label={label}
         title={trigger ? undefined : label}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         disabled={disabled || actions.length === 0}
-        onClick={() => setOpen(value => !value)}
-        onKeyDown={event => {
-          if (event.key === 'ArrowDown' && !open) {
+        onClick={() => setOpen((value) => !value)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && !open) {
             event.preventDefault();
             setOpen(true);
           }
-        }}>
+        }}
+      >
         {trigger ?? <Icon name="more" size={16} />}
       </button>
-      {open && (
-        <div ref={list} id={id} className="menu" role="menu" aria-label={label} onKeyDown={onKeyDown}>
-          {items.map((item, i) =>
-            item === 'separator' ? (
-              <div key={`s${i}`} className="menu-separator" role="separator" />
-            ) : (
-              <button
-                key={item.label}
-                type="button"
-                role="menuitem"
-                className={item.danger ? 'menu-item menu-item-danger' : 'menu-item'}
-                disabled={item.disabled}
-                tabIndex={-1}
-                onClick={() => {
-                  close();
-                  item.onSelect();
-                }}>
-                {item.icon && <Icon name={item.icon} size={16} />}
-                {item.label}
-              </button>
-            )
-          )}
-        </div>
-      )}
+      {/* Drawn at the end of <body> (or of the open dialog, to stay above it): the menu is placed in
+          viewport pixels, and an ancestor with a filter or transform, like the top bar's blur,
+          would otherwise move it, off the screen for the user menu. */}
+      {open &&
+        createPortal(
+          <div
+            ref={list}
+            id={id}
+            className="menu"
+            role="menu"
+            aria-label={label}
+            onKeyDown={onKeyDown}
+          >
+            {items.map((item, i) =>
+              item === "separator" ? (
+                <div
+                  key={`s${i}`}
+                  className="menu-separator"
+                  role="separator"
+                />
+              ) : (
+                <button
+                  key={item.label}
+                  type="button"
+                  role="menuitem"
+                  className={
+                    item.danger ? "menu-item menu-item-danger" : "menu-item"
+                  }
+                  disabled={item.disabled}
+                  tabIndex={-1}
+                  onClick={() => {
+                    close();
+                    item.onSelect();
+                  }}
+                >
+                  {item.icon && <Icon name={item.icon} size={16} />}
+                  {item.label}
+                </button>
+              ),
+            )}
+          </div>,
+          button.current?.closest("dialog") ?? document.body,
+        )}
     </>
   );
 }

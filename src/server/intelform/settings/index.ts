@@ -5,7 +5,6 @@
  *   getAppSettings(db)          app name, logo, favicon, time zone, date format, accent, mode,
  *                               default theme, retention, public-site options, hasPrivacy/hasTerms
  *   getLegalText(db, kind)      the Privacy policy / Terms text
- *   getTurnstileKeys(db)        {siteKey, secret, enabled}: both are owner secrets
  *   getEmailDefaults(db)        {appName, fromName, replyTo, enabled} for an email sent now
  *   clearAppSettingsCache()     after ANY write to `intelform_settings`
  */
@@ -15,13 +14,9 @@ export {
   getAppSettings,
   getEmailDefaults,
   getLegalText,
-  getTurnstileKeys,
   loadSettingsView,
   saveAppSettings,
   SETTINGS_CACHE_PREFIX,
-  TURNSTILE_SECRET_NAME,
-  TURNSTILE_SITE_KEY_NAME,
-  turnstileSecretSet,
   type CachedAppSettings,
 } from './settings';
 export {retentionCutoff} from './retention';

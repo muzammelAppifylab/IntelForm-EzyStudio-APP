@@ -2,6 +2,7 @@ import * as z from 'zod'
 import type { ZodMiniType } from 'zod/mini'
 import { fieldId, logicRule, newFieldId } from './base'
 import type { FieldType } from './field-types'
+import { DESCRIPTION_HTML_MAX, sanitizeRichText } from './rich-text'
 import { safeUrl } from './safe-url'
 import type { FieldTypeCore } from './types/common'
 import { coreRegistry, typedRegistry, type PropsOf } from './types/registry'
@@ -45,7 +46,12 @@ const commonShape = {
   id: fieldId,
   /** Supports piping: "Hi {f_8k2m.first|there}". For a section break this is the page title. */
   label: z.string().max(500).default(''),
-  description: z.string().max(2000).optional(),
+  /**
+   * Help text under the label; supports piping like the label. Rich text (sanitized HTML, see
+   * rich-text.ts) when `descriptionFormat` is 'html', otherwise the older plain text.
+   */
+  description: z.string().max(DESCRIPTION_HTML_MAX).optional(),
+  descriptionFormat: z.literal('html').optional(),
   required: z.boolean().default(false),
   /** Replaces the "required" system label for this field. */
   requiredError: z.string().max(200).optional(),
@@ -180,6 +186,7 @@ export function changeFieldType<T extends FieldType>(f: FormField, type: T): Fie
     props: parsed.success ? parsed.data : core.defaultProps(),
   }
   if (f.description !== undefined) next.description = f.description
+  if (f.descriptionFormat !== undefined) next.descriptionFormat = f.descriptionFormat
   if (f.requiredError !== undefined && core.stores) next.requiredError = f.requiredError
   if (f.hideLabel !== undefined) next.hideLabel = f.hideLabel
   if (f.placeholder !== undefined && core.hasPlaceholder) next.placeholder = f.placeholder
@@ -187,3 +194,19 @@ export function changeFieldType<T extends FieldType>(f: FormField, type: T): Fie
   return next as FieldOf<T>
 }
 
+
+/**
+ * Rich text descriptions as the sanitized subset (rich-text.ts). The server runs it on every
+ * saved and published draft, so stored HTML is always clean; renderers sanitize again anyway.
+ */
+export function sanitizeDefinition(def: FormDefinition): FormDefinition {
+  let changed = false
+  const fields = def.fields.map((f) => {
+    if (f.descriptionFormat !== 'html' || !f.description) return f
+    const clean = sanitizeRichText(f.description)
+    if (clean === f.description) return f
+    changed = true
+    return { ...f, description: clean }
+  })
+  return changed ? { ...def, fields } : def
+}

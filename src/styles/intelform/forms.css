@@ -235,8 +235,9 @@
 .screen-forms .if-day-bars-plot {
   display: grid;
   grid-template-columns: 2rem minmax(0, 1fr);
+  /* A fixed row: without it the SVG (square viewBox) sizes the row and the bars spill below the labels. */
+  grid-template-rows: 12rem;
   gap: 0.5rem;
-  height: 12rem;
 }
 
 .screen-forms .if-day-bars-axis {
@@ -251,9 +252,11 @@
 }
 
 .screen-forms .if-day-bars-svg {
+  display: block;
   width: 100%;
-  height: 100%;
-  overflow: visible;
+  height: 12rem;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .screen-forms .if-grid-dash {

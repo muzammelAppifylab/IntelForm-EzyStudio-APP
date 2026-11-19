@@ -4,11 +4,12 @@ import {useSortable} from '@dnd-kit/react/sortable';
 import type {FormField} from '../../../../lib/intelform/form/definition';
 import {FIELD_TYPE_META} from '../../../../lib/intelform/form/field-types';
 import type {LogicIssue} from '../../../../lib/intelform/form/logic';
-import {Icon, IconButton, Menu, Tooltip} from '../../../ui';
+import {Icon, IconButton, Menu, Switch, Tooltip} from '../../../ui';
 import {cn} from '../../lib/utils';
 import {describeRule} from '../describe';
 import {fieldName} from '../ops';
-import {PipedText} from '../pipe/PipedText';
+import {applyDescription, DESCRIPTION_LIMITS, descriptionValue} from '../description';
+import {PipedText, RichPipedText} from '../pipe/PipedText';
 import {PipeInput} from '../pipe/PipeInput';
 import {useBuilder, useBuilderStore} from '../store';
 import {fieldTint} from '../type-ui';
@@ -115,11 +116,14 @@ export const FieldCard = memo(function FieldCard({field, index, number, count, s
             <Icon name="grip" size={16} />
           </button>
         )}
-        <span className={cn('if-type-tile', selected ? 'is-selected' : fieldTint(field.type))} title={meta.label}>
-          <Icon name={FIELD_ICON[field.type]} size={16} />
-        </span>
-        <span className="if-card-number" aria-hidden="true">
-          {isSection ? '§' : number}
+        {/* One badge: the type's icon and the question number (section breaks have no number). */}
+        <span className={cn('if-type-tile if-card-badge', selected ? 'is-selected' : fieldTint(field.type))} title={meta.label}>
+          <Icon name={FIELD_ICON[field.type]} size={14} />
+          {!isSection && (
+            <span className="if-card-number" aria-hidden="true">
+              {number}
+            </span>
+          )}
         </span>
         {field.required && !isSection && <span className="visually-hidden">Required</span>}
 
@@ -183,35 +187,28 @@ export const FieldCard = memo(function FieldCard({field, index, number, count, s
             {editable ? (
               <PipeInput
                 variant="inline"
-                multiline
+                rich
+                {...DESCRIPTION_LIMITS}
                 ariaLabel="Description"
                 placeholder="Description (optional)"
-                value={field.description ?? ''}
+                value={descriptionValue(field)}
                 beforeIndex={index}
                 autoFocus={focusTarget === 'description'}
                 className="if-description-text"
-                onChange={text =>
-                  s().updateField(
-                    field.id,
-                    f => {
-                      if (text) f.description = text.slice(0, 2000);
-                      else delete f.description;
-                    },
-                    `description:${field.id}`,
-                    'Edit description'
-                  )
-                }
+                onChange={html => s().updateField(field.id, f => applyDescription(f, html), `description:${field.id}`, 'Edit description')}
               />
             ) : (
               field.description && (
-                <p className="if-description-text" onMouseDown={() => setFocusTarget('description')}>
-                  <PipedText text={field.description} />
-                </p>
+                <div onMouseDown={() => setFocusTarget('description')}>
+                  <RichPipedText html={descriptionValue(field)} className="if-description-text" />
+                </div>
               )
             )}
             {field.hideLabel && <span className="if-caption">Label hidden from respondents</span>}
           </div>
-          <FieldPreview field={field} editable={editable} />
+          <div className="if-card-answer">
+            <FieldPreview field={field} editable={editable} />
+          </div>
           {rule && (
             <p className="if-chip if-chip-info if-chip-block">
               <Icon name="git-branch" size={14} />
@@ -228,6 +225,25 @@ export const FieldCard = memo(function FieldCard({field, index, number, count, s
               ))}
             </ul>
           )}
+        </div>
+      )}
+      {/* Footer of the open card: what it is, and the one setting changed most often (Required). */}
+      {selected && (
+        <div className="if-card-foot">
+          <span className="if-card-foot-type">
+            <Icon name={FIELD_ICON[field.type]} size={14} />
+            {isSection ? 'Section break' : meta.label}
+          </span>
+          {!isSection && !readOnly && (
+            <div className="if-card-foot-required">
+              <Switch
+                label="Required"
+                checked={field.required}
+                onChange={v => s().updateField(field.id, f => void (f.required = v), undefined, 'Toggle required')}
+              />
+            </div>
+          )}
+          {!isSection && readOnly && field.required && <span className="if-card-foot-type">Required</span>}
         </div>
       )}
     </li>

@@ -30,8 +30,6 @@ export interface PublicFormLive extends PublicFormBase {
   definition: FormDefinition
   /** Signed render timestamp, sent back on submit (minimum fill time). */
   renderToken: string
-  /** Set only when the form has Turnstile on and the Owner configured the keys. */
-  turnstileSiteKey: string | null
 }
 
 /** Closed manually, past its close date, or at its response cap. */
@@ -98,7 +96,6 @@ export const submitInput = z.object({
   renderToken: z.string().max(200),
   /** Honeypot: must be empty. */
   hp: z.string().max(2000).optional(),
-  turnstileToken: z.string().max(4096).optional(),
   unlockToken: z.string().max(400).optional(),
   /** One-response-per-browser token (cookie + localStorage); the server stores only its hash. */
   browserToken: z.string().max(100).optional(),
@@ -117,6 +114,5 @@ export type SubmitErrorCode =
   | 'form_closed' // 403
   | 'locked' // 401, password token missing or expired
   | 'already_responded' // 409 (one per browser)
-  | 'turnstile_failed' // 403, the client resets Turnstile and retries
   | 'version_unknown' // 409, reload the form
   | 'rate_limited' // 429

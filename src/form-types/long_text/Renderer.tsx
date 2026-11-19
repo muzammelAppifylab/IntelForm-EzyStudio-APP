@@ -1,12 +1,31 @@
 import {inputClass} from '../../respondent/classes';
+import {RichTextInput} from '../../respondent/rich/RichTextInput';
 import type {FieldRendererProps} from '../../respondent/types';
 
 /**
  * Enter (and Shift+Enter) is a newline; Cmd/Ctrl+Enter advances. The box height follows the
  * `rows` setting (the `rows` attribute; no inline style, the page's CSP refuses those) and grows
- * with the text where the browser supports `field-sizing`.
+ * with the text where the browser supports `field-sizing`. With "Rich text answers" on, a
+ * formatting box instead (the answer is `{html}`).
  */
 export default function LongTextRenderer({field, value, onChange, inputId, describedBy, invalid, onAdvance, labels}: FieldRendererProps<'long_text'>) {
+  if (field.props.richText) {
+    return (
+      <RichTextInput
+        id={inputId}
+        value={value}
+        onChange={onChange}
+        rows={field.props.rows}
+        placeholder={field.placeholder || labels.typeAnswer}
+        labelledBy={`${inputId}-label`}
+        describedBy={describedBy}
+        invalid={invalid}
+        required={field.required}
+        onAdvance={onAdvance}
+        labels={labels}
+      />
+    );
+  }
   return (
     <textarea
       data-slot="textarea"

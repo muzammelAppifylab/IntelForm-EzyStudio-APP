@@ -195,6 +195,7 @@ export async function responseDetail(
       label,
       text: d.text,
       ...(d.url && {url: d.url}),
+      ...(d.html && {html: d.html}),
     };
   });
   return {

@@ -33,7 +33,7 @@ export interface FieldRendererProps<T extends FieldType = FieldType> {
   error?: string
   /** Group types: the question heading, for the legend. */
   legend: ReactNode
-  /** Group types: the description text (already piped). */
+  /** Group types: the description as rich text HTML (piped and sanitized; show it with <RichText>). */
   description?: string
   /** One-at-a-time: larger question type. */
   large: boolean

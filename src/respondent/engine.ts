@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormDefinition, FormField } from '../lib/intelform/form/definition'
 import { SYSTEM_LABELS, errorMessage, type Labels } from '../lib/intelform/form/labels'
-import { computeVisibility, interpolate, pruneAnswers, validateField, type Answers } from '../lib/intelform/form/logic'
+import { computeVisibility, interpolate, interpolateHtml, pruneAnswers, validateField, type Answers } from '../lib/intelform/form/logic'
+import { descriptionToHtml, isBlankHtml, sanitizeRichText } from '../lib/intelform/form/rich-text'
 import type { ChangeMeta } from './types'
 
 /**
@@ -26,6 +27,11 @@ export interface Engine {
   /** Show these errors (replaces the shown set for the given ids, or all when ids is omitted). */
   showErrors: (errors: Record<string, string>, ids?: readonly string[]) => void
   pipe: (text: string | undefined) => string
+  /**
+   * A field's description (rich or plain) with answers piped in, as sanitized HTML for
+   * <RichText>; '' when it shows no text.
+   */
+  description: (field: Pick<FormField, 'description' | 'descriptionFormat'> | undefined) => string
 }
 
 const CONTEXT = { dayTolerance: 0 }
@@ -125,6 +131,15 @@ export function useFormEngine(def: FormDefinition, initialAnswers?: Answers | nu
   )
 
   const pipe = useCallback((text: string | undefined) => (text ? interpolate(text, def, pruned) : ''), [def, pruned])
+  const description = useCallback(
+    (f: Pick<FormField, 'description' | 'descriptionFormat'> | undefined) => {
+      const html = descriptionToHtml(f?.description, f?.descriptionFormat)
+      if (!html) return ''
+      const clean = sanitizeRichText(interpolateHtml(html, def, pruned))
+      return isBlankHtml(clean) ? '' : clean
+    },
+    [def, pruned],
+  )
 
   return {
     def,
@@ -140,6 +155,7 @@ export function useFormEngine(def: FormDefinition, initialAnswers?: Answers | nu
     check,
     showErrors,
     pipe,
+    description,
   }
 }
 

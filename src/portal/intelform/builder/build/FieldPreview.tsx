@@ -24,12 +24,34 @@ const ADDRESS_LABEL: Record<string, string> = {
 
 const TEXT_PLACEHOLDER = {email: 'name@example.com', phone: '+1 555 000 0000', url: 'https://', number: '0'} as const;
 
+/** A hint of the formatting toolbar respondents get with Rich text answers on. */
+function RichTools({inline}: {inline?: boolean}) {
+  return (
+    <div className="if-prev-rich-tools" aria-hidden="true">
+      <b>B</b>
+      <i>I</i>
+      <u>U</u>
+      <s>S</s>
+      {!inline && <span>• ≡</span>}
+      <span>Link</span>
+    </div>
+  );
+}
+
 export function FieldPreview({field, editable}: {field: FormField; editable: boolean}) {
   const placeholder = field.placeholder || 'Type your answer here';
   switch (field.type) {
     case 'section_break':
       return null;
     case 'short_text':
+      if (field.props.richText)
+        return (
+          <Box className="is-rich">
+            <RichTools inline />
+            <span className="if-truncate">{placeholder}</span>
+          </Box>
+        );
+    // falls through
     case 'email':
     case 'phone':
     case 'url':
@@ -44,7 +66,12 @@ export function FieldPreview({field, editable}: {field: FormField; editable: boo
         </Box>
       );
     case 'long_text':
-      return <Box tall>{placeholder}</Box>;
+      return (
+        <Box tall className={field.props.richText ? 'is-rich' : undefined}>
+          {field.props.richText && <RichTools />}
+          {placeholder}
+        </Box>
+      );
     case 'name':
       return field.props.split ? (
         <div className="if-prev-grid2">

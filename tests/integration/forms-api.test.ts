@@ -180,9 +180,9 @@ describe.skipIf(!DATABASE_URL)('forms API (integration, real Postgres)', () => {
     expect(strip.days).toHaveLength(7);
     expect(strip.mostActive.find((f: Json) => f.id === zeta.id)).toMatchObject({completionRate: 0.25});
 
-    expect((await viewer.get('/site-api/forms/prefs/view')).json.view).toBe('grid');
-    expect((await viewer.request('PATCH', '/site-api/forms/prefs/view', {view: 'list'})).status).toBe(200);
     expect((await viewer.get('/site-api/forms/prefs/view')).json.view).toBe('list');
-    expect((await owner.get('/site-api/forms/prefs/view')).json.view).toBe('grid');
+    expect((await viewer.request('PATCH', '/site-api/forms/prefs/view', {view: 'grid'})).status).toBe(200);
+    expect((await viewer.get('/site-api/forms/prefs/view')).json.view).toBe('grid');
+    expect((await owner.get('/site-api/forms/prefs/view')).json.view).toBe('list');
   });
 });

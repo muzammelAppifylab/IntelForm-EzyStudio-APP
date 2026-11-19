@@ -11,7 +11,7 @@ import {loadBySlug, SLUG_RE, type LoadedForm, type LoadResult} from './load';
  *
  * Only forms whose public answer can't go stale by itself are cached: no password (the hash
  * never goes in the cache, and the unlock check needs it) and no response cap (the cap depends
- * on the live count). The render token, Turnstile site key and "closed now" (close date) are
+ * on the live count). The render token and "closed now" (close date) are
  * worked out per request from the cached shape. The submit always reads the database.
  *
  * Cleared (`clearPublicFormCache`, the whole prefix: a slug change also moves the old slug) after

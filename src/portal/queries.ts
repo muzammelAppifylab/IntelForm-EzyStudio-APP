@@ -1,5 +1,6 @@
 import {infiniteQueryOptions, queryOptions} from '@tanstack/react-query';
 
+import type {ActivityPage, ActivityPeople} from '../lib/activity';
 import type {AdminUser, AuditRow, PermissionRow, RoleRow} from '../lib/types';
 import {refreshSession} from '../platform/browser';
 import {api, read} from './api';
@@ -66,12 +67,77 @@ export const usersQuery = (filter: {email: string; status: string}) =>
     getNextPageParam: last => (last.nextBefore ? String(last.nextBefore) : undefined),
   });
 
-/** `/dashboard/activity`: the audit log, newest first. */
-export const auditQuery = infiniteQueryOptions({
-  queryKey: ['audit'],
-  initialPageParam: undefined as string | undefined,
-  queryFn: ({pageParam}) => read<AuditPage>(api.admin.audit.$get({query: {before: pageParam ?? ''}})),
-  getNextPageParam: last => last.nextBefore ?? undefined,
+/** The Activity screen's filters, as they sit in its URL (`?kind=forms&from=2026-11-01`). */
+export type ActivityFilter = {kind: string; person: string; from: string; to: string; size: string};
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The route's `validateSearch`: anything odd in the URL is dropped, never sent on. */
+export function readActivitySearch(search: Record<string, unknown>): Partial<ActivityFilter> {
+  const text = (value: unknown, test: RegExp) =>
+    typeof value === 'string' && test.test(value) ? value : typeof value === 'number' && test.test(String(value)) ? String(value) : undefined;
+  const out: Partial<ActivityFilter> = {
+    kind: text(search.kind, /^[a-z]{1,20}$/),
+    person: text(search.person, /^[1-9]\d{0,9}$/),
+    from: text(search.from, DAY),
+    to: text(search.to, DAY),
+    size: text(search.size, /^(50|100)$/),
+  };
+  if (out.from && out.to && out.from > out.to) out.to = undefined;
+  return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== undefined));
+}
+
+export const activityFilterOf = (search: Partial<ActivityFilter>): ActivityFilter => ({
+  kind: search.kind ?? '',
+  person: search.person ?? '',
+  from: search.from ?? '',
+  to: search.to ?? '',
+  size: search.size ?? '',
+});
+
+/** A `YYYY-MM-DD` day as the instant it starts in the viewer's time zone (`plusDays` later). */
+function localDayStart(day: string, plusDays = 0): string {
+  if (!DAY.test(day)) return '';
+  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
+  const date = new Date(y, m - 1, d + plusDays);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+/** Rows per page on the Activity screen; the server accepts exactly these. */
+export const ACTIVITY_PAGE_SIZES = [25, 50, 100] as const;
+export type ActivityPageSize = (typeof ACTIVITY_PAGE_SIZES)[number];
+export const activityPageSize = (size: string): ActivityPageSize =>
+  ACTIVITY_PAGE_SIZES.find(n => String(n) === size) ?? ACTIVITY_PAGE_SIZES[0];
+
+/**
+ * `/dashboard/activity`: ONE page of the activity log, newest first, filtered by kind,
+ * person and dates. Keyset paged: `before` is the last id of the page before (empty for
+ * page 1), so page N never re-reads or skips rows when new events arrive.
+ */
+export const activityQuery = (filter: ActivityFilter, before = '') =>
+  queryOptions({
+    queryKey: ['audit', 'activity', filter, before],
+    queryFn: () =>
+      read<ActivityPage>(
+        api.activity.$get({
+          query: {
+            before,
+            limit: String(activityPageSize(filter.size)),
+            category: filter.kind,
+            person: filter.person,
+            // Whole days in the viewer's own time zone: from the start of `from` to the end of `to`.
+            from: localDayStart(filter.from),
+            to: localDayStart(filter.to, 1),
+          },
+        })
+      ),
+  });
+
+/** Who acted recently: the Activity screen's "Person" filter. */
+export const activityPeopleQuery = queryOptions({
+  queryKey: ['audit', 'people'],
+  queryFn: () => read<ActivityPeople>(api.activity.people.$get()),
+  staleTime: 5 * 60_000,
 });
 
 export const rolesQuery = queryOptions({

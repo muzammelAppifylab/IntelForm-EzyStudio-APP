@@ -1,11 +1,15 @@
 import {useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 
-import {pipeToken} from '../../../../lib/intelform/form/logic';
+import {PIPE_RE, pipeToken} from '../../../../lib/intelform/form/logic';
+import {htmlToPlain, isBlankHtml, plainToHtml, sanitizeRichText} from '../../../../lib/intelform/form/rich-text';
+import {canonicalFromPastedHtml, prepareEditing, runCommand, serializeRichText} from '../../../../lib/intelform/form/rich-text-dom';
+import {RichToolbar} from '../../../../respondent/rich/RichToolbar';
 import {Button} from '../../../ui';
 import {cn} from '../../lib/utils';
 import {chipLabel, filterSources, PIPE_NODE, textToDoc, type PipeSource} from './pipe-doc';
 import './pipe.css';
+import './pipe-rich.css';
 
 export interface PipeEditorProps {
   value: string;
@@ -35,6 +39,14 @@ export interface PipeEditorProps {
    */
   onUndo?(): void;
   onRedo?(): void;
+  /**
+   * Rich text (a question description): the value is sanitized HTML with pipe tokens in its
+   * text, and a formatting toolbar sits above the box. Always multi-line.
+   */
+  rich?: boolean;
+  /** Rich text: the longest HTML (formatting included) and visible text it may save. */
+  maxLength?: number;
+  maxTextLength?: number;
 }
 
 interface MenuState {
@@ -71,6 +83,35 @@ function makeChip(sources: readonly PipeSource[], id: string, part: string | nul
   chip.title = title;
   return chip;
 }
+
+/** Turns the pipe tokens in the element's text nodes into chips (rich text is drawn as HTML first). */
+function chipify(el: HTMLElement, sources: readonly PipeSource[]) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes: Text[] = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if ((n as Text).data.includes('{')) nodes.push(n as Text);
+  for (const node of nodes) {
+    const text = node.data;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(PIPE_RE)) {
+      if (m.index > last) frag.append(document.createTextNode(text.slice(last, m.index)));
+      frag.append(makeChip(sources, m[1], m[2] ?? null, m[3] ?? null));
+      last = m.index + m[0].length;
+    }
+    if (last === 0) continue;
+    if (last < text.length) frag.append(document.createTextNode(text.slice(last)));
+    node.replaceWith(frag);
+  }
+}
+
+/** Draws rich text HTML with chips. sanitizeRichText runs the platform's sanitizeHtml first. */
+function renderRich(el: HTMLElement, html: string, sources: readonly PipeSource[]) {
+  el.innerHTML = sanitizeRichText(html);
+  chipify(el, sources);
+}
+
+const chipToken = (node: HTMLElement): string | null =>
+  isChip(node) ? pipeToken(node.dataset.pipeId!, node.dataset.pipePart || undefined, node.dataset.pipeFallback || undefined) : null;
 
 /** Draws `text` into the editable element: text nodes, chips, '\n' as text (white-space: pre-wrap). */
 function render(el: HTMLElement, text: string, multiline: boolean, sources: readonly PipeSource[]) {
@@ -133,7 +174,8 @@ function caretRect(range: Range): MenuState['rect'] {
  * back on every input, and outside changes (undo, another panel) redraw it.
  */
 export default function PipeEditor(props: PipeEditorProps) {
-  const {value, multiline = false, ariaLabel, placeholder, readOnly, className, frameClassName} = props;
+  const {value, multiline: multilineProp = false, rich = false, ariaLabel, placeholder, readOnly, className, frameClassName} = props;
+  const multiline = multilineProp || rich;
   const listboxId = useId();
   const fallbackId = useId();
   const ref = useRef<HTMLDivElement>(null);
@@ -148,6 +190,8 @@ export default function PipeEditor(props: PipeEditorProps) {
   const [empty, setEmpty] = useState(!value);
   const [fallbackChip, setFallbackChip] = useState<HTMLElement | null>(null);
   const [fallback, setFallback] = useState('');
+  const [tooLong, setTooLong] = useState(false);
+  const [linkRequest, setLinkRequest] = useState(0);
 
   // Draw on mount, and whenever the value changes from outside (undo, another panel).
   useLayoutEffect(() => {
@@ -155,13 +199,15 @@ export default function PipeEditor(props: PipeEditorProps) {
     if (!el || value === lastEmitted.current) return;
     lastEmitted.current = value;
     const focused = document.activeElement === el;
-    render(el, value, multiline, propsRef.current.allSources);
+    if (rich) renderRich(el, value, propsRef.current.allSources);
+    else render(el, value, multiline, propsRef.current.allSources);
     setEmpty(!value);
+    setTooLong(false);
     // Redrawn while typing here (undo / redo): keep the caret in the text, at its end.
     if (focused) focusEnd();
     // focusEnd only reads the ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, multiline]);
+  }, [value, multiline, rich]);
 
   // Chip labels follow renamed questions without touching the text.
   useEffect(() => {
@@ -200,9 +246,13 @@ export default function PipeEditor(props: PipeEditorProps) {
     if (!sel) return;
     const range = document.createRange();
     const sentinel = el.querySelector('br[data-sentinel]');
-    if (sentinel) range.setStartBefore(sentinel);
-    else range.selectNodeContents(el);
-    range.collapse(true);
+    if (sentinel) {
+      range.setStartBefore(sentinel);
+      range.collapse(true);
+    } else {
+      range.selectNodeContents(el);
+      range.collapse(false);
+    }
     sel.removeAllRanges();
     sel.addRange(range);
   }
@@ -210,9 +260,22 @@ export default function PipeEditor(props: PipeEditorProps) {
   function emit() {
     const el = ref.current;
     if (!el) return;
-    let text = serialize(el);
-    if (!multiline && text.includes('\n')) text = text.replace(/\s*\n\s*/g, ' ');
-    setEmpty(!text);
+    let text: string;
+    if (rich) {
+      const html = serializeRichText(el, {atom: chipToken});
+      text = isBlankHtml(html) ? '' : html;
+      setEmpty(!text && !el.querySelector('li'));
+      const {maxLength, maxTextLength} = propsRef.current;
+      const over =
+        (maxLength !== undefined && text.length > maxLength) || (maxTextLength !== undefined && htmlToPlain(text).length > maxTextLength);
+      setTooLong(over);
+      // Too long to save: keep what's on screen (the message says so), save nothing until it fits.
+      if (over) return;
+    } else {
+      text = serialize(el);
+      if (!multiline && text.includes('\n')) text = text.replace(/\s*\n\s*/g, ' ');
+      setEmpty(!text);
+    }
     if (text === lastEmitted.current) return;
     lastEmitted.current = text;
     propsRef.current.onChange(text);
@@ -325,13 +388,20 @@ export default function PipeEditor(props: PipeEditorProps) {
       propsRef.current.onRedo?.();
       return;
     }
+    if (rich && mod && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      setLinkRequest(n => n + 1);
+      return;
+    }
     // Rich-text shortcuts (bold, italic, underline) make no sense in stored plain text.
-    if (mod && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
+    if (!rich && mod && ['b', 'i', 'u'].includes(e.key.toLowerCase())) {
       e.preventDefault();
       return;
     }
     if (e.key === 'Enter') {
       if (e.nativeEvent.isComposing) return;
+      // Rich text: the browser makes the new paragraph (Shift+Enter: a line break).
+      if (rich && !mod) return;
       e.preventDefault();
       if (multiline && !mod) insertText('\n');
     }
@@ -383,12 +453,13 @@ export default function PipeEditor(props: PipeEditorProps) {
   const activeId = menu && menu.items.length ? `${listboxId}-${menu.index}` : undefined;
 
   return (
-    <div className="if-pipe">
+    <div className={cn('if-pipe', rich && 'if-pipe-rich')}>
+      {rich && !readOnly && <RichToolbar editorRef={ref} onChange={emit} linkRequest={linkRequest} className="if-pipe-toolbar" />}
       <div className={frameClassName} onClick={() => !readOnly && document.activeElement !== ref.current && focusEnd()}>
         <div
           ref={ref}
           id={props.id}
-          className={cn('if-pipe-editor', multiline && 'if-pipe-editor-multiline', className)}
+          className={cn('if-pipe-editor', multiline && 'if-pipe-editor-multiline', rich && 'if-pipe-editor-rich rt-content', className)}
           contentEditable={!readOnly}
           suppressContentEditableWarning
           role="textbox"
@@ -396,7 +467,7 @@ export default function PipeEditor(props: PipeEditorProps) {
           aria-label={ariaLabel}
           aria-multiline={multiline}
           aria-readonly={readOnly || undefined}
-          aria-invalid={props.invalid || undefined}
+          aria-invalid={props.invalid || tooLong || undefined}
           aria-describedby={props.describedBy}
           aria-autocomplete="list"
           aria-haspopup="listbox"
@@ -415,7 +486,10 @@ export default function PipeEditor(props: PipeEditorProps) {
             if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key) || !menuRef.current) updateMenu();
           }}
           onClick={onClick}
-          onFocus={() => propsRef.current.onFocus?.()}
+          onFocus={() => {
+            if (rich) prepareEditing();
+            propsRef.current.onFocus?.();
+          }}
           onBlur={() => setMenu(null)}
           onCompositionStart={() => (composing.current = true)}
           onCompositionEnd={() => {
@@ -426,6 +500,19 @@ export default function PipeEditor(props: PipeEditorProps) {
           onPaste={e => {
             e.preventDefault();
             if (readOnly) return;
+            if (rich) {
+              const el = ref.current;
+              const pasted = e.clipboardData.getData('text/html');
+              const plain = e.clipboardData.getData('text/plain');
+              const clean = pasted ? canonicalFromPastedHtml(pasted) : plainToHtml(plain);
+              if (!el || !clean) return;
+              // One pasted paragraph joins the current line instead of starting a new one.
+              const single = /^<p>((?:(?!<\/?p>).)*)<\/p>$/.exec(clean);
+              runCommand(el, 'insertHTML', single ? single[1] : clean);
+              chipify(el, propsRef.current.allSources);
+              emit();
+              return;
+            }
             const text = e.clipboardData.getData('text/plain');
             insertText(multiline ? text.replace(/\r\n?/g, '\n') : text.replace(/\s*\n\s*/g, ' '));
           }}
@@ -433,6 +520,12 @@ export default function PipeEditor(props: PipeEditorProps) {
         />
       </div>
 
+      {tooLong && (
+        <p className="field-error if-pipe-too-long" role="alert">
+          This is too long to save. Shorten it{props.maxTextLength ? ` to ${props.maxTextLength.toLocaleString()} characters` : ''} or remove some
+          formatting.
+        </p>
+      )}
       {fallbackChip && (
         <div className="if-pipe-fallback" role="dialog" aria-labelledby={`${fallbackId}-title`}>
           <form

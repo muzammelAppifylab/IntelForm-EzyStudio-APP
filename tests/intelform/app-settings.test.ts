@@ -11,16 +11,13 @@ import {
   defaultSettingsRow,
   getAppSettings,
   getLegalText,
-  getTurnstileKeys,
   legalCacheKey,
   saveAppSettings,
   SETTINGS_MAIN_KEY,
   viewOf,
 } from '../../src/server/intelform/settings/settings';
-import {testTurnstileSecret} from '../../src/server/intelform/settings/turnstile';
-import {fieldErrorsOf, formatExample, turnstileTestResult} from '../../src/server/intelform/settings/view';
+import {fieldErrorsOf, formatExample} from '../../src/server/intelform/settings/view';
 import {checkImage, storedPath} from '../../src/portal/intelform/settings/upload';
-import {env} from '../integration/support/cloudflare-workers';
 
 const MAIN_ROW = {
   appName: 'Acme Forms',
@@ -31,7 +28,6 @@ const MAIN_ROW = {
   accentColor: '#4F46E5',
   defaultMode: 'dark',
   defaultThemeId: 'linen',
-  turnstileSiteKey: null,
   retentionDays: 30,
   siteIndexing: true,
   siteDescription: 'Forms by Acme',
@@ -66,8 +62,6 @@ function fakeDb(row: AppSettingsRow = {...defaultSettingsRow(), privacyText: 'Be
 
 beforeEach(() => {
   setCacheModeForTests('memory');
-  delete env.TURNSTILE_SECRET_KEY;
-  delete env.TURNSTILE_SITE_KEY;
 });
 
 afterEach(async () => {
@@ -120,46 +114,11 @@ describe('app settings: cached reads', () => {
   });
 });
 
-describe('app settings: Turnstile keys are owner secrets', () => {
-  it('the view reports presence only, never a value', () => {
-    env.TURNSTILE_SECRET_KEY = '0x4AAAAAAA-secret';
-    const view = viewOf({...defaultSettingsRow(), turnstileSiteKey: '0xOLD'});
-    expect(view.spam).toEqual({turnstileSiteKey: null, turnstileSiteKeySet: true, turnstileSecretSet: true});
-    expect(JSON.stringify(view)).not.toContain('0x4AAAAAAA-secret');
-    expect(JSON.stringify(view)).not.toContain('0xOLD');
-  });
-
-  it('reports missing keys', () => {
-    expect(viewOf(defaultSettingsRow()).spam).toEqual({turnstileSiteKey: null, turnstileSiteKeySet: false, turnstileSecretSet: false});
-  });
-
-  it('forms are checked only when both keys are present; the owner secret wins', async () => {
-    const {db} = fakeDb();
-    expect(await getTurnstileKeys(db)).toEqual({siteKey: null, secret: null, enabled: false});
-    env.TURNSTILE_SITE_KEY = '0xSITE';
-    expect((await getTurnstileKeys(db)).enabled).toBe(false);
-    env.TURNSTILE_SECRET_KEY = '0xSECRET';
-    expect(await getTurnstileKeys(db)).toEqual({siteKey: '0xSITE', secret: '0xSECRET', enabled: true});
-  });
-
-  it('a patch may not save a site key', async () => {
-    const {db} = fakeDb();
-    expect(await checkPatch(db, {spam: {turnstileSiteKey: '0xNEW'}})).toHaveProperty('turnstileSiteKey');
-    expect(await checkPatch(db, {spam: {turnstileSiteKey: null}})).toEqual({});
-  });
-
-  it('interprets the siteverify answer', async () => {
-    expect(turnstileTestResult({success: false, 'error-codes': ['invalid-input-secret']}).ok).toBe(false);
-    expect(turnstileTestResult({success: false, 'error-codes': ['invalid-input-response']})).toEqual({ok: true, message: 'Cloudflare accepted the secret key.'});
-    expect(turnstileTestResult(null).ok).toBe(false);
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({success: false, 'error-codes': ['invalid-input-response']})));
-    expect((await testTurnstileSecret('0xSECRET', fetcher as unknown as typeof fetch)).ok).toBe(true);
-    const body = JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(body.secret).toBe('0xSECRET');
-    const offline = vi.fn(async () => {
-      throw new TypeError('network');
-    });
-    expect((await testTurnstileSecret('0xSECRET', offline as unknown as typeof fetch)).ok).toBe(false);
+describe('app settings: no spam protection group', () => {
+  it('the view and the patch have no spam group', () => {
+    expect(viewOf(defaultSettingsRow())).not.toHaveProperty('spam');
+    const parsed = appSettingsPatch.safeParse({spam: {turnstileSiteKey: '0xNEW'}});
+    expect(parsed.success && parsed.data).toEqual({});
   });
 });
 

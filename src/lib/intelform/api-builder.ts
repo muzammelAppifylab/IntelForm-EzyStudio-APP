@@ -106,5 +106,4 @@ export interface WebhookSendResult {
 
 export interface BuilderCapabilities {
   emailEnabled: boolean
-  turnstileConfigured: boolean
 }

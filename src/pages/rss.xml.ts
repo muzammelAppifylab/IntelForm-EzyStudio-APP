@@ -15,7 +15,7 @@ const LIMIT = 20;
 
 export const GET: APIRoute = async ({request}) => {
   const [{site}, all] = await Promise.all([staticContext(request), publishedPosts()]);
-  const name = site?.name ?? 'My site';
+  const name = site?.name ?? 'IntelForm';
   const posts = all.slice(0, LIMIT);
   // Feed readers need absolute links; without a known address (dev, Preview) they stay site-relative.
   const link = (path: string) => absoluteUrl(path) ?? path;

@@ -36,9 +36,12 @@
 .if-pipe-frame-inline:hover {
   background: var(--hover);
 }
+/* Focus: a soft fill and an accent underline, not a ring. The selected card already
+   has an accent border, so a second outline inside it reads as noise. */
 .if-pipe-frame-inline:focus-within {
-  background: var(--card);
-  box-shadow: 0 0 0 2px var(--accent);
+  background: var(--hover);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .if-pipe-editor {

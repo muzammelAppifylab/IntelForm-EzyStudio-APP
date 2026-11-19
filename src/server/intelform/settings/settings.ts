@@ -2,7 +2,7 @@ import type {PrismaClient} from '../../../platform/db';
 import {cache} from '../../../platform/cache';
 import {config} from '../../../platform/config';
 import {themePreset} from '../../../lib/intelform/form/theme-core';
-import {type AppSettingsResponse, toResponse} from './view';
+import type {AppSettingsResponse} from './view';
 import {
   type AppSettingsPatch,
   type AppSettingsRow,
@@ -20,7 +20,7 @@ import {
  * the Site Cache (docs/agent/cache.md) and cleared on every save.
  *
  * Who reads them: every public page (app name, logo, favicon, indexing, description, the footer's
- * Privacy / Terms links), every public form (Turnstile site key, app name), the dashboard shell
+ * Privacy / Terms links), every public form (app name), the dashboard shell
  * (accent colour, default mode), new forms (default theme, time zone). The answer is the same for
  * every visitor and only the App settings screen writes the row (`saveAppSettings` below), so the
  * cache keeps it 7 days and the save clears it.
@@ -41,11 +41,6 @@ export const SETTINGS_CACHE_PREFIX = 'intelform:settings:';
 export const SETTINGS_MAIN_KEY = `${SETTINGS_CACHE_PREFIX}main`;
 export const legalCacheKey = (kind: 'privacy' | 'terms') => `${SETTINGS_CACHE_PREFIX}legal:${kind}`;
 
-/** The owner secret that holds the Turnstile secret key (Settings shows only whether it is set). */
-export const TURNSTILE_SECRET_NAME = 'TURNSTILE_SECRET_KEY';
-/** The owner secret that holds the Turnstile site key (public, but kept beside the secret key). */
-export const TURNSTILE_SITE_KEY_NAME = 'TURNSTILE_SITE_KEY';
-
 /** Every column the settings view is built from (never `select: undefined`, never the timestamps). */
 export const SETTINGS_ROW_SELECT = {
   appName: true,
@@ -56,7 +51,6 @@ export const SETTINGS_ROW_SELECT = {
   accentColor: true,
   defaultMode: true,
   defaultThemeId: true,
-  turnstileSiteKey: true,
   retentionDays: true,
   siteIndexing: true,
   siteDescription: true,
@@ -80,7 +74,6 @@ export function defaultSettingsRow(): AppSettingsRow {
     accentColor: null,
     defaultMode: d.branding.defaultMode,
     defaultThemeId: null,
-    turnstileSiteKey: null,
     retentionDays: null,
     siteIndexing: false,
     siteDescription: '',
@@ -91,11 +84,6 @@ export function defaultSettingsRow(): AppSettingsRow {
     emailFromName: null,
     emailReplyTo: null,
   };
-}
-
-/** Whether the owner added the Turnstile secret key as an owner secret. Never the value. */
-export function turnstileSecretSet(): boolean {
-  return config.ownerSecret(TURNSTILE_SECRET_NAME) != null;
 }
 
 /**
@@ -115,15 +103,9 @@ export async function loadSettingsRow(db: PrismaClient): Promise<AppSettingsRow>
   return row ?? defaultSettingsRow();
 }
 
-/**
- * Row → what GET / PATCH answer. Both Turnstile keys are owner secrets now: the view says only
- * whether each one is present, never a value (the site key column is a fallback for a key saved
- * before the move, and is not shown either).
- */
+/** Row → what GET / PATCH answer. */
 export function viewOf(row: AppSettingsRow): AppSettingsResponse {
-  return toResponse(settingsView(row, {turnstileSecretSet: turnstileSecretSet(), emailEnabled: emailEnabled()}), {
-    siteKeySet: config.ownerSecret(TURNSTILE_SITE_KEY_NAME) != null || Boolean(row.turnstileSiteKey),
-  });
+  return settingsView(row, {emailEnabled: emailEnabled()});
 }
 
 export async function loadSettingsView(db: PrismaClient): Promise<AppSettingsResponse> {
@@ -138,8 +120,6 @@ export type SettingsFieldErrors = Record<string, string>;
 /** Checks the parts of a patch that need the database. Field keys are the input names. */
 export async function checkPatch(db: PrismaClient, patch: AppSettingsPatch): Promise<SettingsFieldErrors> {
   const errors: SettingsFieldErrors = {};
-  // The site key is an owner secret now: a patch may only clear a key saved before the move.
-  if (patch.spam?.turnstileSiteKey) errors.turnstileSiteKey = 'Add the site key as the TURNSTILE_SITE_KEY owner secret instead';
   const themeId = patch.branding?.defaultThemeId;
   if (themeId) {
     if (themePreset(themeId)) return errors;
@@ -188,7 +168,6 @@ export interface CachedAppSettings {
   accentColor: string | null;
   defaultMode: ColorMode;
   defaultThemeId: string | null;
-  turnstileSiteKey: string | null;
   retentionDays: number | null;
   siteIndexing: boolean;
   siteDescription: string;
@@ -214,7 +193,6 @@ export function cachedShape(row: MainRow): CachedAppSettings {
     accentColor: row.accentColor,
     defaultMode: (COLOR_MODES as readonly string[]).includes(row.defaultMode) ? (row.defaultMode as ColorMode) : 'system',
     defaultThemeId: row.defaultThemeId,
-    turnstileSiteKey: row.turnstileSiteKey,
     retentionDays: row.retentionDays === null ? null : Number(row.retentionDays),
     siteIndexing: Boolean(row.siteIndexing),
     siteDescription: row.siteDescription,
@@ -242,7 +220,7 @@ export async function getAppSettings(db: PrismaClient): Promise<CachedAppSetting
       SELECT app_name AS "appName", logo_url AS "logoUrl", favicon_url AS "faviconUrl",
              timezone, date_format AS "dateFormat", accent_color AS "accentColor",
              default_mode AS "defaultMode", default_theme_id AS "defaultThemeId",
-             turnstile_site_key AS "turnstileSiteKey", retention_days AS "retentionDays",
+             retention_days AS "retentionDays",
              site_indexing AS "siteIndexing", site_description AS "siteDescription",
              site_og_image AS "siteOgImage", contact_email AS "contactEmail",
              email_from_name AS "emailFromName",
@@ -261,18 +239,6 @@ export async function getLegalText(db: PrismaClient, kind: 'privacy' | 'terms'):
     });
     return (kind === 'privacy' ? row?.privacyText : row?.termsText) ?? '';
   });
-}
-
-/**
- * Turnstile for the public forms: the site key (the `TURNSTILE_SITE_KEY` owner secret, else a
- * key saved in Settings before the keys moved to owner secrets) and the secret key (the `TURNSTILE_SECRET_KEY` owner secret). Forms are checked only
- * when BOTH are present. The secret never leaves the server.
- */
-export async function getTurnstileKeys(db: PrismaClient): Promise<{siteKey: string | null; secret: string | null; enabled: boolean}> {
-  const fromSecret = config.ownerSecret(TURNSTILE_SITE_KEY_NAME);
-  const siteKey = fromSecret ?? (await getAppSettings(db)).turnstileSiteKey;
-  const secret = config.ownerSecret(TURNSTILE_SECRET_NAME);
-  return {siteKey, secret, enabled: Boolean(siteKey && secret)};
 }
 
 /** Notification defaults for an email being sent now (database: the reply-to is an address). */

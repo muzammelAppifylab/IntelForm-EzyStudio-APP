@@ -20,7 +20,6 @@ describe('app settings', () => {
     accentColor: null,
     defaultMode: 'system',
     defaultThemeId: null,
-    turnstileSiteKey: null,
     retentionDays: null,
     siteIndexing: false,
     siteDescription: '',
@@ -55,7 +54,7 @@ describe('app settings', () => {
       retentionDays: 30,
       siteIndexing: true,
     });
-    const view = settingsView(row, {turnstileSecretSet: false, emailEnabled: true});
+    const view = settingsView(row, {emailEnabled: true});
     expect(view.general.dateFormat).toBe('DD/MM/YYYY');
     expect(view.notifications.enabled).toBe(true);
     expect(view.general).toEqual(defaultAppSettings().general);

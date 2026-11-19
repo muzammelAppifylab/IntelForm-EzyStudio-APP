@@ -46,14 +46,19 @@ export function PreviewDialog({open, onOpenChange}: {open: boolean; onOpenChange
   const [resetKey, setResetKey] = useState(0);
   const layout = useBuilder(s => s.doc.draft.layout);
   return (
-    <Modal open={open} onClose={() => onOpenChange(false)} size="lg" title="Preview" description={`${LAYOUT_LABEL[layout]} layout. Answers here are not saved.`}>
+    <Modal open={open} onClose={() => onOpenChange(false)} size="lg" title="Preview" description={`${LAYOUT_LABEL[layout]} · answers are not saved`}>
       {/* Keys pressed in the preview are the respondent's, never the Build tab's shortcuts (Delete, arrows, /). */}
       <div className="if-preview" onKeyDown={e => e.stopPropagation()}>
+        {/* Sits in the dialog's header row (build.css): the size toggle centred, Restart by the close button. */}
         <div className="if-preview-tools">
-          <Button variant="ghost" size="sm" icon="rotate-ccw" onClick={() => setResetKey(k => k + 1)}>
-            Restart
-          </Button>
-          <DeviceToggle value={device} onChange={setDevice} />
+          <div className="if-preview-device">
+            <DeviceToggle value={device} onChange={setDevice} />
+          </div>
+          <div className="if-preview-actions">
+            <Button variant="ghost" size="sm" icon="rotate-ccw" onClick={() => setResetKey(k => k + 1)}>
+              Restart
+            </Button>
+          </div>
         </div>
         <div className={cn('if-preview-stage', device === 'mobile' && 'is-mobile')}>
           <FormPreview device={device} resetKey={resetKey} />

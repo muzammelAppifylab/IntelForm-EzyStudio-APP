@@ -2,6 +2,7 @@ import {type FormEvent, useEffect, useRef, useState} from 'react';
 
 import {FieldBlock, fieldDomId, focusField} from '../FieldBlock';
 import {RIcon} from '../icons';
+import {RichText} from '../rich/RichText';
 import {FormButton} from '../ui';
 import {cx} from '../util';
 import type {LayoutContext} from './context';
@@ -77,12 +78,12 @@ export function AllAtOnce({ctx}: {ctx: LayoutContext}) {
           if (!engine.visible.has(f.id)) return null;
           if (f.type === 'section_break') {
             const title = engine.pipe(f.label).trim();
-            const desc = engine.pipe(f.description).trim();
+            const desc = engine.description(f);
             if (!title && !desc) return <hr key={f.id} className="rf-divider" />;
             return (
               <div key={f.id} className="rf-section">
                 {title && <h2 className={cx('rf-question-xl rf-heading', f.hideLabel && 'rf-sr-only')}>{title}</h2>}
-                {desc && <p className="rf-text-answer rf-muted rf-pre-line">{desc}</p>}
+                {desc && <RichText html={desc} className="rf-text-answer rf-muted" />}
               </div>
             );
           }

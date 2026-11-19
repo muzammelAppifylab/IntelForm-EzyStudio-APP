@@ -1,7 +1,7 @@
 import {z} from 'zod';
 
 import {FORM_SORTS, FORM_STATUSES, type FormSort, type FormStatus} from '../../../lib/intelform/api-forms';
-import {blankDefinition, formDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
+import {blankDefinition, formDefinition, sanitizeDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
 import {defaultFormSettings, formSettings, type FormSettings, type FormSettingsPatch} from '../../../lib/intelform/form/settings';
 import {defaultTheme, formTheme, type FormTheme} from '../../../lib/intelform/form/theme';
 import {coreRegistry} from '../../../lib/intelform/form/types/registry';
@@ -122,9 +122,9 @@ function repairDraft(raw: unknown): unknown {
  */
 export function normalizeDraft(raw: unknown): FormDefinition {
   const first = formDefinition.safeParse(raw);
-  if (first.success) return first.data;
+  if (first.success) return sanitizeDefinition(first.data);
   const second = formDefinition.safeParse(repairDraft(raw));
-  if (second.success) return second.data;
+  if (second.success) return sanitizeDefinition(second.data);
   throw new FormsError(422, 'validation_failed', 'The form couldn’t be saved: some fields are invalid', zodFields(second.error, 'draft'));
 }
 

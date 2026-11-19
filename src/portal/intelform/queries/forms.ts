@@ -206,9 +206,9 @@ const VIEW_KEY = 'intelform.forms.view';
 
 function readLocalView(): FormsView {
   try {
-    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid';
+    return localStorage.getItem(VIEW_KEY) === 'grid' ? 'grid' : 'list';
   } catch {
-    return 'grid';
+    return 'list';
   }
 }
 

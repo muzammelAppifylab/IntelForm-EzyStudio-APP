@@ -42,11 +42,7 @@ export interface NavItem {
  * visit (its forms come from the database) but reads no visitor and may be kept a minute, so a
  * prefetch of it is used.
  */
-export const NAV: NavItem[] = [
-  {label: 'Home', href: '/'},
-  {label: 'Forms', href: '/forms/'},
-  {label: 'About', href: '/about/'},
-];
+export const NAV: NavItem[] = [{label: 'About', href: '/about/'}];
 
 /**
  * The home page, top to bottom (`src/pages/index.astro`): the creator's public

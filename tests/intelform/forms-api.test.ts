@@ -158,7 +158,9 @@ describe('settings', () => {
   });
 
   it('reads an old or broken settings row with defaults', () => {
-    expect(readSettings({}).turnstile).toBe(defaultFormSettings().turnstile);
+    expect(readSettings({}).onePerBrowser).toBe(defaultFormSettings().onePerBrowser);
+    // A row saved while the removed Turnstile setting existed still reads, without it.
+    expect(readSettings({turnstile: true})).not.toHaveProperty('turnstile');
     expect(readSettings('junk')).toEqual(defaultFormSettings());
   });
 });

@@ -134,7 +134,7 @@ function makeDb() {
         throw err;
       }
     },
-    intelformSettings: {findUnique: async () => ({turnstileSiteKey: null})},
+    intelformSettings: {findUnique: async () => null},
   };
   return db as unknown as SubmitContext['db'];
 }
@@ -144,7 +144,6 @@ function ctx(): SubmitContext {
     db: makeDb(),
     secret: SECRET,
     requestUrl: 'https://forms.example.com/site-api/public/forms/survey/responses',
-    ip: '203.0.113.9',
     ipKey: 'k',
     meta: async () => ({ipHash: 'a'.repeat(64), country: 'DE', device: 'desktop', browser: 'Chrome'}),
     now: () => NOW,

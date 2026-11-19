@@ -61,6 +61,22 @@ body.rf-page-embed {
   --rf-danger-soft: light-dark(#fee6e9, #3a1018);
   --rf-danger-soft-ink: light-dark(#a12144, #ffa9b5);
   --rating-empty: light-dark(#a6a39c, #716e67);
+  --rating: light-dark(#c98a1e, #eaad4f);
+  /*
+   * The dashboard's colour names, re-pointed at the FORM's theme. Field styles shared with the
+   * dashboard read --ink, --hover, --line… and without this they would take the dashboard's own
+   * light or dark values: a light form opened in dark mode got white option text on a light tile
+   * and a dark hover fill. Inside a form every colour comes from the form theme (themeToVars).
+   */
+  --ink: var(--foreground);
+  --subtle: var(--field-placeholder, var(--muted-foreground));
+  --line: var(--border);
+  --line-strong: var(--input);
+  --edge: var(--form-answer);
+  --hover: color-mix(in oklab, var(--form-answer) 8%, var(--form-surface));
+  --option-selected-ink: var(--option-selected-foreground);
+  --accent-soft: color-mix(in oklab, var(--form-answer) 22%, transparent);
+  --danger: var(--rf-danger);
   --text-question-xl: 400 calc(2.5rem * var(--form-font-scale, 1)) / calc(2.75rem * var(--form-font-scale, 1)) var(--form-question-font, var(--font-display));
   --text-question: 600 calc(1.125rem * var(--form-font-scale, 1)) / calc(1.625rem * var(--form-font-scale, 1)) var(--form-question-sm-font, var(--form-question-font, var(--font-sans)));
   --text-answer: 400 calc(1rem * var(--form-font-scale, 1)) / calc(1.5rem * var(--form-font-scale, 1)) var(--form-font, var(--font-sans));
@@ -780,14 +796,6 @@ textarea.rf-input {
   .rf-one-nav {
     right: 2rem;
   }
-}
-
-/* ------------------------------------------------------------- turnstile -- */
-
-.rf-turnstile {
-  display: flex;
-  justify-content: center;
-  padding: 0 1rem 1.5rem;
 }
 
 /* -------------------------------------------------------- reduced motion -- */

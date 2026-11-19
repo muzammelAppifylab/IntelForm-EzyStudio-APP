@@ -31,4 +31,4 @@ export interface UploadResult {
   size: number;
 }
 
-export type {AppSettingsView, SettingsTestResult} from './settings-app';
+export type {AppSettingsView} from './settings-app';

@@ -1,3 +1,4 @@
+import {RichText} from '../../respondent/rich/RichText';
 import type {FieldRendererProps} from '../../respondent/types';
 import {RatingScale} from '../_respondent/scales';
 
@@ -10,7 +11,7 @@ export default function RatingRenderer(p: FieldRendererProps<'rating'>) {
       legend={
         <>
           {p.legend}
-          {p.description && <span className="ft-legend-description">{p.description}</span>}
+          {p.description && <RichText as="span" html={p.description} className="ft-legend-description" />}
         </>
       }
       variant={field.props.style}

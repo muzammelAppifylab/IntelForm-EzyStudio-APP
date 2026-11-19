@@ -480,33 +480,3 @@ export function NotificationsSection() {
     </SettingsCard>
   );
 }
-
-// -------------------------------------------------------------------------- spam --
-
-export function SpamSection() {
-  const turnstile = useBuilder(s => s.settings.turnstile);
-  const readOnly = useBuilder(s => s.readOnly);
-  const {save} = useSettingsSave();
-  const caps = useQuery(capabilitiesQuery);
-  return (
-    <SettingsCard
-      id="spam"
-      title="Spam protection"
-      description="A hidden honeypot field and a limit of 10 submissions a minute per visitor are always on.">
-      <Switch
-        label="Cloudflare Turnstile"
-        description="An invisible check that stops bots. Most people never see a challenge."
-        checked={turnstile}
-        disabled={readOnly}
-        onChange={v => void save({turnstile: v})}
-      />
-      {caps.data && !caps.data.turnstileConfigured && (
-        <Notice tone="info">
-          {turnstile
-            ? 'Turnstile is optional and isn’t set up on this site yet. This form uses the honeypot and rate limit until an admin adds the keys in App settings, under Spam protection; then it turns on by itself.'
-            : 'Turnstile is optional and isn’t set up on this site. If forms start getting spam, an admin can add the keys in App settings, under Spam protection.'}
-        </Notice>
-      )}
-    </SettingsCard>
-  );
-}

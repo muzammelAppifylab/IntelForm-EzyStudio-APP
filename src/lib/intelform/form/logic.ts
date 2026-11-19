@@ -6,6 +6,7 @@ import { isIsoDate, isTime } from './types/basic'
 import type { AnswerContext } from './types/common'
 import { isE164 } from './types/contact'
 import { coreRegistry } from './types/registry'
+import { escapeHtml } from './rich-text'
 
 /**
  * Show/hide logic, answer piping and submission validation. Pure functions, shared by the
@@ -398,6 +399,19 @@ export function pipeToken(fieldId: string, part?: string, fallback?: string): st
  * render it as text, never as HTML.
  */
 export function interpolate(text: string, def: Def, answers: Answers): string {
+  return replacePipes(text, def, answers, (s) => s)
+}
+
+/**
+ * `interpolate` for rich text HTML (a rich description): answers are HTML-escaped as they go
+ * in; a fallback is already HTML (it sits in the stored markup). Sanitize the result
+ * (`sanitizeRichText`) before rendering it.
+ */
+export function interpolateHtml(html: string, def: Def, answers: Answers): string {
+  return replacePipes(html, def, answers, escapeHtml)
+}
+
+function replacePipes(text: string, def: Def, answers: Answers, encode: (answer: string) => string): string {
   if (!text || !text.includes('{')) return text
   const idx = indexOf(def)
   return text.replace(PIPE_RE, (_m, id: string, part: string | undefined, fallback: string | undefined) => {
@@ -409,7 +423,7 @@ export function interpolate(text: string, def: Def, answers: Answers): string {
     if (core.isEmpty(v)) return fb
     try {
       const out = core.pipe(v, part, f)
-      return out.trim() === '' ? fb : out
+      return out.trim() === '' ? fb : encode(out)
     } catch {
       return fb
     }

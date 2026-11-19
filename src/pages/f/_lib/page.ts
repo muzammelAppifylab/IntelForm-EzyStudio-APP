@@ -8,7 +8,6 @@ import {SYSTEM_LABELS} from '../../../lib/intelform/form/labels';
 import {defaultTheme, type FormTheme} from '../../../lib/intelform/form/theme-core';
 import {type EmbedOptions, embedQuery} from '../../../respondent/embed';
 import {themeFontFiles} from '../../../respondent/fonts';
-import {TURNSTILE_ORIGIN} from '../../../respondent/lazy/Turnstile';
 import {styleHash, themeCss} from '../../../respondent/theme-css';
 import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
 import {payloadForSlug, SLUG_RE, type Db} from '../../../server/intelform/respondent/load';
@@ -156,22 +155,4 @@ export interface PageCsp {
  */
 export function allowFraming(csp: PageCsp | undefined): void {
   csp?.insertDirective('frame-ancestors *');
-}
-
-/**
- * Cloudflare Turnstile's script and frame, only for a form that uses it: a live form with the
- * keys configured, or a locked one with Turnstile on (it may need it once unlocked).
- */
-export function needsTurnstile(state: FormPageState): boolean {
-  if (state.kind !== 'form') return false;
-  const p = state.payload;
-  return p.status === 'live' ? !!p.turnstileSiteKey : p.settings.turnstile;
-}
-
-export function allowTurnstile(csp: PageCsp | undefined, state: FormPageState): void {
-  if (!csp || !needsTurnstile(state)) return;
-  // Adding a script source drops the default 'self': keep it (Astro's own module scripts).
-  csp.insertScriptResource("'self'");
-  csp.insertScriptResource(TURNSTILE_ORIGIN);
-  csp.insertDirective(`frame-src ${TURNSTILE_ORIGIN}`);
 }

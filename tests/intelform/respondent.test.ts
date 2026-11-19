@@ -1,6 +1,6 @@
 import {deflateSync} from 'node:zlib';
 
-import {afterEach, describe, expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 
 import {formDefinition} from '../../src/lib/intelform/form/definition';
 import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
@@ -21,7 +21,6 @@ import {
   unlockToken,
   UNLOCK_TTL_MS,
 } from '../../src/server/intelform/respondent/tokens';
-import {setTurnstileFetch, verifyTurnstile} from '../../src/server/intelform/respondent/turnstile';
 
 const SECRET = 'unit-test-secret-0123456789-abcdefghijklmnopqrstuvwxyz';
 const FORM = '00000000-0000-4000-8000-00000000f001';
@@ -279,42 +278,5 @@ describe('helpers', () => {
     const s = safeJson({t: '</script><!-- \u2028 & >'});
     expect(s).not.toMatch(/<|>|&|\u2028/);
     expect(JSON.parse(s)).toEqual({t: '</script><!-- \u2028 & >'});
-  });
-});
-
-// ------------------------------------------------------------------------------ turnstile --
-
-describe('verifyTurnstile', () => {
-  afterEach(() => setTurnstileFetch(null));
-  const answer = (body: unknown) => (async () => new Response(JSON.stringify(body))) as typeof fetch;
-
-  it('passes a good token for this host', async () => {
-    let sent: URLSearchParams | null = null;
-    setTurnstileFetch((async (_url: unknown, init?: RequestInit) => {
-      sent = init?.body as URLSearchParams;
-      return new Response(JSON.stringify({success: true, action: 'submit', hostname: 'forms.example.com'}));
-    }) as typeof fetch);
-    await verifyTurnstile('secret-key', 'tok', '203.0.113.9', 'forms.example.com');
-    expect(sent!.get('remoteip')).toBe('203.0.113.9');
-    expect(sent!.get('response')).toBe('tok');
-  });
-
-  it('fails closed', async () => {
-    await expect(verifyTurnstile('secret-key', undefined, null, 'h')).rejects.toMatchObject({status: 403, code: 'turnstile_failed'});
-    setTurnstileFetch(answer({success: false}));
-    await expect(verifyTurnstile('secret-key', 'tok', null, 'h')).rejects.toMatchObject({status: 403});
-    setTurnstileFetch(answer({success: true, action: 'login', hostname: 'h'}));
-    await expect(verifyTurnstile('secret-key', 'tok', null, 'h')).rejects.toMatchObject({status: 403});
-    setTurnstileFetch(answer({success: true, action: 'submit', hostname: 'evil.example'}));
-    await expect(verifyTurnstile('secret-key', 'tok', null, 'h')).rejects.toMatchObject({status: 403});
-    setTurnstileFetch(answer('not json object'));
-    await expect(verifyTurnstile('secret-key', 'tok', null, 'h')).rejects.toMatchObject({status: 503});
-    setTurnstileFetch((async () => {
-      throw new Error('down');
-    }) as typeof fetch);
-    await expect(verifyTurnstile('secret-key', 'tok', null, 'h')).rejects.toMatchObject({status: 503});
-    // Cloudflare's test secrets answer with example.com
-    setTurnstileFetch(answer({success: true, hostname: 'example.com'}));
-    await verifyTurnstile('1x0000000000000000000000000000000AA', 'tok', null, 'h');
   });
 });

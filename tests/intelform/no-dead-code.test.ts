@@ -59,7 +59,6 @@ const EXPORT_DECL_RE = /^export\s+(?:async\s+)?(?:const|let|function\*?|class|en
  */
 const TEST_SEAMS = new Set([
   'src/server/intelform/respondent/signatures.ts#setSignatureStorage', // swaps file storage for a fake
-  'src/server/intelform/respondent/turnstile.ts#setTurnstileFetch', // swaps the Turnstile call for a fake
   'src/lib/intelform/form/templates/index.ts#BUILTIN_TEMPLATE_INPUTS', // the raw template data BUILTIN_TEMPLATES is parsed from
   'src/lib/intelform/form/theme-core.ts#surfaceColor', // the resolved colour of themeToVars' surface color-mix(), for contrast tests
   'src/form-types/renderers.tsx#respondentRenderers', // the form-types contract's alias of FIELD_RENDERERS

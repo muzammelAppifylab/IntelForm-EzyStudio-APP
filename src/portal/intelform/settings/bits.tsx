@@ -1,6 +1,6 @@
 import {type FormEvent, type ReactNode, useId, useRef, useState, type ChangeEvent} from 'react';
 
-import {UPLOAD_TYPES, type SettingsTestResult, type UploadPurpose} from '../../../lib/intelform/settings-app';
+import {UPLOAD_TYPES, type UploadPurpose} from '../../../lib/intelform/settings-app';
 import {Button, Card, Icon, Notice} from '../../ui';
 import {errorMessage} from '../lib/api';
 import {UPLOAD_HELP, uploadSettingsImage} from './upload';
@@ -56,12 +56,6 @@ export function SettingsCard({
       </form>
     </Card>
   );
-}
-
-/** The result of a Test button, announced politely. */
-export function TestResult({result}: {result: SettingsTestResult | null | undefined}) {
-  if (!result) return null;
-  return <Notice tone={result.ok ? 'success' : 'danger'}>{result.message}</Notice>;
 }
 
 /**

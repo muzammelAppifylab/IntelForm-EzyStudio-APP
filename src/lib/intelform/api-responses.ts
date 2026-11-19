@@ -172,6 +172,8 @@ export interface DrawerAnswer {
   text: string
   /** Signature image URL. */
   url?: string
+  /** A rich text answer as sanitized HTML (sanitize again before showing it). */
+  html?: string
 }
 
 export interface ResponseDetail {

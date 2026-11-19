@@ -2,6 +2,7 @@ import {type ComponentProps, type ReactNode, useId, useLayoutEffect, useRef} fro
 
 import {formButtonClass, inputClass, type ButtonVariant} from './classes';
 import {RIcon} from './icons';
+import {RichText} from './rich/RichText';
 import {CONTROL, cx, enterToAdvance} from './util';
 
 /**
@@ -93,9 +94,7 @@ export function Group({
         )}
       </legend>
       {description && (
-        <p id={descId} className="rf-group-description rf-text-body rf-muted rf-pre-line">
-          {description}
-        </p>
+        <RichText id={descId} html={description} className="rf-group-description rf-text-body rf-muted" />
       )}
       {children}
       {error && errId && <FieldError id={errId}>{error}</FieldError>}

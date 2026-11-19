@@ -56,6 +56,21 @@ export const SYSTEM_LABELS = {
   amPm: 'AM or PM',
   openCalendar: 'Open calendar',
   calendar: 'Calendar',
+  // Rich text answers (the formatting toolbar)
+  formatting: 'Formatting',
+  bold: 'Bold',
+  italic: 'Italic',
+  underline: 'Underline',
+  strikethrough: 'Strikethrough',
+  bulletList: 'Bulleted list',
+  numberedList: 'Numbered list',
+  link: 'Link',
+  linkAddress: 'Link address',
+  linkPlaceholder: 'https://example.com',
+  linkInvalid: 'Enter a web address like example.com, or an email address',
+  saveLink: 'Save link',
+  removeLink: 'Remove link',
+  cancel: 'Cancel',
 
   // Errors (the text says how to fix it)
   required: 'This question is required',
@@ -88,7 +103,6 @@ export const SYSTEM_LABELS = {
   hiddenField: 'This question is not shown, so it cannot be answered',
   errorSummary: 'Fix these problems to continue',
   submitError: 'Your response could not be sent. Check your connection and try again.',
-  humanCheckFailed: 'We couldn’t check that you’re human. Try submitting again.',
   /** Prefix for document.title while the page shows an error, e.g. "Error: Question 2 of 5 – Title". */
   errorTitle: 'Error',
 

@@ -4,11 +4,9 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {
   allowFraming,
-  allowTurnstile,
   fontPreloads,
   loadFormPage,
   movedLocation,
-  needsTurnstile,
   pageMeta,
   PUBLIC_GET_RATE_LIMIT,
   stateOf,
@@ -16,7 +14,7 @@ import {
   themeStyle,
   type FormPageState,
 } from '../../src/pages/f/_lib/page';
-import type {PublicFormClosed, PublicFormLive, PublicFormLocked} from '../../src/lib/intelform/api-public';
+import type {PublicFormClosed, PublicFormLive} from '../../src/lib/intelform/api-public';
 import {blankDefinition} from '../../src/lib/intelform/form/definition';
 import {clearPublicFormCache} from '../../src/server/intelform/respondent/cache';
 import {defaultFormSettings, publicSettings} from '../../src/lib/intelform/form/settings';
@@ -45,7 +43,6 @@ const live = (patch: Partial<PublicFormLive> = {}): PublicFormLive => ({
   version: 1,
   definition: blankDefinition(),
   renderToken: 'r',
-  turnstileSiteKey: null,
   ...patch,
 });
 
@@ -219,24 +216,6 @@ describe('CSP additions', () => {
     allowFraming(c);
     expect(c.insertDirective).toHaveBeenCalledWith('frame-ancestors *');
     allowFraming(undefined);
-  });
-
-  it('adds Turnstile only for a form that uses it', () => {
-    const off = csp();
-    allowTurnstile(off, {kind: 'form', payload: live()});
-    allowTurnstile(off, {kind: 'missing'});
-    expect(off.insertScriptResource).not.toHaveBeenCalled();
-    expect(off.insertDirective).not.toHaveBeenCalled();
-
-    const on = csp();
-    allowTurnstile(on, {kind: 'form', payload: live({turnstileSiteKey: '0x4AAA'})});
-    expect(on.insertScriptResource).toHaveBeenCalledWith("'self'");
-    expect(on.insertScriptResource).toHaveBeenCalledWith('https://challenges.cloudflare.com');
-    expect(on.insertDirective).toHaveBeenCalledWith('frame-src https://challenges.cloudflare.com');
-
-    const locked: PublicFormLocked = {id: FORM, slug: 's', title: 't', theme: theme(), settings: {...settings, turnstile: true}, status: 'locked'};
-    expect(needsTurnstile({kind: 'form', payload: locked})).toBe(true);
-    expect(needsTurnstile({kind: 'form', payload: {...locked, settings: {...settings, turnstile: false}}})).toBe(false);
   });
 });
 

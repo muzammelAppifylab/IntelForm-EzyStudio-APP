@@ -4,6 +4,7 @@ import {templatePatchInput} from '../../lib/intelform/api-forms';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {deleteSavedTemplate, listTemplates, updateSavedTemplate} from '../intelform/templates/service';
 import {zodJson} from '../intelform/templates/validate';
+import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -32,11 +33,13 @@ export const templatesRoutes = new Hono()
     async c => {
       const result = await updateSavedTemplate(c.var.db, c.req.param('id'), c.req.valid('json'));
       if (!result.ok) return c.json(problem(result.error, result.message), result.status);
+      await logActivity(c, 'template_updated', ['template', c.req.param('id')], {title: c.req.valid('json').name.trim().slice(0, 120)});
       return c.json({ok: true as const});
     }
   )
   .delete('/:id', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
     const result = await deleteSavedTemplate(c.var.db, c.req.param('id'));
     if (!result.ok) return c.json(problem(result.error, result.message), result.status);
+    await logActivity(c, 'template_deleted', ['template', c.req.param('id')]);
     return c.body(null, 204);
   });

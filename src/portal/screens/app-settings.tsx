@@ -4,19 +4,18 @@ import {useNavigate, useSearch} from '@tanstack/react-router';
 import {useCan} from '../intelform/lib/can';
 import {appSettingsQuery} from '../intelform/queries/app-settings';
 import {DataGroup} from '../intelform/settings/data';
-import {NotificationsGroup, SpamGroup} from '../intelform/settings/delivery';
+import {NotificationsGroup} from '../intelform/settings/delivery';
 import {BrandingGroup, GeneralGroup} from '../intelform/settings/general';
 import {SiteGroup} from '../intelform/settings/site';
 import type {AppSettingsResponse} from '../../server/intelform/settings/view';
 import {EmptyState, ErrorNote, LoadingBlock, PageHeader, Tabs} from '../ui';
 
-type TabKey = 'general' | 'branding' | 'site' | 'spam' | 'notifications' | 'data';
+type TabKey = 'general' | 'branding' | 'site' | 'notifications' | 'data';
 
 const TABS: {value: TabKey; label: string; Group: (props: {view: AppSettingsResponse}) => React.JSX.Element}[] = [
   {value: 'general', label: 'General', Group: GeneralGroup},
   {value: 'branding', label: 'Branding', Group: BrandingGroup},
   {value: 'site', label: 'Public site', Group: SiteGroup},
-  {value: 'spam', label: 'Spam protection', Group: SpamGroup},
   {value: 'notifications', label: 'Notifications', Group: NotificationsGroup},
   {value: 'data', label: 'Data', Group: DataGroup},
 ];
@@ -33,7 +32,7 @@ export function AppSettings() {
     <div className="app-page screen-app-settings">
       <PageHeader
         title="Settings"
-        description="App name and branding, the public site, spam protection, notification defaults and data retention."
+        description="App name and branding, the public site, notification defaults and data retention."
       />
       {allowed ? (
         <SettingsTabs />

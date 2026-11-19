@@ -474,6 +474,38 @@
   color: var(--ink);
   box-shadow: var(--shadow-lg);
 }
+/* Floating in the top layer (see useFloating in date/Renderer.tsx): fixed to the window,
+   placed by script. Undo the browser's centred popover defaults. */
+.ft-popover[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  overflow: visible;
+  box-shadow:
+    0 12px 32px -12px rgb(0 0 0 / 0.35),
+    0 2px 8px -2px rgb(0 0 0 / 0.15);
+  animation: ft-pop-float 140ms ease-out;
+}
+.ft-popover[popover][data-side='top'] {
+  animation-name: ft-pop-float-up;
+}
+@keyframes ft-pop-float {
+  from {
+    opacity: 0;
+    translate: 0 -4px;
+  }
+}
+@keyframes ft-pop-float-up {
+  from {
+    opacity: 0;
+    translate: 0 4px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ft-popover[popover] {
+    animation: none;
+  }
+}
 .ft-calendar-placeholder {
   width: 16rem;
   height: 18rem;
@@ -528,7 +560,8 @@
   width: 2.25rem;
   height: 2rem;
   font-weight: 500;
-  color: var(--muted);
+  /* Text colour: inside a form --muted is a background tint, so it read as nearly invisible. */
+  color: var(--muted-foreground);
 }
 .ft-calendar-grid td {
   padding: 1px;

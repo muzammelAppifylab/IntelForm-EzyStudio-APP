@@ -1,5 +1,4 @@
 import type {PrismaClient} from '../../../generated/prisma/client';
-import {config} from '../../../platform/config';
 import type {PublicFormClosed, PublicFormLive, PublicFormLocked, PublicFormResponse} from '../../../lib/intelform/api-public';
 import {formDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
 import {SYSTEM_LABELS} from '../../../lib/intelform/form/labels';
@@ -8,7 +7,6 @@ import {defaultTheme, formTheme, type FormTheme} from '../../../lib/intelform/fo
 import {notFound} from './errors';
 import {checkUnlockToken, renderToken} from './tokens';
 import {loadPublishedBySlug} from './cache';
-import {getTurnstileKeys} from '../settings/settings';
 
 /** A form as the respondent routes see it: the published version, parsed settings and status. */
 export interface LoadedForm {
@@ -132,26 +130,6 @@ export function isClosed(form: Pick<LoadedForm, 'status' | 'settings' | 'respons
   return false;
 }
 
-/** The owner secret holding the Turnstile secret key (docs/agent/security.md "Calling other services"). */
-export const TURNSTILE_SECRET_NAME = 'TURNSTILE_SECRET_KEY';
-
-/**
- * Turnstile keys when this form uses it AND the owner configured both: the site key (owner
- * secret TURNSTILE_SITE_KEY, else App settings, read through the cached `getAppSettings`), the
- * secret as the owner secret TURNSTILE_SECRET_KEY. Either missing → null: Turnstile is skipped
- * (honeypot, fill time and rate limits still apply). No database read on a cache hit.
- */
-export async function turnstileFor(
-  db: Pick<PrismaClient, '$queryRaw'>,
-  settings: Pick<FormSettings, 'turnstile'>
-): Promise<{siteKey: string; secret: string} | null> {
-  if (!settings.turnstile) return null;
-  if (!config.ownerSecret(TURNSTILE_SECRET_NAME)) return null;
-  const keys = await getTurnstileKeys(db as PrismaClient);
-  const siteKey = keys.siteKey?.trim();
-  return siteKey && keys.secret ? {siteKey, secret: keys.secret} : null;
-}
-
 /**
  * The GET payload. Password-protected forms return metadata only unless `unlock` is a valid
  * token; closed forms return the closed message, never the definition.
@@ -172,7 +150,7 @@ export async function publicPayload(
   if (isClosed(form)) return {...base, status: 'closed', message: form.settings.closedMessage || SYSTEM_LABELS.closed};
   const hash = form.settings.passwordHash;
   if (hash && !(await checkUnlockToken(secret, unlock, form.id, hash))) return {...base, status: 'locked'};
-  const [turnstile, token] = await Promise.all([turnstileFor(db, form.settings), renderToken(secret, form.id)]);
+  const token = await renderToken(secret, form.id);
   return {
     ...base,
     status: 'live',
@@ -180,14 +158,13 @@ export async function publicPayload(
     version: form.version,
     definition: form.definition,
     renderToken: token,
-    turnstileSiteKey: turnstile?.siteKey ?? null,
   };
 }
 
 /**
  * Full GET answer for a slug, or null for a 404. Shared by the API route and the /f/[slug] page.
- * The published shape comes from the Site Cache when it can (./cache.ts); the render token,
- * the Turnstile key and "closed now" are worked out per request.
+ * The published shape comes from the Site Cache when it can (./cache.ts); the render token
+ * and "closed now" are worked out per request.
  */
 export async function payloadForSlug(db: Db, secret: string, slug: string, unlock?: string | null): Promise<PublicFormResponse | null> {
   const r = await loadPublishedBySlug(db, slug);

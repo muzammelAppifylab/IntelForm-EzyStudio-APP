@@ -1,7 +1,7 @@
 import {queryOptions, useMutation, useQueryClient} from '@tanstack/react-query';
 
 import type {SavedThemesResponse} from '../../../lib/intelform/api-builder';
-import type {AppSettingsPatch, SettingsTestResult} from '../../../lib/intelform/settings-app';
+import type {AppSettingsPatch} from '../../../lib/intelform/settings-app';
 import {APP_SETTINGS_API, type AppSettingsResponse} from '../../../server/intelform/settings/view';
 import {appInfoQuery} from '../lib/branding';
 import {api} from '../lib/api';
@@ -29,12 +29,5 @@ export function useSaveAppSettings() {
       // The app name, logo, favicon, accent and mode show in the dashboard shell and public pages.
       void queryClient.invalidateQueries({queryKey: appInfoQuery.queryKey});
     },
-  });
-}
-
-/** "Test keys": checks the TURNSTILE_SECRET_KEY owner secret with Cloudflare. */
-export function useTurnstileTest() {
-  return useMutation({
-    mutationFn: () => api<SettingsTestResult>(`${APP_SETTINGS_API}/spam/test`, {method: 'POST', body: {}}),
   });
 }

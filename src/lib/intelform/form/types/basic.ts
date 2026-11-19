@@ -17,6 +17,7 @@ import {
   toNumber,
   type AnswerContext,
 } from './common'
+import { answerPlainText, htmlToPlain, isBlankHtml, isRichAnswer, plainToHtml, sanitizeRichText, type RichAnswer } from '../rich-text'
 
 /** Shorthands for zod/mini, which has functions instead of methods. */
 const int = (min: number, max: number) => z.number().check(z.int(), z.gte(min), z.lte(max))
@@ -32,32 +33,74 @@ function migrateText(old: Record<string, unknown>) {
   return out
 }
 
+// ------------------------------------------------------------------ Rich text answers
+
+/** Empty plain text, or a rich `{html}` answer that shows no text. */
+function isEmptyText(v: unknown): boolean {
+  return isRichAnswer(v) ? isBlankHtml(v.html) : isEmptyBasic(v)
+}
+
+/**
+ * A rich text answer: `{html}` (or plain text from an older page, kept as paragraphs). Stored as
+ * the sanitized subset; min / max characters count the visible text, not the formatting.
+ */
+function richTextAnswerSchema(min: number | null, max: number, htmlMax: number, inline: boolean): z.ZodMiniType<RichAnswer> {
+  return z.pipe(
+    z.union([z.string(), z.object({ html: z.string() })], { error: 'invalid' }),
+    z.transform((v, ctx): RichAnswer => {
+      const issue = (message: string) => ctx.issues.push({ code: 'custom', message, input: v })
+      const raw = typeof v === 'string' ? plainToHtml(v, inline) : v.html
+      // Refuse absurd input before parsing it; the stored size is checked again once clean.
+      if (raw.length > htmlMax * 4) {
+        issue(`maxChars:${max}`)
+        return { html: '' }
+      }
+      const html = sanitizeRichText(raw, { inline })
+      const length = htmlToPlain(html).trim().length
+      if (length > max || html.length > htmlMax) issue(`maxChars:${max}`)
+      else if (min && length < min) issue(`minChars:${min}`)
+      return { html }
+    }),
+  )
+}
+
 // ------------------------------------------------------------------ Short text
 
 export const SHORT_TEXT_MAX = 1000
 export const LONG_TEXT_MAX = 10000
+/** Longest stored HTML of a rich text answer (formatting included); the text limits still apply. */
+export const SHORT_TEXT_HTML_MAX = 8000
+export const LONG_TEXT_HTML_MAX = 60_000
 
 const shortTextProps = z.object({
   minLength: lengthLimit(SHORT_TEXT_MAX),
   maxLength: lengthLimit(SHORT_TEXT_MAX),
+  /** Respondents get a formatting toolbar (bold, italic, underline, strikethrough, links). */
+  richText: def(z.boolean(), false),
 })
 
 export const short_text = defineType({
   ...base('short_text'),
   props: shortTextProps,
   defaultProps: () => shortTextProps.parse({}),
-  answer: (field) => textSchema(field.props.minLength, Math.min(field.props.maxLength ?? SHORT_TEXT_MAX, SHORT_TEXT_MAX)),
-  isEmpty: isEmptyBasic,
+  answer: (field) => {
+    const max = Math.min(field.props.maxLength ?? SHORT_TEXT_MAX, SHORT_TEXT_MAX)
+    return field.props.richText
+      ? richTextAnswerSchema(field.props.minLength, max, SHORT_TEXT_HTML_MAX, true)
+      : textSchema(field.props.minLength, max)
+  },
+  isEmpty: isEmptyText,
   operators: TEXT_OPS,
-  evaluate: (op, a, v) => evaluateText(op, str(a), v),
+  evaluate: (op, a, v) => evaluateText(op, answerPlainText(a), v),
   pipeParts: () => [],
-  pipe: (v) => str(v),
-  ...single(str),
+  pipe: (v) => answerPlainText(v),
+  ...single(answerPlainText),
   migrateProps: (_from, old) => {
     const m = migrateText(old)
     return {
       minLength: m.minLength == null ? m.minLength : Math.min(m.minLength, SHORT_TEXT_MAX),
       maxLength: m.maxLength == null ? m.maxLength : Math.min(m.maxLength, SHORT_TEXT_MAX),
+      ...(typeof old.richText === 'boolean' && { richText: old.richText }),
     }
   },
 })
@@ -68,24 +111,32 @@ const longTextProps = z.object({
   minLength: lengthLimit(LONG_TEXT_MAX),
   maxLength: lengthLimit(LONG_TEXT_MAX),
   rows: def(int(2, 20), 4),
+  /** Respondents get a formatting toolbar (also lists and line breaks). */
+  richText: def(z.boolean(), false),
 })
 
 export const long_text = defineType({
   ...base('long_text'),
   props: longTextProps,
   defaultProps: () => longTextProps.parse({}),
-  answer: (field) => textSchema(field.props.minLength, Math.min(field.props.maxLength ?? LONG_TEXT_MAX, LONG_TEXT_MAX)),
-  isEmpty: isEmptyBasic,
+  answer: (field) => {
+    const max = Math.min(field.props.maxLength ?? LONG_TEXT_MAX, LONG_TEXT_MAX)
+    return field.props.richText
+      ? richTextAnswerSchema(field.props.minLength, max, LONG_TEXT_HTML_MAX, false)
+      : textSchema(field.props.minLength, max)
+  },
+  isEmpty: isEmptyText,
   operators: TEXT_OPS,
-  evaluate: (op, a, v) => evaluateText(op, str(a), v),
+  evaluate: (op, a, v) => evaluateText(op, answerPlainText(a), v),
   pipeParts: () => [],
-  pipe: (v) => str(v),
-  ...single(str),
+  pipe: (v) => answerPlainText(v),
+  ...single(answerPlainText),
   migrateProps: (_from, old) => {
     const m = migrateText(old)
     return {
       ...(m.minLength !== undefined && { minLength: m.minLength }),
       ...(m.maxLength !== undefined && { maxLength: m.maxLength }),
+      ...(typeof old.richText === 'boolean' && { richText: old.richText }),
     }
   },
 })

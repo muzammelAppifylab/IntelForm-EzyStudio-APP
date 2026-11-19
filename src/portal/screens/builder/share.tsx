@@ -6,7 +6,6 @@ import {
   QrSection,
   SeoSection,
 } from '../../intelform/builder/share/ShareSections';
-import {PageHeader} from '../../ui';
 
 /**
  * `/forms/$formId/share`: the form's link and custom slug, search and social preview, inline
@@ -16,7 +15,7 @@ import {PageHeader} from '../../ui';
 export function ShareTab() {
   return (
     <div className="app-page screen-share">
-      <PageHeader title="Share" description="The form's link, embed code and QR code." />
+      <h2 className="visually-hidden">Share</h2>
       <div className="if-share-stack">
         <LinkSection />
         <SeoSection />

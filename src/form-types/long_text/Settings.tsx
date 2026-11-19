@@ -1,4 +1,4 @@
-import {SelectRow} from '../../portal/intelform/builder/controls';
+import {SelectRow, SwitchRow} from '../../portal/intelform/builder/controls';
 import type {FieldSettingsProps} from '../../portal/intelform/builder/type-ui';
 import {LengthLimits} from '../_settings/LengthLimits';
 
@@ -7,6 +7,13 @@ const ROWS = ['2', '3', '4', '5', '6', '8', '10', '12', '16', '20'] as const;
 export default function LongTextSettings({field, onChange, readOnly}: FieldSettingsProps<'long_text'>) {
   return (
     <div className="fts-stack">
+      <SwitchRow
+        label="Rich text answers"
+        description="Respondents get a formatting toolbar: bold, italic, underline, strikethrough, lists and links. Exports and emails show the text without formatting."
+        checked={field.props.richText}
+        disabled={readOnly}
+        onCheckedChange={v => onChange({richText: v})}
+      />
       <LengthLimits min={field.props.minLength} max={field.props.maxLength} cap={10000} onChange={onChange} readOnly={readOnly} />
       <SelectRow
         label="Box height"

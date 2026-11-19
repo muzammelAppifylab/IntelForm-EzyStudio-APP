@@ -13,6 +13,7 @@ import {csvFilename} from '../intelform/responses/csv';
 import {contentDisposition} from '../intelform/responses/csv-text';
 import {safeTz, todayIn} from '../intelform/responses/query';
 import {hitRateLimit} from '../intelform/responses/rate-limit';
+import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -108,6 +109,7 @@ export const exportsRoutes = new Hono()
       if (err instanceof JobRejected) return c.json(problem('busy', message), 503);
       throw err;
     }
+    await logActivity(c, 'export_started', formId ? ['form', formId] : undefined, {kind: input.kind});
     // Locally the job has already run (sendJob runs it in this process): answer what it did.
     const now = await loadExport(db, row!.id);
     return c.json<ExportStatus>(statusOf(now ?? {...row!, kind: input.kind, status: 'running', rows: 0, file_name: fileName, error: null}), 202);

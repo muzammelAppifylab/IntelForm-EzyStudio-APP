@@ -51,6 +51,7 @@ import {findBuiltinTemplate} from '../intelform/templates/builtins';
 import {scheduleFileCleanup} from '../intelform/uploads/trash';
 import {clearSummaryCache} from '../intelform/responses/summary';
 import {clearContactsOverview} from '../intelform/contacts/query';
+import {logActivity, titleMeta} from '../activity';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -128,7 +129,7 @@ export const formsRoutes = new Hono()
       where: {userId_key: {userId: c.var.viewer.id!, key: 'forms.view'}},
       select: {value: true},
     });
-    return c.json<FormsViewResponse>({view: row?.value === 'list' ? 'list' : 'grid'});
+    return c.json<FormsViewResponse>({view: row?.value === 'grid' ? 'grid' : 'list'});
   })
 
   .patch(
@@ -188,6 +189,7 @@ export const formsRoutes = new Hono()
       }
 
       const created = await insertForm(db, {title, draft, theme, settings, userId: c.var.viewer.id!});
+      await logActivity(c, 'form_created', ['form', created.id], {title: titleMeta(created.title), fromTemplate: wantsTemplate});
       return c.json<CreatedForm>(created, 201);
     } catch (err) {
       return fail(c, err);
@@ -248,6 +250,7 @@ export const formsRoutes = new Hono()
     try {
       const {id} = c.req.valid('param');
       const result = await closeForm(c.var.db, id, c.var.viewer.id!);
+      await logActivity(c, 'form_closed', ['form', id]);
       await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
@@ -259,6 +262,7 @@ export const formsRoutes = new Hono()
     try {
       const {id} = c.req.valid('param');
       const result = await reopenForm(c.var.db, id, c.var.viewer.id!);
+      await logActivity(c, 'form_reopened', ['form', id]);
       await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
@@ -282,6 +286,7 @@ export const formsRoutes = new Hono()
         settings: copyableSettings(readSettings(row.settings)),
         userId: c.var.viewer.id!,
       });
+      await logActivity(c, 'form_duplicated', ['form', created.id], {title: titleMeta(created.title), source: titleMeta(row.title)});
       return c.json<CreatedForm>(created, 201);
     } catch (err) {
       return fail(c, err);
@@ -318,6 +323,7 @@ export const formsRoutes = new Hono()
         },
         select: {id: true, slug: true, name: true, category: true, description: true, createdAt: true},
       });
+      await logActivity(c, 'form_saved_as_template', ['template', tpl.id], {title: titleMeta(tpl.name), source: titleMeta(row.title)});
       return c.json<TemplateSummary>(
         {
           id: tpl.id,
@@ -361,6 +367,8 @@ export const formsRoutes = new Hono()
       // contacts and hourly counts right and puts their signature files in the file trash, which
       // the cleanup job empties a few at a time: no file fan-out and no answer scan in this request.
       await db.form.deleteMany({where: {id}});
+      // The title goes in the log: the form itself is gone.
+      await logActivity(c, 'form_deleted', ['form', id], {title: titleMeta(row.title)});
       await Promise.all([
         clearPublicSiteCache(),
         clearPublicFormCache(),

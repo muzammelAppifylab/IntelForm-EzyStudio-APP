@@ -12,6 +12,7 @@ import {
   type TablePrefsResponse,
 } from '../../lib/intelform/api-responses';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
 import {GONE, loadCatalog} from '../intelform/responses/catalog';
 import {decodeCursor} from '../intelform/responses/query';
@@ -199,7 +200,10 @@ export const responsesRoutes = new Hono()
       const ids = [...new Set(c.req.valid('json').ids.map(id => id.toLowerCase()))];
       const result = await deleteResponses(c.var.db, formId, ids);
       if (!result.formFound) return gone(c);
-      if (result.deleted) await afterDelete(c, formId);
+      if (result.deleted) {
+        await logActivity(c, 'responses_deleted', ['form', formId], {count: result.deleted});
+        await afterDelete(c, formId);
+      }
       return c.json<BulkDeleteResponse>({deleted: result.deleted});
     }
   )
@@ -232,6 +236,7 @@ export const responsesRoutes = new Hono()
     const result = await deleteResponses(c.var.db, formId, [rid]);
     if (!result.formFound) return gone(c);
     if (!result.deleted) return c.json(problem('not_found', RESPONSE_GONE), 404);
+    await logActivity(c, 'responses_deleted', ['form', formId], {count: result.deleted});
     await afterDelete(c, formId);
     return c.json<BulkDeleteResponse>({deleted: result.deleted});
   })

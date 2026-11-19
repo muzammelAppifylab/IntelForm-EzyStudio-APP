@@ -21,6 +21,17 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
 
+  // ----------------------------------------------------------------- Users
+  /** Add people by hand: email them an invite or set their first password (routes/team.ts). */
+  USER_INVITE: {
+    codename: 'site:user:invite',
+    title: 'Add and invite users',
+    description: 'Add people by hand with their roles, then email them an invite or set their first password.',
+    group: 'Users',
+    ability: 'inviteUsers',
+    roles: ['admin'],
+  },
+
   // ------------------------------------------------------------- IntelForm
   // IntelForm's old team roles map onto the template's: Owner is `owner` (holds `*`), Editor and
   // Viewer are the `editor` / `viewer` roles the intelform migration creates, and `admin` gets

@@ -30,6 +30,7 @@ describe('the permission catalogue', () => {
     expect(PERMISSIONS.CONTACT_READ).toBe('site:contact:read');
     expect(PERMISSIONS.CONTACT_WRITE).toBe('site:contact:write');
     expect(PERMISSIONS.APP_SETTINGS).toBe('site:intelform:settings');
+    expect(PERMISSIONS.USER_INVITE).toBe('site:user:invite');
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
       [
         'editRoles',
@@ -37,6 +38,7 @@ describe('the permission catalogue', () => {
         'manageUsers',
         'readAudit',
         'updateUsers',
+        'inviteUsers',
         'viewForms',
         'editForms',
         'deleteForms',
@@ -71,6 +73,7 @@ describe('the permission catalogue', () => {
     expect(admin).toEqual({
       manageUsers: true,
       updateUsers: true,
+      inviteUsers: true,
       manageRoles: true,
       editRoles: false,
       readAudit: true,
@@ -95,6 +98,8 @@ describe('the permission catalogue', () => {
     expect(CATALOGUE.FORM_READ.roles).toEqual(['admin', 'editor', 'viewer']);
     expect(CATALOGUE.FORM_WRITE.roles).toEqual(['admin', 'editor']);
     expect(CATALOGUE.APP_SETTINGS.roles).toEqual(['admin']);
+    expect(CATALOGUE.USER_INVITE.roles).toEqual(['admin']);
+    expect(CATALOGUE.USER_INVITE.roles).toEqual(['admin']);
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue
     void NO_ABILITIES.manageEverything;

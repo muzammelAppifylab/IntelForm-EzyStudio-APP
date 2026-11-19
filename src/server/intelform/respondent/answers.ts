@@ -1,5 +1,6 @@
 import {answerToCsv} from '../../../lib/intelform/form/csv';
 import type {FormDefinition, FormField} from '../../../lib/intelform/form/definition';
+import {answerPlainText} from '../../../lib/intelform/form/rich-text';
 import {coreRegistry} from '../../../lib/intelform/form/types/registry';
 
 /** Human-readable answer text, one line per CSV cell (emails, redirect parameters). */
@@ -50,9 +51,7 @@ export function buildSearchText(fields: readonly FormField[], answers: Record<st
           ? answerToCsv(f, v).filter(Boolean).join(' ') || (typeof v === 'string' ? v : '')
           : f.type === 'address'
             ? answerToCsv(f, v).filter(Boolean).join(', ')
-            : typeof v === 'string'
-              ? v
-              : '';
+            : answerPlainText(v);
       if (t) parts.push(t);
     } else if (isRecord(v) && typeof v.other === 'string' && v.other) {
       parts.push(v.other);

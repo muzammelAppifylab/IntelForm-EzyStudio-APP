@@ -1,7 +1,25 @@
+import {RichTextInput} from '../../respondent/rich/RichTextInput';
 import type {FieldRendererProps} from '../../respondent/types';
 import {TextInput} from '../../respondent/ui';
 
 export default function ShortTextRenderer({field, value, onChange, inputId, describedBy, invalid, onAdvance, labels}: FieldRendererProps<'short_text'>) {
+  if (field.props.richText) {
+    return (
+      <RichTextInput
+        id={inputId}
+        inline
+        value={value}
+        onChange={onChange}
+        placeholder={field.placeholder || labels.typeAnswer}
+        labelledBy={`${inputId}-label`}
+        describedBy={describedBy}
+        invalid={invalid}
+        required={field.required}
+        onAdvance={onAdvance}
+        labels={labels}
+      />
+    );
+  }
   return (
     <TextInput
       id={inputId}

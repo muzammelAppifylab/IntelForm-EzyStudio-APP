@@ -158,7 +158,6 @@ export const publicFormsRoutes = new Hono()
           db: c.var.db,
           secret,
           requestUrl: c.req.url,
-          ip,
           ipKey: await ipKeyFor(secret, ip),
           meta: () => requestMeta(c, secret),
         },

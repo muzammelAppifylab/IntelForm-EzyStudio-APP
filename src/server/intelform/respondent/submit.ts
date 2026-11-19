@@ -6,7 +6,7 @@ import {computeVisibility, emailDedupeKey, validateSubmission} from '../../../li
 import {isSignatureDataUrl} from '../../../lib/intelform/form/types/registry';
 import {buildSearchText, redirectWithAnswers} from './answers';
 import {fieldErrors, RespondentError} from './errors';
-import {isClosed, parseSettings, requireForm, turnstileFor, type LoadedForm} from './load';
+import {isClosed, parseSettings, requireForm, type LoadedForm} from './load';
 import {queueResponseJobs} from '../notify';
 import {clearPublicSiteCache} from '../public-site/data';
 import {clearPublicFormCache} from './cache';
@@ -14,7 +14,6 @@ import {rateLimit} from './rate-limit';
 import type {RequestMeta} from './request-meta';
 import {removeSignatures, storeSignatures} from './signatures';
 import {checkUnlockToken, hashBrowserToken, readRenderToken} from './tokens';
-import {verifyTurnstile} from './turnstile';
 import './validators';
 
 /**
@@ -25,17 +24,16 @@ import './validators';
  *  3. rate limit: 10 per minute per IP per form (intelform_rate_limits)
  *  4. honeypot + minimum fill time (a fake 200 on a hit); a render token over 24 h old: reload
  *  5. validateSubmission against the version the browser rendered (+ the one-per-email answer)
- *  6. Turnstile (when on and configured; skipped without TURNSTILE_SECRET_KEY)
- *  7. one per browser
- *  8. one per email (pre-check), then signature uploads (PNG only)
- *  9. one statement: counter, close date and cap (a conditional UPDATE locks the form row),
+ *  6. one per browser
+ *  7. one per email (pre-check), then signature uploads (PNG only)
+ *  8. one statement: counter, close date and cap (a conditional UPDATE locks the form row),
  *     auto-close at the cap, insert (the unique email_key catches a repeat)
  *
- * About 4 database round trips: the form; the rate limit beside the version; Turnstile key,
- * one per browser and one per email together; the insert statement.
- * 10. after commit: the notify job (intelform-response-notify {responseId}: notification,
+ * About 4 database round trips: the form;  the rate limit beside the version; one per
+ * browser and one per email together; the insert statement.
+ *  9. after commit: the notify job (intelform-response-notify {responseId}: notification,
  *     confirmation and webhook; ../notify), never inside the transaction
- * 11. reply { ok, redirectUrl? }
+ * 10. reply { ok, redirectUrl? }
  */
 
 export const SUBMIT_RATE_LIMIT = 10;
@@ -53,10 +51,8 @@ export interface SubmitContext {
   db: SubmitDb;
   /** The site secret (crypto.ts requireSecret). */
   secret: string;
-  /** The current request's URL: the platform's address for jobs and files, the host for Turnstile. */
+  /** The current request's URL: the platform's address for jobs and files. */
   requestUrl: string;
-  /** Raw client IP for Turnstile's `remoteip` (null locally). */
-  ip: string | null;
   /** Keyed rate-limit key part for the caller (crypto.ts ipKeyFor). */
   ipKey: string;
   /** Hashed IP, country, device, browser (request-meta.ts). */
@@ -189,7 +185,7 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     throw new RespondentError(401, 'locked', 'Enter the form password again, then submit.');
   }
 
-  // 3. Rate limit, before anything that costs (Turnstile, uploads), beside the rendered version (trip 2)
+  // 3. Rate limit, before anything that costs (uploads), beside the rendered version (trip 2)
   const [, version] = await Promise.all([
     rateLimit(db, `respond:${ctx.ipKey}:${form.id}`, SUBMIT_RATE_LIMIT, 60, 'You sent several responses in a row. Wait a minute and try again.'),
     versionFor(db, form, input.formVersionId),
@@ -214,23 +210,20 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
   const emailKey = onePerEmailKey(form, def, answers, labels);
   const browserHash = input.browserToken ? await hashBrowserToken(secret, form.id, input.browserToken) : null;
 
-  // 6–8. Turnstile (after validation: a token works only once; its site key from the cached app
-  // settings), one per browser and one per email, together (trip 3). Status and cap are not
+  // 6–7. One per browser and one per email, together (trip 3). Status and cap are not
   // re-read: the insert statement below checks them exactly.
-  const [turnstile, seen, dupes] = await Promise.all([
-    turnstileFor(db, form.settings),
+  const [seen, dupes] = await Promise.all([
     browserDupe(db, form, browserHash),
     emailDupe(db, form, emailKey),
   ]);
   if (seen.length) throw new RespondentError(409, 'already_responded', labels.alreadyResponded);
   const fieldId = form.settings.onePerEmailFieldId;
   if (dupes.length && fieldId) throw emailTakenError(fieldId, labels);
-  if (turnstile) await verifyTurnstile(turnstile.secret, input.turnstileToken, ctx.ip, new URL(ctx.requestUrl).hostname);
 
   // Signatures were uploaded by the browser; claim them (token, PNG check) → {fileId}.
   const stored = await storeSignatures(ctx.requestUrl, form.id, def, answers, labels);
 
-  // 9. ONE statement (trip 4, atomic without an interactive transaction): the counter UPDATE
+  // 8. ONE statement (trip 4, atomic without an interactive transaction): the counter UPDATE
   // locks the form row and re-checks live, close date and cap exactly; it closes the form when
   // this response reaches the cap; the insert runs only if it passed. A unique violation
   // (responses_email_key: the same address committed since the pre-check) undoes all of it.
@@ -278,12 +271,12 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     throw err;
   }
 
-  // 10. Later work, after commit. A response that reached the cap closed the form: the public
+  // 9. Later work, after commit. A response that reached the cap closed the form: the public
   // forms list and the cached form page must stop offering it.
   if (saved.closedNow) await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]).catch(() => undefined);
   await queueResponseJobs(ctx.requestUrl, {formId: form.id, formTitle: form.title, responseId: saved.id, settings: saved.settings});
 
-  // 11. Reply
+  // 10. Reply
   const s = form.settings;
   if (s.afterSubmit === 'redirect' && s.redirectUrl) {
     return {ok: true, redirectUrl: redirectWithAnswers(s.redirectUrl, def, answers, s.redirectAppendAnswers)};

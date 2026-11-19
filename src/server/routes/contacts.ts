@@ -16,6 +16,7 @@ import {clearContactsOverview, contactDetail, contactsOverview, deleteContacts, 
 import {safeTz} from '../intelform/contacts/tz';
 import {clearSummaryCache} from '../intelform/responses/summary';
 import {scheduleFileCleanup} from '../intelform/uploads/trash';
+import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -87,6 +88,9 @@ export const contactsRoutes = new Hono()
     async c => {
       const {keys} = c.req.valid('json');
       const result = await deleteContacts(c.var.db, keys);
+      if (result.contacts || result.responses) {
+        await logActivity(c, 'contacts_deleted', undefined, {contacts: result.contacts, responses: result.responses});
+      }
       // Their signature files are in the file trash (the delete trigger): the cleanup job removes
       // them a few at a time. The cached strip and the touched forms' summaries go now.
       if (result.responses) await Promise.all([clearContactsOverview(), clearSummaryCache(), scheduleFileCleanup(c.req.url)]);

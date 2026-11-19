@@ -1,0 +1,95 @@
+/* Rich text descriptions in the builder (PipeEditor with `rich`). */
+
+.if-pipe-rich {
+  display: grid;
+  gap: 0.25rem;
+}
+.if-pipe-editor.if-pipe-editor-rich {
+  white-space: normal;
+}
+/* Paragraph spacing a bit tighter than on the form, so the canvas stays compact. */
+.if-pipe-editor-rich p {
+  margin-bottom: 0.25em;
+}
+.if-pipe-toolbar .rt-toolbar {
+  gap: 0;
+}
+.if-pipe-toolbar .rt-tool {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+/* On the canvas the toolbar shows only while the description is being edited. */
+.if-card-description .if-pipe-rich:not(:focus-within) > .if-pipe-toolbar {
+  display: none;
+}
+
+/*
+ * The description on the canvas: plain muted text at rest, a hover fill, and while editing ONE
+ * composer box (toolbar on top, a hairline, the text below) with the same focus ring as every
+ * input. Long text scrolls inside the box instead of stretching the card.
+ */
+.if-card-description .if-pipe-rich {
+  gap: 0;
+  margin: 0 -9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.if-card-description .if-pipe-rich:hover {
+  background: var(--hover);
+}
+.if-card-description .if-pipe-rich:focus-within {
+  border-color: var(--accent);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.if-card-description .if-pipe-rich > .if-pipe-toolbar {
+  padding: 0.25rem;
+  border-bottom: 1px solid var(--line);
+}
+.if-card-description .if-pipe-rich > .if-pipe-frame-inline,
+.if-card-description .if-pipe-rich > .if-pipe-frame-inline:hover,
+.if-card-description .if-pipe-rich > .if-pipe-frame-inline:focus-within {
+  margin: 0;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.if-card-description .if-pipe-rich:focus-within > .if-pipe-frame-inline {
+  padding-block: 0.5rem;
+}
+.if-card-description .if-pipe-editor-rich {
+  max-height: 14rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.if-card-description .if-pipe-rich:focus-within .if-pipe-editor-rich {
+  min-height: 3.5rem;
+}
+.if-pipe-too-long {
+  margin: 0;
+}
+/* Read-only rich text on the canvas (an unselected card). */
+.if-rich-preview p {
+  margin: 0 0 0.25em;
+}
+
+/* Canvas preview of a text question with Rich text answers on. */
+.if-prev-box.is-rich {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  height: auto;
+  padding-block: 0.375rem;
+}
+.if-prev-rich-tools {
+  display: flex;
+  gap: 0.75rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1;
+}

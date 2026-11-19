@@ -1,6 +1,7 @@
 import {useMemo, useState} from 'react';
 
 import {formatLabel} from '../../lib/intelform/form/labels';
+import {escapeHtml} from '../../lib/intelform/form/rich-text';
 import type {FieldRendererProps} from '../../respondent/types';
 import {shuffled} from '../../respondent/util';
 import {ChoiceGroup} from '../_respondent/choice';
@@ -25,7 +26,7 @@ export default function MultipleChoiceRenderer(p: FieldRendererProps<'multiple_c
       name={p.inputId}
       legend={p.legend}
       legendClassName={p.large ? 'rf-question-xl' : undefined}
-      description={[p.description, hint].filter(Boolean).join(' · ') || undefined}
+      description={[p.description, hint && `<p>${escapeHtml(hint)}</p>`].filter(Boolean).join('') || undefined}
       options={options}
       orientation={field.props.orientation}
       required={field.required}

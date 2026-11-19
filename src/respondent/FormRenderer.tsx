@@ -33,7 +33,7 @@ export type SubmitResult =
 export interface FormRendererProps {
   definition: FormDefinition;
   theme: FormTheme;
-  /** preview: no network, no Turnstile; submit just shows the end screen. */
+  /** preview: no network; submit just shows the end screen. */
   mode: 'live' | 'preview';
   /** Width hint for the builder preview (mobile also turns off input autofocus). */
   device?: 'desktop' | 'mobile';
@@ -52,7 +52,7 @@ export interface FormRendererProps {
   onStart?: () => void;
   /** Keep document.title as "Question 3 of 8 – Title" (live pages only). */
   manageDocumentTitle?: boolean;
-  /** Rendered at the end of the form (the Turnstile widget, the honeypot). */
+  /** Rendered at the end of the form (the honeypot). */
   footer?: ReactNode;
   /** Answers to start from (read on mount), e.g. kept across a reload after the form was republished. Skips the start screen. */
   initialAnswers?: Record<string, unknown> | null;

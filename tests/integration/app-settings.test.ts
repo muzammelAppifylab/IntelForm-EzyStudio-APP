@@ -34,7 +34,7 @@ describe.skipIf(!DATABASE_URL)('app settings (integration, real Postgres)', () =
     const before = await owner.get('/site-api/app-settings');
     expect(before.status).toBe(200);
     expect((before.json.general as {appName: string}).appName).toBe('IntelForm');
-    expect(before.json.spam).toEqual({turnstileSiteKey: null, turnstileSiteKeySet: false, turnstileSecretSet: false});
+    expect(before.json).not.toHaveProperty('spam');
 
     const saved = await owner.request('PATCH', '/site-api/app-settings', {general: {appName: 'Acme Forms'}, data: {retentionDays: 90}});
     expect(saved.status).toBe(200);
@@ -45,14 +45,11 @@ describe.skipIf(!DATABASE_URL)('app settings (integration, real Postgres)', () =
     expect((after.json.data as {retentionDays: number}).retentionDays).toBe(90);
   });
 
-  it('refuses bad input with field errors, and a site key (owner secrets only)', async () => {
+  it('refuses bad input with field errors', async () => {
     const owner = await ownerSignedIn(app);
     const bad = await owner.request('PATCH', '/site-api/app-settings', {general: {appName: ''}, branding: {accentColor: 'blue'}});
     expect(bad.status).toBe(422);
     expect(bad.json.fields).toMatchObject({appName: 'Enter an app name', accentColor: 'Use a hex colour like #4F46E5'});
-    const key = await owner.request('PATCH', '/site-api/app-settings', {spam: {turnstileSiteKey: '0xABC'}});
-    expect(key.status).toBe(422);
-    expect(key.json.fields).toHaveProperty('turnstileSiteKey');
     const theme = await owner.request('PATCH', '/site-api/app-settings', {branding: {defaultThemeId: '22222222-2222-4222-8222-222222222222'}});
     expect(theme.status).toBe(422);
   });
@@ -72,10 +69,8 @@ describe.skipIf(!DATABASE_URL)('app settings (integration, real Postgres)', () =
     expect((await new Browser(app).get('/site-api/app-settings')).status).toBe(401);
   });
 
-  it('the Turnstile test says what to add when the secret is missing', async () => {
+  it('the removed spam protection test route is gone', async () => {
     const owner = await ownerSignedIn(app);
-    const res = await owner.post('/site-api/app-settings/spam/test');
-    expect(res.status).toBe(200);
-    expect(res.json).toEqual({ok: false, message: 'Add the TURNSTILE_SECRET_KEY owner secret first.'});
+    expect((await owner.post('/site-api/app-settings/spam/test')).status).toBe(404);
   });
 });

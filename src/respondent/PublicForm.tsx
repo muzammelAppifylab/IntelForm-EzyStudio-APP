@@ -1,4 +1,4 @@
-import {lazy, type RefObject, Suspense, useEffect, useId, useMemo, useRef, useState} from 'react';
+import {type RefObject, useEffect, useId, useMemo, useRef, useState} from 'react';
 
 import type {PublicFormLive, PublicFormResponse} from '../lib/intelform/api-public';
 import {SYSTEM_LABELS} from '../lib/intelform/form/labels';
@@ -17,18 +17,15 @@ import {
 import {EMBED_MESSAGES, embedOptions, type EmbedOptions} from './embed';
 import {FormRenderer, type SubmitResult} from './FormRenderer';
 import {submitFailure} from './submit-result';
-import type {TurnstileHandle} from './lazy/Turnstile';
 import {MessageScreen, PasswordGate} from './screens';
 import {FormShell} from './Shell';
 import {prepareSignatureAnswers, SignatureUploadError} from './upload';
-
-const TurnstileWidget = lazy(() => import('./lazy/Turnstile'));
 
 /**
  * The public form at /f/<slug>/ (src/pages/f/[slug].astro renders it as a client-only island
  * with the form JSON as `initial`, so the first paint needs no second request): the password
  * gate, the closed message, a 404, or the live form wired to the submit API, the funnel events,
- * Turnstile, signature uploads and one-response-per-browser. Embedding: `?embed=1` (inline,
+ * signature uploads and one-response-per-browser. Embedding: `?embed=1` (inline,
  * posts its height to the parent), `?embed=popup`, `&transparent=1`, `&hideTitle=1` (./embed.ts).
  */
 export type Loaded = PublicFormResponse | {status: 'missing'} | {status: 'error'};
@@ -158,7 +155,6 @@ function LiveForm({
   onOutdated: (answers: Record<string, unknown>) => void;
 }) {
   const labels = SYSTEM_LABELS;
-  const turnstile = useRef<TurnstileHandle>(null);
   const renderToken = form.renderToken;
   const [already] = useState(() => (form.settings.onePerBrowser ? storedBrowserToken(form.id) : null));
   const browserToken = useMemo(() => storedBrowserToken(form.id) ?? newUuid(), [form.id]);
@@ -181,15 +177,6 @@ function LiveForm({
   }
 
   const onSubmit = async (answers: Record<string, unknown>, meta: {startedAt: number; ttc: Record<string, number>}): Promise<SubmitResult> => {
-    let turnstileToken: string | undefined;
-    if (form.turnstileSiteKey) {
-      try {
-        turnstileToken = await turnstile.current?.getToken();
-      } catch {
-        turnstile.current?.reset();
-        return {ok: false, errors: {}, message: labels.humanCheckFailed};
-      }
-    }
     // A honeypot input exists in the DOM for bots that fill every field.
     const hp = (document.querySelector<HTMLInputElement>('input[data-if-hp]')?.value ?? '').slice(0, 2000);
     let sent: Record<string, unknown>;
@@ -197,7 +184,6 @@ function LiveForm({
       // Drawn signatures go to storage first; the submit carries their {fileId, token}.
       sent = await prepareSignatureAnswers(form.definition.fields, answers, form.id, {renderToken, unlockToken: unlockToken.current});
     } catch (err) {
-      turnstile.current?.reset();
       if (err instanceof SignatureUploadError && err.fieldId) return {ok: false, errors: {[err.fieldId]: err.message}};
       return {ok: false, errors: {}, message: err instanceof SignatureUploadError ? err.message : labels.submitError};
     }
@@ -209,14 +195,12 @@ function LiveForm({
         ttc: meta.ttc,
         renderToken,
         hp: hp || undefined,
-        turnstileToken,
         unlockToken: unlockToken.current ?? undefined,
         browserToken,
       });
       if (form.settings.onePerBrowser) rememberBrowserToken(form.id, browserToken);
       return {ok: true, redirectUrl: r.redirectUrl};
     } catch (err) {
-      turnstile.current?.reset();
       return submitFailure(err, {
         onClosed: setClosed,
         onLocked,
@@ -239,16 +223,7 @@ function LiveForm({
       onStart={() => sendEvent(slug, 'start', sessionToken(form.id))}
       onSubmit={onSubmit}
       initialAnswers={initialAnswers}
-      footer={
-        <>
-          <Honeypot />
-          {form.turnstileSiteKey && (
-            <Suspense fallback={null}>
-              <TurnstileWidget ref={turnstile} siteKey={form.turnstileSiteKey} />
-            </Suspense>
-          )}
-        </>
-      }
+      footer={<Honeypot />}
     />
   );
 }

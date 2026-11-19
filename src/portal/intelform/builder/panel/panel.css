@@ -55,9 +55,9 @@
 .if-settings-panel .if-panel-head h2 {
   margin: 0;
   overflow: hidden;
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 1.125rem;
+  font-weight: 600;
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;

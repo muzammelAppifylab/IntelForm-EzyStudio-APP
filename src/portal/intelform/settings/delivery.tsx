@@ -2,58 +2,10 @@ import {useState} from 'react';
 
 import {notificationSettingsInput} from '../../../lib/intelform/settings-app';
 import type {AppSettingsResponse} from '../../../server/intelform/settings/view';
-import {Badge, Button, DefinitionList, Field, Notice, useToast} from '../../ui';
+import {Field, Notice, useToast} from '../../ui';
 import {useFormErrors} from '../lib/form-errors';
-import {useSaveAppSettings, useTurnstileTest} from '../queries/app-settings';
-import {SettingsCard, TestResult} from './bits';
-
-function SecretBadge({set}: {set: boolean}) {
-  return set ? (
-    <Badge tone="success" icon="check">
-      Added
-    </Badge>
-  ) : (
-    <Badge tone="neutral">Not added</Badge>
-  );
-}
-
-/**
- * Spam protection: Cloudflare Turnstile. Both keys are OWNER SECRETS now (added by the site's
- * owner in the platform, never saved or shown here): this card says whether each is present and
- * can check the secret key with Cloudflare.
- */
-export function SpamGroup({view}: {view: AppSettingsResponse}) {
-  const test = useTurnstileTest();
-  const {turnstileSiteKeySet: siteKeySet, turnstileSecretSet: secretSet} = view.spam;
-  const configured = siteKeySet && secretSet;
-  return (
-    <SettingsCard
-      title="Spam protection"
-      description="Optional. Cloudflare Turnstile checks that a person, not a bot, submits your forms. Each form can turn it off in its settings."
-      extraActions={
-        <Button variant="secondary" icon="shield" disabled={!secretSet} pending={test.isPending} pendingLabel="Testing…" onClick={() => test.mutate()}>
-          Test keys
-        </Button>
-      }>
-      <p className="settings-note">
-        Without keys, forms are still protected by a honeypot and a rate limit. To add Turnstile, create a widget in the Cloudflare dashboard under
-        Turnstile and add this site’s domain. Then ask the site’s owner to add both keys as <strong>owner secrets</strong> named{' '}
-        <code>TURNSTILE_SITE_KEY</code> and <code>TURNSTILE_SECRET_KEY</code>. They are kept by the platform, never stored or shown here.
-      </p>
-      <DefinitionList
-        items={[
-          {label: 'Site key (TURNSTILE_SITE_KEY)', value: <SecretBadge set={siteKeySet} />},
-          {label: 'Secret key (TURNSTILE_SECRET_KEY)', value: <SecretBadge set={secretSet} />},
-          {
-            label: 'Forms',
-            value: configured ? 'Checked by Turnstile' : siteKeySet || secretSet ? 'Not checked yet: add the other key' : 'Honeypot and rate limit only',
-          },
-        ]}
-      />
-      <TestResult result={test.data ?? (test.error ? {ok: false, message: test.error.message} : null)} />
-    </SettingsCard>
-  );
-}
+import {useSaveAppSettings} from '../queries/app-settings';
+import {SettingsCard} from './bits';
 
 /** Notification defaults: the sender name and reply-to address of the emails IntelForm sends. */
 export function NotificationsGroup({view}: {view: AppSettingsResponse}) {

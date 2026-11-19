@@ -312,6 +312,10 @@ model AuditEvent {
 
   @@index([actorUserId, id])
   @@index([targetType, targetId, id])
+  /// The Activity screen's "kind" filter (`action IN (...)`, newest first).
+  @@index([action, id])
+  /// The Activity screen's date range.
+  @@index([createdAt])
   @@map("audit_events")
 }
 
@@ -853,7 +857,7 @@ model IntelformRateLimit {
 }
 
 /// IntelForm's app settings: ONE row (`id = 1`, CHECK in SQL). Non-secret values only;
-/// secrets (the Turnstile secret key) are owner secrets read with `config.ownerSecret()`.
+/// secrets are owner secrets read with `config.ownerSecret()`.
 /// Emails go through the platform relay, so there are no mail provider settings here.
 model IntelformSettings {
   id               Int      @id @default(1)
@@ -872,7 +876,7 @@ model IntelformSettings {
   defaultMode      String   @default("system") @map("default_mode") @db.VarChar(6)
   /// A built-in theme preset id or a saved theme's uuid; null = the built-in default.
   defaultThemeId   String?  @map("default_theme_id") @db.VarChar(100)
-  // Spam protection: the public site key only.
+  // No longer read: the Turnstile spam check was removed. Kept so no saved data is dropped.
   turnstileSiteKey String?  @map("turnstile_site_key") @db.VarChar(200)
   // Data
   /// Delete responses older than this many days; null keeps them forever.

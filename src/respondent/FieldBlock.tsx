@@ -4,6 +4,7 @@ import {FIELD_RENDERERS} from '../form-types/renderers';
 import type {FormField} from '../lib/intelform/form/definition';
 import type {Engine, TtcClock} from './engine';
 import {AUTO_ADVANCE_TYPES, type ChangeMeta, isGroupField} from './types';
+import {RichText} from './rich/RichText';
 import {FieldError} from './ui';
 import {cx} from './util';
 
@@ -38,7 +39,7 @@ export function FieldBlock({field, engine, ttc, preview, large = false, number, 
   const errId = `${inputId}-err`;
   const error = engine.errors[field.id];
   const label = engine.pipe(field.label).trim() || engine.labels.untitledQuestion;
-  const description = engine.pipe(field.description).trim() || undefined;
+  const description = engine.description(field) || undefined;
   const autoAdvance = !!onPointerPick && AUTO_ADVANCE_TYPES.has(field.type);
   const H = level === 3 ? 'h3' : 'h2';
 
@@ -70,7 +71,18 @@ export function FieldBlock({field, engine, ttc, preview, large = false, number, 
       {group ? (
         label
       ) : (
-        <label htmlFor={inputId} className="rf-label">
+        <label
+          id={`${inputId}-label`}
+          htmlFor={inputId}
+          className="rf-label"
+          onClick={e => {
+            // A rich text answer is a contentEditable box, which a <label> can't focus by itself.
+            const target = document.getElementById(inputId);
+            if (target?.isContentEditable) {
+              e.preventDefault();
+              target.focus();
+            }
+          }}>
           {label}
         </label>
       )}
@@ -99,9 +111,7 @@ export function FieldBlock({field, engine, ttc, preview, large = false, number, 
     >
       {!group && heading}
       {!group && description && (
-        <p id={descId} className="rf-field-description rf-text-body rf-muted rf-pre-line">
-          {description}
-        </p>
+        <RichText id={descId} html={description} className="rf-field-description rf-text-body rf-muted" />
       )}
       <Renderer
         field={field}
@@ -127,7 +137,9 @@ export function FieldBlock({field, engine, ttc, preview, large = false, number, 
 export function focusField(root: HTMLElement | null, id: string, smooth = true): void {
   const block = root?.querySelector<HTMLElement>(`[data-field="${CSS.escape(id)}"]`);
   if (!block) return;
+  const rich = block.querySelector<HTMLElement>('[data-rich-editor][contenteditable="true"]');
   const target =
+    rich ??
     block.querySelector<HTMLElement>('input[type=radio]:checked, input[type=checkbox]:checked') ??
     block.querySelector<HTMLElement>('input:not([type=hidden]):not(:disabled), textarea, select, button:not(:disabled)');
   (target ?? block.querySelector<HTMLElement>('[data-step-heading]'))?.focus({preventScroll: true});

@@ -60,7 +60,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     expect((await admin.request('PATCH', `/site-api/admin/users/${ids.owner}`, {status: 'suspended'})).status).toBe(403);
     expect((await admin.request('PUT', `/site-api/admin/users/${ids.owner}/roles`, {roles: ['owner']})).status).toBe(403);
     expect((await admin.post(`/site-api/admin/users/${ids.owner}/sessions/revoke`)).status).toBe(403);
-    // Admins hold role:read, not role:update.
+    // Admins edit roles, but never grant what they do not hold.
     expect((await admin.get('/site-api/admin/roles')).status).toBe(200);
     expect((await admin.post('/site-api/admin/roles', {slug: 'sneaky', name: 'Sneaky', permissions: ['*']})).status).toBe(403);
   });

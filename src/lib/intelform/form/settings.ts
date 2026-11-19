@@ -100,9 +100,6 @@ const shape = {
   // Webhook (read by server/lib/webhooks.ts readWebhookConfig)
   webhook: webhookSettings,
 
-  // Spam (honeypot and the rate limit are always on)
-  turnstile: z.boolean(),
-
   // SEO and social preview
   seoTitle: z.string().trim().max(120),
   seoDescription: z.string().trim().max(300),
@@ -139,7 +136,6 @@ export function defaultFormSettings(): FormSettings {
     confirmationSubject: 'Thanks for your response',
     confirmationBody: 'We received your response. Thanks for taking the time.',
     webhook: { enabled: false, url: null, headers: [] },
-    turnstile: true,
     seoTitle: '',
     seoDescription: '',
     ogImage: null,
@@ -212,7 +208,6 @@ export interface PublicFormSettings {
   afterSubmit: AfterSubmit
   redirectUrl: string | null
   redirectAppendAnswers: boolean
-  turnstile: boolean
   stepSound: StepSound
   seoTitle: string
   seoDescription: string
@@ -228,7 +223,6 @@ export function publicSettings(settings: FormSettings): PublicFormSettings {
     afterSubmit: settings.afterSubmit,
     redirectUrl: settings.afterSubmit === 'redirect' ? settings.redirectUrl : null,
     redirectAppendAnswers: settings.redirectAppendAnswers,
-    turnstile: settings.turnstile,
     stepSound: settings.stepSound,
     seoTitle: settings.seoTitle,
     seoDescription: settings.seoDescription,

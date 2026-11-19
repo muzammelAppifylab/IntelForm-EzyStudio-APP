@@ -1,6 +1,7 @@
 import type {FormField} from '../../../lib/intelform/form/definition';
 import type {FieldType} from '../../../lib/intelform/form/field-types';
 import {answerToCsv} from '../../../lib/intelform/form/csv';
+import {answerPlainText, isRichAnswer, sanitizeRichText} from '../../../lib/intelform/form/rich-text';
 import {countryName, formatDate, formatTime, isIsoDate, isTime} from '../../../lib/intelform/form/types/registry';
 import {signatureViewPath, storedSignatureFileId} from '../uploads/signatures';
 
@@ -26,6 +27,8 @@ export function signatureLinkFor(value: unknown, responseId: string | undefined,
 export interface DisplayValue {
   text: string;
   url?: string;
+  /** A rich text answer's formatting (sanitized HTML), for the response drawer. */
+  html?: string;
 }
 
 /** `responseId` makes a signature's link (the guarded view route); without it a signature is just "Signed". */
@@ -63,6 +66,13 @@ export function displayAnswer(field: FormField, value: unknown, responseId?: str
       }
       return {text: typeof value === 'string' ? value : ''};
     }
+    case 'short_text':
+    case 'long_text': {
+      const text = answerToCsv(field, value).join('; ');
+      if (!isRichAnswer(value)) return {text};
+      const html = sanitizeRichText(value.html, {inline: field.type === 'short_text'});
+      return html ? {text, html} : {text};
+    }
     default:
       return {text: answerToCsv(field, value).join('; ')};
   }
@@ -81,7 +91,7 @@ export function buildSearchText(fields: readonly FormField[], answers: Record<st
     const v = answers[f.id];
     if (v === undefined || v === null) continue;
     if (SEARCH_TEXT_TYPES.has(f.type)) {
-      const t = f.type === 'name' || f.type === 'address' ? displayAnswer(f, v).text : typeof v === 'string' ? v : '';
+      const t = f.type === 'name' || f.type === 'address' ? displayAnswer(f, v).text : answerPlainText(v);
       if (t) parts.push(t);
     } else if (isRecord(v) && typeof v.other === 'string' && v.other) {
       parts.push(v.other);

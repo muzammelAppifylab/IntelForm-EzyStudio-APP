@@ -1,4 +1,4 @@
-import {lazy, Suspense, useEffect, useId, useRef, useState} from 'react';
+import {lazy, type RefObject, Suspense, useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
 
 import {formatDate, isIsoDate} from '../../lib/intelform/form/types/basic';
 import type {FieldRendererProps} from '../../respondent/types';
@@ -8,6 +8,58 @@ import {FtIcon} from '../_respondent/icons';
 import {dateTextToIso, maskDate} from './mask';
 
 const DateCalendar = lazy(() => import('./DateCalendar'));
+
+const GAP = 8;
+
+/**
+ * Floats the calendar in the browser's top layer (the popover API), so no scrolling container,
+ * slide transform or dialog around the form can clip it or grow to make room for it. It stays
+ * in the form's DOM, so the theme's colours still apply. Placed under the field, or above it
+ * when there is more room there, kept inside the window, and re-placed on scroll and resize.
+ * Without popover support it stays an absolutely positioned box under the field.
+ */
+function useFloating(open: boolean, anchorRef: RefObject<HTMLElement | null>, popRef: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const pop = popRef.current;
+    const anchor = anchorRef.current;
+    if (!open || !pop || !anchor || typeof pop.showPopover !== 'function') return;
+    pop.setAttribute('popover', 'manual');
+    pop.showPopover();
+    let frame = 0;
+    const place = () => {
+      const a = anchor.getBoundingClientRect();
+      const w = pop.offsetWidth;
+      const h = pop.offsetHeight;
+      const vw = document.documentElement.clientWidth;
+      const vh = window.innerHeight;
+      const below = vh - a.bottom - GAP;
+      const above = a.top - GAP;
+      const up = below < h && above > below;
+      const top = up ? Math.max(GAP, a.top - GAP - h) : Math.max(GAP, Math.min(a.bottom + GAP, vh - h - GAP));
+      const left = Math.max(GAP, Math.min(a.left, vw - w - GAP));
+      pop.style.top = `${Math.round(top)}px`;
+      pop.style.left = `${Math.round(left)}px`;
+      pop.dataset.side = up ? 'top' : 'bottom';
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(place);
+    };
+    place();
+    // The calendar is lazy: its size changes when it arrives (and when the month changes).
+    const resize = new ResizeObserver(schedule);
+    resize.observe(pop);
+    window.addEventListener('scroll', schedule, true);
+    window.addEventListener('resize', schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      window.removeEventListener('scroll', schedule, true);
+      window.removeEventListener('resize', schedule);
+      if (pop.matches(':popover-open')) pop.hidePopover();
+    };
+  }, [open, anchorRef, popRef]);
+}
 
 /**
  * A masked text input in the field's display format (a native date input can't be forced to
@@ -19,6 +71,7 @@ export default function DateRenderer({field, value, onChange, labels, inputId, d
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const hintId = useId();
   const popId = useId();
 
@@ -30,6 +83,8 @@ export default function DateRenderer({field, value, onChange, labels, inputId, d
     if (iso) onChange(iso, {invalid: null});
     else onChange(undefined, {invalid: 'invalidDate'});
   };
+
+  useFloating(open, wrapRef, popRef);
 
   useEffect(() => {
     if (!open) return;
@@ -79,7 +134,7 @@ export default function DateRenderer({field, value, onChange, labels, inputId, d
         <FtIcon name="calendar" />
       </button>
       {open && (
-        <div id={popId} role="dialog" aria-label={labels.calendar} className="ft-popover">
+        <div ref={popRef} id={popId} role="dialog" aria-label={labels.calendar} className="ft-popover">
           <Suspense fallback={<div className="ft-calendar-placeholder" />}>
             <DateCalendar
               selected={typeof value === 'string' && isIsoDate(value) ? value : null}

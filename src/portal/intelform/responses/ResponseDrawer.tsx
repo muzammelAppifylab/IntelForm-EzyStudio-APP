@@ -1,6 +1,7 @@
 import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {useEffect, useRef} from 'react';
 
+import {RichText} from '../../../respondent/rich/RichText';
 import {Button, DefinitionList, Drawer, ErrorNote, IconButton, LoadingBlock, Tooltip} from '../../ui';
 import {useCan} from '../lib/can';
 import {responseDetailQuery, responsesListQuery} from '../queries/responses';
@@ -126,6 +127,8 @@ export function ResponseDrawer({
                       <a href={a.url} target="_blank" rel="noreferrer" className="responses-signature">
                         <img src={a.url} alt={`Signature for “${a.label}”`} />
                       </a>
+                    ) : a.html ? (
+                      <RichText html={a.html} inline={a.type === 'short_text'} />
                     ) : a.text ? (
                       a.text
                     ) : (

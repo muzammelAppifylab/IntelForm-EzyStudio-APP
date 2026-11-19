@@ -71,7 +71,7 @@ export function ResponsesTab() {
 
   return (
     <div className="app-page screen-responses">
-      <PageHeader title="Responses" description="Every answer, a summary per question, and exports." />
+      <PageHeader title="Responses" />
       <Tabs
         label="Responses view"
         value={view}

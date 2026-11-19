@@ -8,13 +8,13 @@ import {type FormEvent, useState} from 'react';
 
 import type {AdminUser} from '../../lib/types';
 import {api, read} from '../api';
+import {AddUserDrawer} from './add-user';
 import {rolesQuery, usersQuery} from '../queries';
 import {ago, useMe, when} from '../shared';
 import {
   Badge,
   Button,
   Card,
-  Checkbox,
   type Column,
   DataTable,
   Drawer,
@@ -23,9 +23,11 @@ import {
   LoadingBlock,
   LoadMore,
   Menu,
+  Notice,
   type MenuItem,
   PageHeader,
   Person,
+  RadioGroup,
   SearchInput,
   SegmentedControl,
   StatusBadge,
@@ -59,6 +61,7 @@ export function Users() {
     status: '',
   });
   const [editing, setEditing] = useState<AdminUser | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const users = useInfiniteQuery(usersQuery(filter));
   // Role names for the badges; only people who may see roles can read them.
@@ -81,7 +84,13 @@ export function Users() {
       read(api.admin.users[':id']['two-factor'].disable.$post({param: {id: String(id)}})),
     onSuccess: refresh,
   });
+  // A fresh "choose your password" link for someone who has not joined yet.
+  const resendInvite = useMutation({
+    mutationFn: (id: number) =>
+      read<{ok: true; inviteMinutes: number}>(api.team.users[':id'].invite.$post({param: {id: String(id)}})),
+  });
   const busyId =
+    (resendInvite.isPending && resendInvite.variables) ||
     (setUserStatus.isPending && setUserStatus.variables?.id) ||
     (endSessions.isPending && endSessions.variables) ||
     (disableTwoFactor.isPending && disableTwoFactor.variables) ||
@@ -117,6 +126,13 @@ export function Users() {
     if (done) toast.success(`Two-step sign-in is off for ${user.name}.`);
   };
 
+  const sendInvite = (user: AdminUser) =>
+    resendInvite.mutate(user.id, {
+      onSuccess: ({inviteMinutes}) =>
+        toast.success(`Invite sent to ${user.name}. The link works for ${inviteMinutes} minutes.`),
+      onError: error => toast.danger(error.message),
+    });
+
   const askStatus = async (user: AdminUser) => {
     const suspend = user.status === 'active';
     const done = await confirm(
@@ -151,13 +167,15 @@ export function Users() {
       cell: user => (
         <span className="users-person">
           <Person name={user.name} detail={user.platformOwner ? 'Comes from the dashboard' : user.email} />
-          {!user.emailVerified && <Badge tone="warning">Unconfirmed</Badge>}
+          {!user.emailVerified && !user.platformOwner && (
+            <Badge tone="warning">{user.lastLoginAt ? 'Unconfirmed' : 'Invite pending'}</Badge>
+          )}
         </span>
       ),
     },
     {
       key: 'roles',
-      header: 'Roles',
+      header: 'Role',
       cell: user =>
         user.roles.length ? (
           <span className="badges">
@@ -211,9 +229,15 @@ export function Users() {
         const items: MenuItem[] = [];
         if (abilities.manageRoles)
           items.push({
-            label: 'Edit roles',
+            label: 'Change role',
             icon: 'shield',
             onSelect: () => setEditing(user),
+          });
+        if (abilities.inviteUsers && !user.emailVerified && !self && user.status === 'active')
+          items.push({
+            label: 'Resend invite',
+            icon: 'mail',
+            onSelect: () => sendInvite(user),
           });
         items.push({
           label: 'End sessions',
@@ -258,7 +282,17 @@ export function Users() {
 
   return (
     <div className="app-page screen-users">
-      <PageHeader title="Users" description="Everyone with an account on this site." />
+      <PageHeader
+        title="Users"
+        description="Everyone with an account on this site. Add people yourself, or let them sign up."
+        actions={
+          abilities?.inviteUsers && (
+            <Button icon="user-plus" onClick={() => setAdding(true)}>
+              Add user
+            </Button>
+          )
+        }
+      />
 
       <div className="toolbar">
         <form className="users-search" role="search" onSubmit={search} noValidate>
@@ -313,8 +347,13 @@ export function Users() {
                   : 'Try another status.'}
               </EmptyState>
             ) : (
-              <EmptyState icon="users" title="No users yet">
-                People show here once they sign up.
+              <EmptyState
+                icon="users"
+                title="No users yet"
+                action={
+                  abilities?.inviteUsers && <Button onClick={() => setAdding(true)}>Add user</Button>
+                }>
+                People show here once they sign up or you add them.
               </EmptyState>
             )
           }
@@ -323,6 +362,22 @@ export function Users() {
       {users.error && rows?.length ? <ErrorNote error={users.error} /> : null}
       <LoadMore query={users} />
 
+      {adding && (
+        <AddUserDrawer
+          onClose={() => setAdding(false)}
+          onAdded={({user, invited, inviteMinutes}) => {
+            setAdding(false);
+            toast.success(
+              invited
+                ? `${user.name} is added. We emailed them an invite (the link works for ${inviteMinutes} minutes).`
+                : `${user.name} is added. Share their password with them.`
+            );
+            void refresh();
+            void queryClient.invalidateQueries({queryKey: ['roles']});
+          }}
+        />
+      )}
+
       {editing && (
         <RoleEditor
           key={editing.id}
@@ -330,7 +385,7 @@ export function Users() {
           self={editing.id === viewerId}
           onClose={() => setEditing(null)}
           onSaved={() => {
-            toast.success(`Roles saved for ${editing.name}.`);
+            toast.success(`Role saved for ${editing.name}.`);
             setEditing(null);
             void refresh();
             if (editing.id === viewerId)
@@ -342,7 +397,11 @@ export function Users() {
   );
 }
 
-/** Pick a user's roles in a drawer. The server refuses roles you could not grant yourself. */
+/**
+ * Pick a user's ONE role in a drawer (people hold a single role). Someone who holds
+ * several from before starts on their main one (anything but `member`); saving replaces
+ * them all. The server refuses a role you could not grant yourself.
+ */
 function RoleEditor({
   user,
   self,
@@ -355,33 +414,35 @@ function RoleEditor({
   onSaved: () => void;
 }) {
   const roles = useQuery(rolesQuery);
-  const [picked, setPicked] = useState<string[]>(user.roles);
+  const [picked, setPicked] = useState<string | null>(
+    user.roles.find(slug => slug !== 'member') ?? user.roles[0] ?? null
+  );
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (role: string) =>
       read<{user: AdminUser}>(
         api.admin.users[':id'].roles.$put({
           param: {id: String(user.id)},
-          json: {roles: picked},
+          json: {roles: [role]},
         })
       ),
     onSuccess: onSaved,
   });
-  const changed = picked.slice().sort().join() !== user.roles.slice().sort().join();
+  const changed = picked !== null && !(user.roles.length === 1 && user.roles[0] === picked);
 
   return (
     <Drawer
       open
       onClose={onClose}
       dismissible={!save.isPending}
-      title={`Roles for ${user.name}`}
+      title={`Role for ${user.name}`}
       description={
         self
-          ? 'These are your own roles. Removing one takes its access away from you.'
+          ? 'This is your own role. Picking another changes what you can do right away.'
           : user.email
       }
       onSubmit={event => {
         event.preventDefault();
-        if (changed) save.mutate();
+        if (changed && picked) save.mutate(picked);
       }}
       footer={
         <>
@@ -393,34 +454,35 @@ function RoleEditor({
             pending={save.isPending}
             pendingLabel="Saving…"
             disabled={!changed || roles.isPending}>
-            Save roles
+            Save role
           </Button>
         </>
       }>
       <div className="form-stack">
         {roles.error && <ErrorNote error={roles.error} />}
+        {user.roles.length > 1 && (
+          <Notice tone="info">
+            They have {user.roles.length} roles now. Saving keeps only the one picked here.
+          </Notice>
+        )}
         {roles.isPending ? (
           <LoadingBlock rows={3} />
         ) : (
-          <fieldset className="checkbox-group">
-            <legend>Roles</legend>
-            {roles.data?.roles.map(role => (
-              <Checkbox
-                key={role.slug}
-                label={role.name}
-                description={role.description ?? undefined}
-                checked={picked.includes(role.slug)}
-                disabled={save.isPending}
-                onChange={checked =>
-                  setPicked(current =>
-                    checked
-                      ? [...current, role.slug]
-                      : current.filter(slug => slug !== role.slug)
-                  )
-                }
-              />
-            ))}
-          </fieldset>
+          <RadioGroup
+            legend="Role"
+            name="role"
+            value={picked}
+            onChange={setPicked}
+            disabled={save.isPending}
+            options={(roles.data?.roles ?? [])
+              // `owner` comes only from the dashboard: never offered here.
+              .filter(role => role.slug !== 'owner')
+              .map(role => ({
+                value: role.slug,
+                label: role.name,
+                description: role.description ?? undefined,
+              }))}
+          />
         )}
         {save.error && <ErrorNote error={save.error} />}
       </div>

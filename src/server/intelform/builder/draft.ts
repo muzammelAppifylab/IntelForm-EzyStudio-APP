@@ -1,4 +1,4 @@
-import {blankDefinition, formDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
+import {blankDefinition, formDefinition, sanitizeDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
 import {lintLogic, lintOnePerEmail, type LogicIssue} from '../../../lib/intelform/form/logic';
 import {defaultFormSettings, formSettings, type FormSettings} from '../../../lib/intelform/form/settings';
 import {defaultTheme, formTheme, type FormTheme} from '../../../lib/intelform/form/theme';
@@ -16,9 +16,9 @@ import {BuilderError, zodFields} from './errors';
  */
 export function normalizeDraft(raw: unknown): FormDefinition {
   const first = formDefinition.safeParse(raw);
-  if (first.success) return first.data;
+  if (first.success) return sanitizeDefinition(first.data);
   const second = formDefinition.safeParse(repairDraft(raw));
-  if (second.success) return second.data;
+  if (second.success) return sanitizeDefinition(second.data);
   throw new BuilderError(422, 'invalid_input', 'The form couldn’t be saved: some fields are invalid', zodFields(second.error, 'draft'));
 }
 
@@ -96,7 +96,7 @@ export function publishCheck(rawDraft: unknown, rawSettings: unknown): PublishCh
       error: new BuilderError(422, 'invalid_input', 'Fix the highlighted fields before you publish', zodFields(parsed.error, 'draft')),
     };
   }
-  const definition = parsed.data;
+  const definition = sanitizeDefinition(parsed.data);
   if (countFields(definition).fields === 0) {
     return {ok: false, error: new BuilderError(422, 'empty_form', 'Add at least one question before you publish')};
   }

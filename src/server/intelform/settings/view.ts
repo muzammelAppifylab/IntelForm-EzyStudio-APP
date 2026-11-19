@@ -1,6 +1,6 @@
 import type {z} from 'zod';
 
-import type {AppSettingsView, SettingsTestResult} from '../../../lib/intelform/settings-app';
+import type {AppSettingsView} from '../../../lib/intelform/settings-app';
 
 /**
  * Browser-safe pieces of the App settings API (no server imports): the portal imports the
@@ -8,29 +8,12 @@ import type {AppSettingsView, SettingsTestResult} from '../../../lib/intelform/s
  *
  *   GET   /site-api/app-settings             → AppSettingsResponse
  *   PATCH /site-api/app-settings  {group: …} → AppSettingsResponse (422 {fields} on bad input)
- *   POST  /site-api/app-settings/spam/test   → SettingsTestResult
  */
 
 export const APP_SETTINGS_API = '/site-api/app-settings';
 
-/** The settings view, with both Turnstile keys reported as present or not (owner secrets). */
-export interface AppSettingsResponse extends Omit<AppSettingsView, 'spam'> {
-  spam: {
-    /** Always null: the site key is an owner secret now (see `siteKeySet`). */
-    turnstileSiteKey: null;
-    /** `TURNSTILE_SITE_KEY` is present (or a key saved before the move). */
-    turnstileSiteKeySet: boolean;
-    /** `TURNSTILE_SECRET_KEY` is present. */
-    turnstileSecretSet: boolean;
-  };
-}
-
-export function toResponse(view: AppSettingsView, extra: {siteKeySet: boolean}): AppSettingsResponse {
-  return {
-    ...view,
-    spam: {turnstileSiteKey: null, turnstileSiteKeySet: extra.siteKeySet, turnstileSecretSet: view.spam.turnstileSecretSet},
-  };
-}
+/** The settings view, as GET and PATCH answer it. */
+export type AppSettingsResponse = AppSettingsView;
 
 /**
  * Zod issues → `{inputName: message}`, keyed by the LAST path segment ("general.appName" →
@@ -46,19 +29,6 @@ export function fieldErrorsOf(error: z.ZodError): {fields: Record<string, string
     else fields[leaf] ??= issue.message;
   }
   return {fields, form};
-}
-
-/**
- * What Cloudflare's siteverify answer to a dummy token says about the secret key. A dummy
- * token is always refused; what matters is WHY: "invalid-input-secret" means the key is wrong.
- */
-export function turnstileTestResult(reply: {success?: boolean; 'error-codes'?: string[]} | null): SettingsTestResult {
-  if (!reply) return {ok: false, message: 'Cloudflare gave an answer we couldn’t read. Try again in a minute.'};
-  const codes = reply['error-codes'] ?? [];
-  if (codes.includes('invalid-input-secret') || codes.includes('missing-input-secret')) {
-    return {ok: false, message: 'Cloudflare rejected the secret key. Copy it again from the Turnstile dashboard and update the TURNSTILE_SECRET_KEY owner secret.'};
-  }
-  return {ok: true, message: 'Cloudflare accepted the secret key.'};
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

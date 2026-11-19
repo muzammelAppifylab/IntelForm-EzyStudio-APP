@@ -6,8 +6,8 @@ import { z } from 'zod'
  *
  * Only non-secret values live here. What IntelForm used to keep as encrypted settings is now the
  * platform's: emails go through the platform's relay (no SMTP / Resend / Postmark settings), files
- * through the platform's storage (no Bunny settings), and the Turnstile secret key is an owner
- * secret read on the server with `config.ownerSecret('TURNSTILE_SECRET_KEY')`.
+ * through the platform's storage (no Bunny settings).
+ * Another service's key, when one is needed, is an owner secret read with `config.ownerSecret()`.
  */
 
 export const DATE_FORMATS = ['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'D MMM YYYY'] as const
@@ -95,11 +95,6 @@ export const brandingSettingsInput = z.object({
   defaultThemeId: z.string().trim().min(1).max(100).nullable().optional(),
 })
 
-/** Spam protection: the Turnstile SITE key (public). The secret key is an owner secret. */
-export const spamSettingsInput = z.object({
-  turnstileSiteKey: z.string().trim().max(200, 'That key is too long').nullable().optional(),
-})
-
 export const dataSettingsInput = z.object({
   /** Delete responses older than this many days. null = keep forever (default). */
   retentionDays: z.coerce.number().int().min(1, 'Use at least 1 day').max(3650, 'Use 3650 days or fewer').nullable().optional(),
@@ -139,7 +134,6 @@ export const legalSettingsInput = z.object({
 export const appSettingsPatch = z.object({
   general: generalSettingsInput.optional(),
   branding: brandingSettingsInput.optional(),
-  spam: spamSettingsInput.optional(),
   notifications: notificationSettingsInput.optional(),
   data: dataSettingsInput.optional(),
   site: siteSettingsInput.optional(),
@@ -154,11 +148,6 @@ export type AppSettingsPatch = z.infer<typeof appSettingsPatch>
 export interface AppSettingsView {
   general: { appName: string; logoUrl: string | null; faviconUrl: string | null; timezone: string; dateFormat: DateFormat }
   branding: { accentColor: string | null; defaultMode: ColorMode; defaultThemeId: string | null }
-  spam: {
-    turnstileSiteKey: string | null
-    /** Whether the owner set the Turnstile secret key (an owner secret); never the value. */
-    turnstileSecretSet: boolean
-  }
   notifications: {
     fromName: string | null
     replyTo: string | null
@@ -171,14 +160,12 @@ export interface AppSettingsView {
 }
 
 /** The settings before anyone changed them (the migration's column defaults). */
-export function defaultAppSettings(): Omit<AppSettingsView, 'spam' | 'notifications'> & {
-  spam: { turnstileSiteKey: null }
+export function defaultAppSettings(): Omit<AppSettingsView, 'notifications'> & {
   notifications: { fromName: null; replyTo: null }
 } {
   return {
     general: { appName: 'IntelForm', logoUrl: null, faviconUrl: null, timezone: 'UTC', dateFormat: 'DD/MM/YYYY' },
     branding: { accentColor: null, defaultMode: 'system', defaultThemeId: null },
-    spam: { turnstileSiteKey: null },
     notifications: { fromName: null, replyTo: null },
     data: { retentionDays: null },
     site: { indexing: false, description: '', ogImage: null, contactEmail: '' },
@@ -196,7 +183,6 @@ export interface AppSettingsRow {
   accentColor: string | null
   defaultMode: string
   defaultThemeId: string | null
-  turnstileSiteKey: string | null
   retentionDays: number | null
   siteIndexing: boolean
   siteDescription: string
@@ -209,7 +195,7 @@ export interface AppSettingsRow {
 }
 
 /** Row → view. Values outside the allowed sets fall back to the defaults. */
-export function settingsView(row: AppSettingsRow, extra: { turnstileSecretSet: boolean; emailEnabled: boolean }): AppSettingsView {
+export function settingsView(row: AppSettingsRow, extra: { emailEnabled: boolean }): AppSettingsView {
   return {
     general: {
       appName: row.appName,
@@ -223,7 +209,6 @@ export function settingsView(row: AppSettingsRow, extra: { turnstileSecretSet: b
       defaultMode: (COLOR_MODES as readonly string[]).includes(row.defaultMode) ? (row.defaultMode as ColorMode) : 'system',
       defaultThemeId: row.defaultThemeId,
     },
-    spam: { turnstileSiteKey: row.turnstileSiteKey, turnstileSecretSet: extra.turnstileSecretSet },
     notifications: { fromName: row.emailFromName, replyTo: row.emailReplyTo, enabled: extra.emailEnabled },
     data: { retentionDays: row.retentionDays },
     site: { indexing: row.siteIndexing, description: row.siteDescription, ogImage: row.siteOgImage, contactEmail: row.contactEmail },
@@ -237,7 +222,7 @@ export function settingsPatchData(patch: AppSettingsPatch): Partial<AppSettingsR
   const set = <K extends keyof AppSettingsRow>(k: K, v: AppSettingsRow[K] | undefined) => {
     if (v !== undefined) out[k] = v
   }
-  const { general: g, branding: b, spam: s, notifications: n, data: d, site, legal } = patch
+  const { general: g, branding: b, notifications: n, data: d, site, legal } = patch
   set('appName', g?.appName)
   set('logoUrl', g?.logoUrl)
   set('faviconUrl', g?.faviconUrl)
@@ -246,7 +231,6 @@ export function settingsPatchData(patch: AppSettingsPatch): Partial<AppSettingsR
   set('accentColor', b?.accentColor)
   set('defaultMode', b?.defaultMode)
   set('defaultThemeId', b?.defaultThemeId)
-  set('turnstileSiteKey', s?.turnstileSiteKey === '' ? null : s?.turnstileSiteKey)
   set('emailFromName', n?.fromName === '' ? null : n?.fromName)
   set('emailReplyTo', n?.replyTo)
   set('retentionDays', d?.retentionDays)
@@ -259,8 +243,3 @@ export function settingsPatchData(patch: AppSettingsPatch): Partial<AppSettingsR
   return out
 }
 
-/** Result of a "Test" button (e.g. sending a test email). */
-export interface SettingsTestResult {
-  ok: boolean
-  message: string
-}

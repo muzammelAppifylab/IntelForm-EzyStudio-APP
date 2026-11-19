@@ -9,6 +9,7 @@ import {syncPermissions} from '../platform/permission-sync';
 import {authSettings} from './auth-settings';
 import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
+import {activityRoutes} from './routes/activity';
 import {appSettingsRoutes} from './routes/app-settings';
 import {builderRoutes} from './routes/builder';
 import {contactsRoutes} from './routes/contacts';
@@ -18,6 +19,7 @@ import {publicFormsRoutes} from './routes/public-forms';
 import {publicSiteRoutes} from './routes/public-site';
 import {responsesRoutes} from './routes/responses';
 import {siteRoutes} from './routes/site';
+import {teamRoutes} from './routes/team';
 import {templatesRoutes} from './routes/templates';
 import {themesRoutes} from './routes/themes';
 import {uploadsRoutes} from './routes/uploads';
@@ -41,6 +43,8 @@ const isDraftAutosave = (method: string, path: string) => method === 'PATCH' && 
  *   GET  /me            the visitor + what the UI may show them
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
+ *   POST /team/...      add or invite a user by hand            routes/team.ts
+ *   GET  /activity/...  the activity log, with filters          routes/activity.ts
  *   GET  /site          the site's brand                        routes/site.ts
  *   *    /forms/...     IntelForm: forms (list, create, publish) routes/forms.ts
  *   *    /builder/...   a form's definition, logic, autosave     routes/builder.ts
@@ -98,6 +102,8 @@ export const app = new Hono()
 
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
+  .route('/team', teamRoutes)
+  .route('/activity', activityRoutes)
   .route('/site', siteRoutes)
   // Autosave, publish and versions first (PATCH /:id, POST /:id/publish), then the rest.
   .route('/forms', formDraftRoutes)

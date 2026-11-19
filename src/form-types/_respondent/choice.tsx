@@ -1,6 +1,7 @@
 import {type KeyboardEvent, type ReactNode, useId, useRef} from 'react';
 
 import {inputClass} from '../../respondent/classes';
+import {RichText} from '../../respondent/rich/RichText';
 import {FieldError} from '../../respondent/ui';
 import {cx} from '../../respondent/util';
 import {LETTERS, OTHER_VALUE, toggleValue} from './constants';
@@ -72,7 +73,8 @@ interface ChoiceGroupBase {
   legend: ReactNode;
   /** The legend's type class (default `rf-question`), e.g. `rf-question-xl`. */
   legendClassName?: string;
-  description?: ReactNode;
+  /** Rich text HTML (piped and sanitized). */
+  description?: string;
   options: ChoiceItem[];
   orientation?: 'vertical' | 'horizontal';
   /** Show A, B, C… badges and select with those keys while focus is inside the group. */
@@ -158,9 +160,7 @@ export function ChoiceGroup(props: ChoiceGroupProps) {
         )}
       </legend>
       {description && (
-        <p id={descId} className="ft-group-description">
-          {description}
-        </p>
+        <RichText id={descId} html={description} className="ft-group-description" />
       )}
       <div ref={listRef} className="ft-choice-list" data-orientation={orientation}>
         {items.map((item, i) => (

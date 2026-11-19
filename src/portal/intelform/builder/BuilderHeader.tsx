@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
 import {Link} from '@tanstack/react-router';
 
+import {AccountMenu} from '../../account-menu';
 import {Button, buttonClass, Icon, StatusBadge, Tooltip} from '../../ui';
 import {cn} from '../lib/utils';
 import {PreviewDialog} from './PreviewDialog';
@@ -11,7 +12,8 @@ import {TABS, type TabId} from './tabs';
 /**
  * The builder's header, the same on every tab, in three columns so the tabs stay centred
  * whatever the title's length: the way back and the editable title | the five tabs | a Draft
- * badge (drafts only), the save state, Preview and Publish. Unpublished changes show on the
+ * badge (drafts only), the save state, Preview, Publish and the account menu (the dashboard's
+ * top bar is hidden on the builder). Unpublished changes show on the
  * Publish button ("Publish changes"), not as a badge.
  */
 export function BuilderHeader({tab}: {tab: TabId | null}) {
@@ -55,6 +57,8 @@ export function BuilderHeader({tab}: {tab: TabId | null}) {
           Preview
         </Button>
         {!readOnly && <PublishButton />}
+        <span aria-hidden="true" className="if-head-divider" />
+        <AccountMenu compact />
       </div>
       <PreviewDialog open={preview} onOpenChange={setPreview} />
     </header>
@@ -103,18 +107,22 @@ function SaveState() {
   const readOnly = useBuilder(s => s.readOnly);
   if (readOnly) return <span className="if-save-state">View only</span>;
   const {status, error} = save;
-  // Saving and saved are announced (and shown quietly); a failed or offline save stands out.
+  // Saving and saved are only announced to screen readers (no visible indicator); a failed or
+  // offline save is shown and stands out, so edits are never lost unnoticed.
   const failing = status === 'error' || status === 'offline';
+  if (!failing) {
+    return (
+      <span role="status" aria-live="polite" data-save-status={status} className="visually-hidden">
+        {SAVE_TEXT[status]}
+      </span>
+    );
+  }
   const node = (
-    <span role="status" aria-live="polite" data-save-status={status} className={cn('if-save-state', failing && 'is-failing')} tabIndex={failing ? 0 : undefined}>
-      {status === 'saving' || status === 'pending' ? (
-        <span className="spinner" aria-hidden="true" />
-      ) : (
-        <Icon name={status === 'offline' ? 'cloud-off' : status === 'error' ? 'alert' : 'check'} size={14} />
-      )}
+    <span role="status" aria-live="polite" data-save-status={status} className="if-save-state is-failing" tabIndex={0}>
+      <Icon name={status === 'offline' ? 'cloud-off' : 'alert'} size={14} />
       <span className="if-save-text">{SAVE_TEXT[status]}</span>
     </span>
   );
-  if (!error || !failing) return node;
+  if (!error) return node;
   return <Tooltip content={error.message}>{node}</Tooltip>;
 }

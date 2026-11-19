@@ -28,6 +28,10 @@ export interface PipeInputProps {
   invalid?: boolean;
   onFocus?(): void;
   autoFocus?: boolean;
+  /** Rich text (descriptions): HTML value, formatting toolbar. See PipeEditor. */
+  rich?: boolean;
+  maxLength?: number;
+  maxTextLength?: number;
 }
 
 /**
@@ -40,7 +44,7 @@ export function PipeInput({variant = 'input', multiline, ...rest}: PipeInputProp
   const allSources = useMemo(() => pipeSources(draft), [draft]);
   const undo = useBuilder(s => s.undo);
   const redo = useBuilder(s => s.redo);
-  const frame = cn('if-pipe-frame', `if-pipe-frame-${variant}`, multiline && variant === 'input' && 'if-pipe-frame-multiline');
+  const frame = cn('if-pipe-frame', `if-pipe-frame-${variant}`, (multiline || rest.rich) && variant === 'input' && 'if-pipe-frame-multiline');
   return (
     <PipeEditor {...rest} multiline={multiline} sources={sources} allSources={allSources} frameClassName={frame} onUndo={undo} onRedo={redo} />
   );

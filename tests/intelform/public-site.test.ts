@@ -29,7 +29,6 @@ const cached = {
   accentColor: '#4F46E5',
   defaultMode: 'dark' as const,
   defaultThemeId: null,
-  turnstileSiteKey: null,
   retentionDays: null,
   siteIndexing: true,
   siteDescription: 'Short surveys.',

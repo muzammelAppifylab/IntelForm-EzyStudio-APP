@@ -26,6 +26,7 @@ import {readWebhookConfig, rotateWebhookSecret, sampleWebhookPayload, WEBHOOK_OF
 import {zodJson} from '../intelform/builder/validate';
 import type {Viewer} from '../../platform/types';
 import {grants} from '../../platform/auth/codenames';
+import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
 
 /** `can()` takes a plain viewer context; a route with a json validator has a wider one. */
@@ -125,12 +126,10 @@ async function saveWebhook(db: PrismaClient, formId: string, userId: number, web
 
 export const builderRoutes = new Hono()
   // ---------------------------------------------------------------- capabilities
-  .get('/capabilities', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
-    const settings = await c.var.db.intelformSettings.findUnique({where: {id: 1}, select: {turnstileSiteKey: true}});
+  .get('/capabilities', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), async c => {
     return c.json<BuilderCapabilities>({
       // Notification and confirmation emails go through the platform's relay (the Site Key).
       emailEnabled: Boolean(config.siteKey) || config.localDev,
-      turnstileConfigured: Boolean(settings?.turnstileSiteKey && config.ownerSecret('TURNSTILE_SECRET_KEY')),
     });
   })
 
@@ -179,6 +178,7 @@ export const builderRoutes = new Hono()
       if (!formId) return c.json(notFound, 404);
       try {
         const saved = await saveWebhook(c.var.db, formId, c.var.viewer.id!, c.req.valid('json'));
+        await logActivity(c, 'webhook_saved', ['form', formId]);
         const view = await webhookView(c.var.db, formId);
         if (!view) throw formGone();
         return c.json({...view, revision: saved.revision});
@@ -194,6 +194,7 @@ export const builderRoutes = new Hono()
       const saved = await saveWebhook(c.var.db, formId, c.var.viewer.id!, {enabled: false, url: null, headers: []});
       // Without a URL the secret signs nothing: a new webhook gets a new one.
       await c.var.db.form.updateMany({where: {id: formId}, data: {webhookSecret: null}});
+      await logActivity(c, 'webhook_removed', ['form', formId]);
       return c.json({hasSecret: false, webhook: {enabled: false, url: null, headers: []}, revision: saved.revision});
     } catch (err) {
       return builderError(c, err);
@@ -207,6 +208,7 @@ export const builderRoutes = new Hono()
     try {
       const secret = await rotateWebhookSecret(c.var.db, formId);
       if (!secret) throw formGone();
+      await logActivity(c, 'webhook_secret_rotated', ['form', formId]);
       return c.json<WebhookSecretResponse>({secret});
     } catch (err) {
       return builderError(c, err);

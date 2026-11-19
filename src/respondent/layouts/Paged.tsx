@@ -3,6 +3,7 @@ import {type FormEvent, useEffect, useRef, useState} from 'react';
 import {formatLabel} from '../../lib/intelform/form/labels';
 import {FieldBlock, focusField} from '../FieldBlock';
 import {RIcon} from '../icons';
+import {RichText} from '../rich/RichText';
 import {FormButton, ProgressBar} from '../ui';
 import {focusStep, type LayoutContext} from './context';
 import {SubmitError} from './FormError';
@@ -65,7 +66,7 @@ export function Paged({ctx}: {ctx: LayoutContext}) {
   };
 
   const sectionTitle = section ? engine.pipe(section.label).trim() : '';
-  const sectionDesc = section ? engine.pipe(section.description).trim() : '';
+  const sectionDesc = section ? engine.description(section) : '';
 
   return (
     <form noValidate onSubmit={onSubmit} className="rf-paged">
@@ -80,7 +81,7 @@ export function Paged({ctx}: {ctx: LayoutContext}) {
                   {sectionTitle}
                 </h2>
               )}
-              {sectionDesc && <p className="rf-text-answer rf-muted rf-pre-line">{sectionDesc}</p>}
+              {sectionDesc && <RichText html={sectionDesc} className="rf-text-answer rf-muted" />}
             </header>
           )}
           {ids.map(id => {

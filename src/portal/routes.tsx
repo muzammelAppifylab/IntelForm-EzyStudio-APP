@@ -8,31 +8,32 @@ import {
   Outlet,
   redirect,
   useMatches,
-  useNavigate,
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
 import {useEffect, useRef, useState} from 'react';
 
 import type {Abilities} from '../lib/types';
-import {logout} from '../platform/browser';
 import {
-  auditQuery,
+  activityFilterOf,
+  activityPeopleQuery,
+  activityQuery,
   meQuery,
   permissionsQuery,
+  readActivitySearch,
   rolesQuery,
   sessionsQuery,
   siteQuery,
   twoFactorQuery,
   usersQuery,
 } from './queries';
+import {AccountMenu, ThemeMenu} from './account-menu';
 import {useMe, useSite} from './shared';
 import {appSettingsQuery} from './intelform/queries/app-settings';
 import {contactsListQuery, contactsOverviewQuery, DEFAULT_CONTACTS_STATE} from './intelform/queries/contacts';
 import {DEFAULT_FORMS_FILTER, formsListQuery, formsStripQuery, recentFormsQuery} from './intelform/queries/forms';
 import {templatesQuery} from './intelform/queries/templates';
 import {
-  Avatar,
   Button,
   buttonClass,
   ConfirmProvider,
@@ -42,7 +43,6 @@ import {
   type IconName,
   initials,
   LoadingBlock,
-  Menu,
   ToastProvider,
 } from './ui';
 
@@ -140,10 +140,6 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
     label: 'You',
     items: [{to: '/account', label: 'Your account', icon: 'user'}],
   },
-  // Only in the Preview and `npm run dev` (never in a build): the UI kit, on screen.
-  ...(import.meta.env.DEV
-    ? [{label: 'Build', items: [{to: '/components', label: 'Components', icon: 'layers' as const}]}]
-    : []),
 ];
 
 /** The screen's title for the top bar and the tab: the deepest route's `staticData.title`. */
@@ -163,7 +159,7 @@ function useNavigationFocus(title: string, siteName: string | undefined) {
   const resolved = useRouterState({select: s => s.resolvedLocation?.pathname});
   const first = useRef(true);
   // "<title> · <site>", as App.astro writes it on the first load.
-  const [fallbackName] = useState(() => document.title.split(' · ').slice(1).join(' · ') || 'My site');
+  const [fallbackName] = useState(() => document.title.split(' · ').slice(1).join(' · ') || 'IntelForm');
   useEffect(() => {
     document.title = `${title} · ${siteName ?? fallbackName}`;
   }, [title, siteName, fallbackName]);
@@ -176,33 +172,6 @@ function useNavigationFocus(title: string, siteName: string | undefined) {
     heading.current?.focus({preventScroll: true});
   }, [resolved]);
   return {heading, resolved};
-}
-
-type Theme = 'system' | 'light' | 'dark';
-const THEME_KEY = 'site:theme';
-
-/** Light, dark or the device's: `data-theme` on <html> (global.css), remembered in this browser. */
-function useTheme() {
-  const [theme, setTheme] = useState<Theme>(() => {
-    try {
-      const saved = localStorage.getItem(THEME_KEY);
-      return saved === 'light' || saved === 'dark' ? saved : 'system';
-    } catch {
-      return 'system';
-    }
-  });
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'system') delete root.dataset.theme;
-    else root.dataset.theme = theme;
-    try {
-      if (theme === 'system') localStorage.removeItem(THEME_KEY);
-      else localStorage.setItem(THEME_KEY, theme);
-    } catch {
-      // Storage blocked: the choice lasts until the tab closes.
-    }
-  }, [theme]);
-  return [theme, setTheme] as const;
 }
 
 /**
@@ -241,14 +210,13 @@ const rootRoute = createRootRouteWithContext<{queryClient: QueryClient}>()({
 function Shell() {
   const me = useMe();
   const site = useSite();
-  const navigate = useNavigate();
   const title = useScreenTitle();
   const siteName = site.data?.site?.name;
   const {heading, resolved} = useNavigationFocus(title, siteName);
   const [open, setOpen] = useState(false);
-  const [theme, setTheme] = useTheme();
-  // `logout()` reloads the page when it is done, so pending never needs resetting.
-  const [signingOut, setSigningOut] = useState(false);
+  // The form builder takes the whole window: no sidebar and no top bar (its own header has the
+  // way back and the account menu).
+  const fullPage = useRouterState({select: s => s.matches.some(m => m.routeId.startsWith(builderRoute.id))});
   const viewer = me.data?.viewer;
   const abilities = me.data?.abilities;
   // Signed out meanwhile (or never signed in, in the editor Preview, where
@@ -269,10 +237,11 @@ function Shell() {
   }, [open]);
   if (signedOut) return null;
 
-  const name = siteName ?? 'My site';
+  const name = siteName ?? 'IntelForm';
   const logo = site.data?.site?.logo;
   return (
-    <div className="app-shell" data-nav-open={open ? '' : undefined}>
+    <div className="app-shell" data-nav-open={open ? '' : undefined} data-full-page={fullPage ? '' : undefined}>
+      {!fullPage && (
       <aside className="app-sidebar" aria-label="Sidebar">
         <a className="app-brand" href="/">
           <span className="app-brand-mark">{logo ? <img src={logo} alt="" /> : initials(name) || '·'}</span>
@@ -302,58 +271,35 @@ function Shell() {
           </a>
         </div>
       </aside>
-      <button type="button" className="app-scrim" aria-label="Close the menu" tabIndex={-1} onClick={() => setOpen(false)} />
+      )}
+      {!fullPage && (
+        <button type="button" className="app-scrim" aria-label="Close the menu" tabIndex={-1} onClick={() => setOpen(false)} />
+      )}
 
       <div className="app-main">
-        <header className="app-topbar">
-          <IconButton
-            className="app-menu-button"
-            icon={open ? 'x' : 'menu'}
-            label={open ? 'Close the menu' : 'Open the menu'}
-            aria-expanded={open}
-            onClick={() => setOpen(value => !value)}
-          />
-          <h1 className="app-title" ref={heading} tabIndex={-1}>
+        {fullPage ? (
+          // No top bar here, but the screen still has its <h1> for the focus move after navigation.
+          <h1 className="visually-hidden" ref={heading} tabIndex={-1}>
             {title}
           </h1>
-          <div className="app-topbar-actions">
-            <Menu
-              label={`Theme: ${theme}`}
-              trigger={<Icon name={theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'monitor'} size={18} />}
-              items={[
-                {label: 'Light', icon: 'sun', onSelect: () => setTheme('light')},
-                {label: 'Dark', icon: 'moon', onSelect: () => setTheme('dark')},
-                {label: 'Same as this device', icon: 'monitor', onSelect: () => setTheme('system')},
-              ]}
+        ) : (
+          <header className="app-topbar">
+            <IconButton
+              className="app-menu-button"
+              icon={open ? 'x' : 'menu'}
+              label={open ? 'Close the menu' : 'Open the menu'}
+              aria-expanded={open}
+              onClick={() => setOpen(value => !value)}
             />
-            {viewer && (
-              <Menu
-                label={`Account menu for ${viewer.name ?? 'you'}`}
-                trigger={
-                  <>
-                    {signingOut ? <span className="spinner" aria-hidden="true" /> : <Avatar name={viewer.name ?? ''} size="sm" />}
-                    <span className="app-viewer-name">{signingOut ? 'Signing out…' : viewer.name}</span>
-                    <Icon name="chevron-down" size={16} />
-                  </>
-                }
-                disabled={signingOut}
-                items={[
-                  {label: 'Your account', icon: 'user', onSelect: () => void navigate({to: '/account'})},
-                  {label: 'Back to the website', icon: 'globe', onSelect: () => window.location.assign('/')},
-                  'separator',
-                  {
-                    label: 'Sign out',
-                    icon: 'log-out',
-                    onSelect: () => {
-                      setSigningOut(true);
-                      void logout();
-                    },
-                  },
-                ]}
-              />
-            )}
-          </div>
-        </header>
+            <h1 className="app-title" ref={heading} tabIndex={-1}>
+              {title}
+            </h1>
+            <div className="app-topbar-actions">
+              <ThemeMenu />
+              <AccountMenu />
+            </div>
+          </header>
+        )}
         <main className="app-content" id="main">
           <Outlet />
         </main>
@@ -424,7 +370,7 @@ const appSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/app-settings',
   staticData: {title: 'Settings'},
-  // `?tab=spam`: a link can open one tab of the settings screen.
+  // `?tab=data`: a link can open one tab of the settings screen.
   validateSearch: (search: Record<string, unknown>): {tab?: string} =>
     typeof search.tab === 'string' ? {tab: search.tab} : {},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(appSettingsQuery)),
@@ -495,22 +441,13 @@ const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activity',
   staticData: {title: 'Activity'},
-  loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(auditQuery)),
+  // `?kind=forms&person=12&from=2026-11-01&to=2026-11-18`: a filtered view is a link you can share.
+  validateSearch: readActivitySearch,
+  loaderDeps: ({search}) => activityFilterOf(search),
+  loader: ({context: {queryClient}, deps}) =>
+    warm(queryClient.ensureQueryData(activityQuery(deps)), queryClient.ensureQueryData(activityPeopleQuery)),
   component: lazyRouteComponent(() => import('./screens/activity'), 'Activity'),
 });
-
-// The UI kit on screen, for the owner and their agent. Dev only: the whole route (and its
-// chunk) is left out of a build, because `import.meta.env.DEV` is `false` there.
-const devRoutes = import.meta.env.DEV
-  ? [
-      createRoute({
-        getParentRoute: () => rootRoute,
-        path: '/components',
-        staticData: {title: 'Components'},
-        component: lazyRouteComponent(() => import('./screens/components'), 'Components'),
-      }),
-    ]
-  : [];
 
 export const routeTree = rootRoute.addChildren([
   overviewRoute,
@@ -523,5 +460,4 @@ export const routeTree = rootRoute.addChildren([
   usersRoute,
   rolesRoute,
   activityRoute,
-  ...devRoutes,
 ]);

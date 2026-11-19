@@ -5,6 +5,7 @@ import {FIELD_GROUP_LABEL, FIELD_TYPE_META, FIELD_TYPES, type FieldType} from '.
 import {FIELD_ICONS} from '../../../../form-types/icons';
 import {FIELD_SETTINGS} from '../../../../form-types/settings';
 import {Button, Combobox, Icon, IconButton, Modal, Tabs} from '../../../ui';
+import {applyDescription, DESCRIPTION_LIMITS, descriptionValue} from '../description';
 import {PipeInput} from '../pipe/PipeInput';
 import {useBuilder, useBuilderStore} from '../store';
 import type {FieldSettingsComponent} from '../type-ui';
@@ -107,22 +108,18 @@ export function FieldPanel({id}: {id: string}) {
                 <PipeInput
                   id={descriptionId}
                   ariaLabel="Description"
-                  multiline
-                  value={field.description ?? ''}
+                  rich
+                  {...DESCRIPTION_LIMITS}
+                  describedBy={`${descriptionId}-hint`}
+                  value={descriptionValue(field)}
                   beforeIndex={index}
                   readOnly={readOnly}
                   placeholder="Optional help text"
-                  onChange={v =>
-                    update(
-                      f => {
-                        if (v) f.description = clip(v, 2000);
-                        else delete f.description;
-                      },
-                      `description:${id}`,
-                      'Edit description'
-                    )
-                  }
+                  onChange={v => update(f => applyDescription(f, v), `description:${id}`, 'Edit description')}
                 />
+                <p className="if-panel-hint" id={`${descriptionId}-hint`}>
+                  Format with the toolbar. Type @ to show an earlier answer.
+                </p>
               </div>
               {meta.hasPlaceholder && (
                 <TextRow

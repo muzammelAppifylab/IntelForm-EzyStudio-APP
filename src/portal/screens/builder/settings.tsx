@@ -1,7 +1,7 @@
-import {AccessSection, AfterSubmitSection, NotificationsSection, SoundsSection, SpamSection} from '../../intelform/builder/settings/sections';
+import {AccessSection, AfterSubmitSection, NotificationsSection, SoundsSection} from '../../intelform/builder/settings/sections';
 import {WebhookSection} from '../../intelform/builder/settings/WebhookSection';
 import {useBuilder} from '../../intelform/builder/store';
-import {Notice, PageHeader} from '../../ui';
+import {Notice} from '../../ui';
 
 const NAV = [
   {id: 'access', label: 'Access and limits'},
@@ -9,7 +9,6 @@ const NAV = [
   {id: 'sounds', label: 'Sounds'},
   {id: 'notifications', label: 'Notifications'},
   {id: 'webhook', label: 'Webhook'},
-  {id: 'spam', label: 'Spam protection'},
 ];
 
 /**
@@ -21,7 +20,7 @@ export function SettingsTab() {
   const readOnly = useBuilder(s => s.readOnly);
   return (
     <div className="app-page screen-form-settings">
-      <PageHeader title="Settings" description="Who can answer, when the form closes, notifications and webhooks. Changes save on their own." />
+      <h2 className="visually-hidden">Settings</h2>
       {readOnly && <Notice tone="info">You can view these settings. Changing them needs permission to edit forms.</Notice>}
       <div className="if-settings-layout">
         <nav aria-label="Settings sections" className="if-settings-nav">
@@ -50,7 +49,6 @@ export function SettingsTab() {
           <SoundsSection />
           <NotificationsSection />
           <WebhookSection />
-          <SpamSection />
         </div>
       </div>
     </div>

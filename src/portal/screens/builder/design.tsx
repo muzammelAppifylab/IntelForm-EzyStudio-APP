@@ -2,7 +2,7 @@ import {useState} from 'react';
 
 import {DesignPanel} from '../../intelform/builder/design/DesignPanel';
 import {DeviceToggle, FormPreview, type Device} from '../../intelform/builder/design/Preview';
-import {Button, PageHeader} from '../../ui';
+import {Button} from '../../ui';
 
 /**
  * `/forms/$formId/design`: the form's theme (presets, colours, fonts, background, logo, button
@@ -14,7 +14,7 @@ export function DesignTab() {
   const [resetKey, setResetKey] = useState(0);
   return (
     <div className="app-page screen-design">
-      <PageHeader title="Design" description="Colours, fonts, background and logo. Changes save automatically." />
+      <h2 className="visually-hidden">Design</h2>
       <div className="if-design-layout">
         <DesignPanel />
         <section aria-label="Live preview" className="if-design-preview">
