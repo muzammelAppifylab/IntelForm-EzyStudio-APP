@@ -304,6 +304,6 @@ describe.skipIf(!DATABASE_URL)('exports lifecycle (integration, real Postgres)',
         seen.push(...(e.text.match(/[pq]\d@example\.com/g) ?? []));
       }
     }
-    expect(seen.sort()).toEqual([...['p0', 'p1', 'p2', 'p3', 'p4', 'q0', 'q1', 'q2'].map(x => `${x}@example.com`)]);
+    expect(seen.sort()).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'q0', 'q1', 'q2'].map(x => `${x}@example.com`));
   });
 });

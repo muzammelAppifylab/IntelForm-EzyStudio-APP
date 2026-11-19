@@ -99,7 +99,7 @@ describe('page state', () => {
   beforeEach(() => clearPublicFormCache());
   /** A fake db: the exact-count read answers `responses.n`, the form read answers `rows`. */
   const responses = {n: 0};
-  const dbOf = (rows: unknown[], count = 1, fail = false) => {
+  const dbOf = (rows: unknown[], _count = 1, fail = false) => {
     const calls: string[] = [];
     const db = {
       $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -108,7 +108,7 @@ describe('page state', () => {
         calls.push(sql);
         if (fail) throw new Error('connection lost');
         if (sql.includes('intelform_rate_limits')) throw new Error('a page load writes no rate-limit row');
-        if (sql.includes("AS password_hash") && !sql.includes('form_versions')) return [{responses: responses.n + count * 0, password_hash: null}];
+        if (sql.includes("AS password_hash") && !sql.includes('form_versions')) return [{responses: responses.n, password_hash: null}];
         return rows;
       },
       intelformSettings: {findUnique: async () => null},
