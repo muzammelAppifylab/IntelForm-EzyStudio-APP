@@ -6,7 +6,8 @@ import * as z from 'zod'
  *
  *   POST /site-api/exports                 {kind, formId?, query?} → 202 ExportStatus
  *   GET  /site-api/exports/:id             ExportStatus (the person who started it only)
- *   GET  /site-api/exports/:id/download    the file, once `status` is `ready`
+ *   GET  /site-api/exports/:id/files       ExportFiles, once `status` is `ready`: short links to
+ *                                          its stored file(s), for the person who started it
  *
  * kind `responses`: one form's CSV (site:response:read), `query` = the table's filters or `ids`;
  * kind `contacts`: the contacts CSV (site:contact:read), `query` = the list's filters or `key`;
@@ -37,6 +38,8 @@ export interface ExportStatus {
   /** Rows written so far (responses or contacts). */
   rows: number
   fileName: string
+  /** Stored files once `ready` (a big export is several, each complete on its own). */
+  files: number
   /** Words for people when `status` is `failed`. */
   error: string | null
   createdAt: string
@@ -44,3 +47,8 @@ export interface ExportStatus {
 
 /** How often the dashboard asks while an export runs (ms). */
 export const EXPORT_POLL_MS = 1500
+
+/** GET /site-api/exports/:id/files: each file's download link (private, valid a few minutes). */
+export interface ExportFiles {
+  files: {name: string; url: string; size: number}[]
+}

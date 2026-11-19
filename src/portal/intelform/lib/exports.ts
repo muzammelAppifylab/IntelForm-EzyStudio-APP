@@ -1,14 +1,15 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {siteFetch} from '../../../platform/browser';
-import {EXPORT_POLL_MS, type ExportStatus, type StartExportInput} from '../../../lib/intelform/api-exports';
+import {EXPORT_POLL_MS, type ExportFiles, type ExportStatus, type StartExportInput} from '../../../lib/intelform/api-exports';
 import {useToast} from '../../ui';
 import {api, ApiRequestError, errorMessage, OFFLINE_MESSAGE, parseErrorBody} from './api';
 
 /**
  * Exports run as a background job (src/lib/intelform/api-exports.ts): start one, ask how it is
- * going every 1.5 s, then save the finished file. The download goes through `siteFetch` (the
- * editor Preview's gateway drops the cookies a plain link would carry).
+ * going every 1.5 s, then save the finished file(s). The links come through `siteFetch` (the
+ * editor Preview's gateway drops the cookies a plain link to this site would carry); each is a
+ * short-lived link straight to the file storage, opened as a download.
  *
  * A big export can take a long while: the page never gives up on a running one. It keeps asking
  * (slower after a few minutes), shows how many rows are written, and rides out a few failed
@@ -25,27 +26,32 @@ const MAX_MISSES = 8;
 /** Say once that the page can be left, after this long. */
 const STILL_RUNNING_MS = 60 * 1000;
 const STORE_PREFIX = 'intelform-export:';
+/** Between the files of a big export. */
+const DOWNLOAD_GAP_MS = 700;
 
 /** `gone`: the export is over (forget it); `quiet`: nothing to tell (an old export, swept). */
 export type ExportOutcome = {ok: true; name: string} | {ok: false; message: string; gone?: boolean; quiet?: boolean};
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
 
-/** Saves a Blob as a file through a temporary object URL. */
-export function saveBlob(blob: Blob, name: string): void {
-  const url = URL.createObjectURL(blob);
+/**
+ * Opens a download link (a short-lived link to the file storage, `Content-Disposition:
+ * attachment`): the browser saves the file, the page stays. A link, not a fetch: the page's CSP
+ * allows fetches to this site only, and the bytes never pass through it.
+ */
+export function openDownload(url: string, name: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
+  a.rel = 'noopener';
   document.body.append(a);
   a.click();
   a.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 interface Deps {
   fetcher?: typeof siteFetch;
-  save?: typeof saveBlob;
+  open?: typeof openDownload;
   sleep?: (ms: number) => Promise<unknown>;
   now?: () => number;
   /** Called with every status while it runs (rows written so far). */
@@ -104,20 +110,24 @@ async function finishExport(first: ExportStatus, deps: Deps): Promise<ExportOutc
 
   let res: Response;
   try {
-    res = await fetcher(`${EXPORTS_PATH}/${encodeURIComponent(status.id)}/download`, {credentials: 'same-origin'});
+    res = await fetcher(`${EXPORTS_PATH}/${encodeURIComponent(status.id)}/files`, {credentials: 'same-origin'});
   } catch {
     return {ok: false, message: OFFLINE_MESSAGE};
   }
+  const data: unknown = await res.json().catch(() => null);
   if (!res.ok) {
-    const data: unknown = await res.json().catch(() => null);
     return {ok: false, message: parseErrorBody(data, 'The download didn’t start. Try again.').message, gone: res.status === 404};
   }
-  try {
-    (deps.save ?? saveBlob)(await res.blob(), status.fileName);
-  } catch {
-    return {ok: false, message: 'The download stopped part way. Try again.'};
+  const files = (data as ExportFiles | null)?.files ?? [];
+  if (!files.length) return {ok: false, message: 'The download didn’t start. Try again.'};
+  const open = deps.open ?? openDownload;
+  const sleep2 = deps.sleep ?? wait;
+  for (let i = 0; i < files.length; i++) {
+    // A short pause between files: browsers save several downloads from one click in turn.
+    if (i > 0) await sleep2(DOWNLOAD_GAP_MS);
+    open(files[i]!.url, files[i]!.name);
   }
-  return {ok: true, name: status.fileName};
+  return {ok: true, name: files.length === 1 ? files[0]!.name : `${status.fileName} (${files.length} files)`};
 }
 
 /** This browser's running export for a scope (storage may be off: then nothing is remembered). */

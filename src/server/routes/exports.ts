@@ -2,14 +2,14 @@ import {Hono, type Context} from 'hono';
 import {validator} from 'hono/validator';
 
 import {contactsCsvQuery} from '../../lib/intelform/api-contacts';
-import {startExportInput, type ExportKind, type ExportStatus} from '../../lib/intelform/api-exports';
+import {startExportInput, type ExportFiles, type ExportKind, type ExportStatus} from '../../lib/intelform/api-exports';
 import {responsesCsvQuery} from '../../lib/intelform/api-responses';
 import {permissionScope, problem, requireAuth, withDb, withViewer} from '../../platform/guards';
 import {CSV_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
 import {contactsCsvFilename} from '../intelform/contacts/query';
-import {failStaleExports, loadExport, markSendPending, sendExportRun, STALE_MINUTES, statusOf} from '../intelform/exports/job';
+import {exportFiles, failStaleExports, loadExport, markSendPending, partName, sendExportRun, STALE_MINUTES, statusOf} from '../intelform/exports/job';
+import {platformStore} from '../intelform/exports/storage';
 import {csvFilename} from '../intelform/responses/csv';
-import {contentDisposition} from '../intelform/responses/csv-text';
 import {safeTz, todayIn} from '../intelform/responses/query';
 import {hitRateLimit} from '../intelform/responses/rate-limit';
 import {logActivity} from '../activity';
@@ -21,7 +21,7 @@ import {PERMISSIONS} from '../permissions';
  *
  *   POST /                 {kind, formId?, query?} → 202 ExportStatus (src/lib/intelform/api-exports.ts)
  *   GET  /:id              ExportStatus, for the person who started it
- *   GET  /:id/download     the finished file (its stored parts, streamed in order)
+ *   GET  /:id/files        the finished file(s): short download links from the file storage
  *
  * Permissions per kind, checked when it starts AND on every read: `responses`
  * site:response:read, `contacts` site:contact:read, `all` site:intelform:settings plus both of those. 10 exports
@@ -30,6 +30,8 @@ import {PERMISSIONS} from '../permissions';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOT_FOUND = 'That export no longer exists. Start it again.';
+/** How long a download link works (each ask makes new ones). */
+const LINK_SECONDS = 300;
 const RESPONSE_KEYS = ['q', 'from', 'to', 'tz', 'filter', 'has', 'sort', 'dir', 'ids'];
 const RESPONSE_ARRAYS = new Set(['filter', 'ids']);
 
@@ -112,7 +114,7 @@ export const exportsRoutes = new Hono()
     try {
       await sendExportRun(c.req.url, row!.id, 0);
     } catch {
-      // Busy (the jobs limit) or unreachable: the every-minute job sends it (resendPendingExports).
+      // Busy (the jobs limit) or unreachable: the 15-minute job sends it (resendPendingExports).
       await markSendPending(db, row!.id, 0);
     }
     await logActivity(c, 'export_started', formId ? ['form', formId] : undefined, {kind: input.kind});
@@ -134,35 +136,23 @@ export const exportsRoutes = new Hono()
     return c.json<ExportStatus>(statusOf(row));
   })
 
-  .get('/:id/download', withViewer, requireAuth, withDb, async c => {
+  // The stored files: who asks and their permission first, then a short link per file (5 minutes,
+  // download). The bytes go straight from storage to the browser, never through /site-api.
+  .get('/:id/files', withViewer, requireAuth, withDb, async c => {
     const id = c.req.param('id');
     const db = c.var.db;
     const row = UUID.test(id) ? await loadExport(db, id) : null;
     if (!row || row.user_id !== c.var.viewer.id || !(await mayExport(c, row.kind))) return c.json(problem('not_found', NOT_FOUND), 404);
     if (row.status !== 'ready') return c.json(problem('not_ready', 'This export isn’t ready yet.'), 409);
-    // The stored parts in order, one read per part as the browser takes them (no CPU work here).
-    let seq = 0;
-    const stream = new ReadableStream<Uint8Array>(
-      {
-        async pull(controller) {
-          if (seq >= row.parts) return controller.close();
-          const [part] = await db.$queryRaw<{data: Uint8Array}[]>`
-            SELECT data FROM intelform_export_parts WHERE export_id = ${id}::uuid AND seq = ${seq}::int
-          `;
-          seq++;
-          if (!part) return controller.error(new Error('A part of the export is missing.'));
-          controller.enqueue(new Uint8Array(part.data));
-        },
-      },
-      {highWaterMark: 0}
-    );
-    return new Response(stream, {
-      headers: {
-        'Content-Type': row.content_type,
-        'Content-Length': String(Number(row.bytes)),
-        'Content-Disposition': contentDisposition(row.file_name),
-        'Cache-Control': 'private, no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
+    const parts = await exportFiles(db, id);
+    if (parts.length !== Number(row.parts)) return c.json(problem('not_found', NOT_FOUND), 404);
+    const store = platformStore(c.req.url);
+    const links = await Promise.all(parts.map(p => store.link(p.file_id, LINK_SECONDS)));
+    const failed = links.find(l => !l.ok);
+    if (failed && !failed.ok) return c.json(problem('storage_error', failed.message), 503);
+    const only = parts.length === 1;
+    c.header('Cache-Control', 'private, no-store');
+    return c.json<ExportFiles>({
+      files: parts.map((p, i) => ({name: partName(row.file_name, p.seq, only), url: (links[i] as {url: string}).url, size: Number(p.size)})),
     });
   });
