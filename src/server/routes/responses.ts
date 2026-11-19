@@ -5,6 +5,7 @@ import * as z from 'zod';
 import {
   bulkDeleteInput,
   responsesFilterQuery,
+  responsesListQuery,
   summaryQuery,
   tablePrefsInput,
   type BulkDeleteResponse,
@@ -24,7 +25,7 @@ import {scheduleFileCleanup} from '../intelform/uploads/trash';
 /**
  * `/site-api/responses/*`: a form's responses (IntelForm's Responses tab).
  *
- *   GET    /forms/:id/responses              table page: filters, search, sort, keyset `cursor` (50 rows)
+ *   GET    /forms/:id/responses              table page: filters, search, sort, keyset `cursor` / `before` / `last`, `size` (25, 50, 100), visible `col`s
  *   GET    /forms/:id/responses/prefs        this user's table columns
  *   PUT    /forms/:id/responses/prefs
  *   POST   /forms/:id/responses/bulk-delete  {ids}
@@ -41,7 +42,7 @@ import {scheduleFileCleanup} from '../intelform/uploads/trash';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RESPONSE_GONE = 'That response no longer exists.';
-const ARRAY_KEYS = new Set(['filter', 'ids']);
+const ARRAY_KEYS = new Set(['filter', 'ids', 'col']);
 
 type Issue = {path: PropertyKey[]; message: string};
 
@@ -83,12 +84,8 @@ function json<T extends z.ZodType>(schema: T) {
 
 const FILTER_KEYS = ['q', 'from', 'to', 'tz', 'filter', 'has', 'sort', 'dir'] as const;
 
-const listQuery = responsesFilterQuery.extend({
-  /** The keyset position from the previous page's `nextCursor`. */
-  cursor: z.string().max(1000).optional(),
-  /** The page number the client shows; paging itself is by cursor. */
-  page: z.coerce.number().int().min(1).max(100_000).default(1),
-});
+/** Table paging: keyset `cursor` (next) / `before` (previous) / `last`, `size` rows a page. */
+const listQuery = responsesListQuery;
 
 /** A path uuid, or null (answered 404: a malformed id names nothing). */
 const uuidParam = (c: Context, name: string): string | null => {
@@ -101,7 +98,7 @@ const uuidParam = (c: Context, name: string): string | null => {
  * removes their signature files (the delete trigger put them in the file trash).
  */
 async function afterDelete(c: Context, formId: string) {
-  await Promise.all([clearSummaryCache(formId), clearContactsOverview(), scheduleFileCleanup(c.req.url)]);
+  await Promise.all([clearSummaryCache(formId), clearContactsOverview('soon'), scheduleFileCleanup(c.req.url)]);
 }
 
 const gone = (c: Context) => c.json(problem('not_found', GONE), 404);
@@ -162,7 +159,7 @@ export const responsesRoutes = new Hono()
   // ---------------------------------------------------------------- Table, CSV, drawer
   .get(
     '/forms/:id/responses',
-    query(listQuery, [...FILTER_KEYS, 'cursor', 'page']),
+    query(listQuery, [...FILTER_KEYS, 'cursor', 'before', 'last', 'size', 'page', 'col']),
     withViewer,
     requireAuth,
     requirePermission(PERMISSIONS.RESPONSE_READ),
@@ -174,16 +171,17 @@ export const responsesRoutes = new Hono()
       const cat = await loadCatalog(c.var.db, formId);
       if (!cat) return gone(c);
       const cursor = q.cursor ? decodeCursor(q.cursor) : null;
-      if (q.cursor && !cursor) {
+      const before = q.before ? decodeCursor(q.before) : null;
+      if ((q.cursor && !cursor) || (q.before && !before)) {
         return c.json(
           {
             ...problem('invalid_input', 'That page link is out of date. Reload the table.'),
-            fields: {cursor: 'Not a valid cursor.'},
+            fields: {[q.cursor && !cursor ? 'cursor' : 'before']: 'Not a valid cursor.'},
           },
           422
         );
       }
-      return c.json(await listResponses(c.var.db, cat, {...q, cursor}));
+      return c.json(await listResponses(c.var.db, cat, {...q, cursor, before, last: q.last ?? null}));
     }
   )
 

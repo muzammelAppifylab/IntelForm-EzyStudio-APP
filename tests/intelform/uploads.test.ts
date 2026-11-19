@@ -389,6 +389,32 @@ describe('signatures and images against the platform (mocked)', () => {
     expect(storedSignatureFileId(answers.sig)).toBe(FILE_A);
   });
 
+  it('claims several signatures side by side; one bad one deletes every completed file', async () => {
+    const twoSigs = [...fields, {id: 'sig2', type: 'signature'}];
+    const claimTwo = (answers: Record<string, unknown>) =>
+      claimSignatures('https://site.example.test/', {formId: FORM, fields: twoSigs, answers, invalidMessage: 'Sign again in the box'});
+    addFile({id: FILE_A, bytes: canvasPng()});
+    addFile({id: FILE_B, bytes: canvasPng()});
+    const answers: Record<string, unknown> = {
+      sig: {fileId: FILE_A, token: await signUploadToken(SECRET, {fileId: FILE_A, formId: FORM, fieldId: 'sig', exp: later()})},
+      sig2: {fileId: FILE_B, token: await signUploadToken(SECRET, {fileId: FILE_B, formId: FORM, fieldId: 'sig2', exp: later()})},
+    };
+    const ok = await claimTwo(answers);
+    expect(ok.ok && [...ok.fileIds].sort()).toEqual([FILE_A, FILE_B].sort());
+    expect(answers).toEqual({sig: {fileId: FILE_A}, sig2: {fileId: FILE_B}});
+
+    files = new Map();
+    addFile({id: FILE_A, bytes: canvasPng()});
+    addFile({id: FILE_B, name: 'logo.png', bytes: canvasPng()}); // not a signature upload
+    const bad: Record<string, unknown> = {
+      sig: {fileId: FILE_A, token: await signUploadToken(SECRET, {fileId: FILE_A, formId: FORM, fieldId: 'sig', exp: later()})},
+      sig2: {fileId: FILE_B, token: await signUploadToken(SECRET, {fileId: FILE_B, formId: FORM, fieldId: 'sig2', exp: later()})},
+    };
+    expect(await claimTwo(bad)).toMatchObject({ok: false, status: 422, fields: {sig2: ['Sign again in the box']}});
+    expect(deleted).toEqual([FILE_A]);
+    expect((bad.sig as {token?: string}).token).toBeTruthy();
+  });
+
   it('leaves forms without signature answers alone', async () => {
     expect(await claim({name: 'Ann'})).toEqual({ok: true, fileIds: []});
   });
@@ -481,7 +507,10 @@ describe('signatures and images against the platform (mocked)', () => {
 describe('uploads routes refuse bad input before any lookup', () => {
   const post = async (path: string, body: unknown) => {
     const {uploadsRoutes} = await import('../../src/server/routes/uploads');
-    return uploadsRoutes.request(path, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    // The anonymous signature upload has its own app (mounted before csrf, public-signatures.ts).
+    const {publicSignatureRoutes} = await import('../../src/server/routes/public-signatures');
+    const routes = path === '/signature' ? publicSignatureRoutes : uploadsRoutes;
+    return routes.request(path, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
   };
 
   it('signature: unknown form or field shape is a 404, a wrong file a 422', async () => {

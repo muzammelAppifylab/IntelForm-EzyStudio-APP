@@ -3,7 +3,7 @@ import {siteFetch} from '../../platform/browser';
 import {formHref} from '../../server/intelform/public-site/common';
 
 /**
- * BROWSER: small helpers for the public site's static pages (/forms/, /about/, /privacy/,
+ * BROWSER: small helpers for the public site's static pages (/forms/, /privacy/,
  * /terms/). Everything from an answer goes in with `textContent`: nothing is parsed as HTML.
  */
 

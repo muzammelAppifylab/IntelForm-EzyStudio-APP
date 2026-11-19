@@ -29,6 +29,8 @@ export type FormsView = (typeof FORMS_VIEWS)[number]
 
 /** Forms per page on the Forms list: fills whole rows of the 2- and 3-column grid. */
 export const FORMS_PAGE_SIZE = 24
+/** Rows per page the Forms list offers (`?size=`): whole rows of the grid at every size. */
+export const FORMS_PAGE_SIZES = [24, 48, 96] as const
 
 /** GET /api/forms query string. */
 export const formsListQuery = z.object({
@@ -37,6 +39,12 @@ export const formsListQuery = z.object({
   sort: z.enum(FORM_SORTS).default('updated'),
   /** Keyset paging: the previous page's `nextCursor` (GET /site-api/forms?cursor=…). */
   cursor: z.string().max(600).optional(),
+  /** The next page's `prevCursor`: the page before it. */
+  before: z.string().max(600).optional(),
+  /** The last page, holding this many forms. */
+  last: z.coerce.number().int().min(1).max(100).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  size: z.coerce.number().int().optional(),
 })
 export type FormsListQuery = z.infer<typeof formsListQuery>
 
@@ -142,6 +150,8 @@ export interface FormsListResponse {
   pageSize: number
   /** Pass as `?cursor=` for the next page; null on the last one. */
   nextCursor: string | null
+  /** Pass as `?before=` for the previous page; null on the first one. */
+  prevCursor: string | null
 }
 
 export interface CreatedForm {

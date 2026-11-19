@@ -1,4 +1,4 @@
-import {infiniteQueryOptions, keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
+import {keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {useNavigate} from '@tanstack/react-router';
 import {useState} from 'react';
 
@@ -16,9 +16,11 @@ import type {
   SaveAsTemplateInput,
   TemplateSummary,
 } from '../../../lib/intelform/api-forms';
+import {FORMS_PAGE_SIZE, FORMS_PAGE_SIZES} from '../../../lib/intelform/api-forms';
 import {useToast} from '../../ui';
 import {publicFormUrl} from '../forms/format';
 import {api, errorMessage} from '../lib/api';
+import {FIRST_PAGE, type PageNav} from './responses';
 import {templatesKey} from './templates';
 
 /**
@@ -38,29 +40,53 @@ export interface FormsFilter {
 export const DEFAULT_FORMS_FILTER: FormsFilter = {q: '', status: 'all', sort: 'updated'};
 
 /** One page as the server sends it: keyset, `nextCursor` null on the last page. */
-export type FormsPage = FormsListResponse & {nextCursor: string | null};
+export type FormsPage = FormsListResponse;
 
-/** `?q=…&status=…&sort=…&cursor=…`, defaults left out. */
-export function formsListPath(filter: FormsFilter, cursor?: string | null): string {
+/** `?q=…&status=…&sort=…&cursor=…` (or `before` / `last`), `page`, `size`; defaults left out. */
+export function formsListPath(filter: FormsFilter, cursor?: string | null, nav: PageNav = FIRST_PAGE, size: number = FORMS_PAGE_SIZE): string {
   const search = new URLSearchParams();
   const q = filter.q.trim();
   if (q) search.set('q', q);
   if (filter.status !== 'all') search.set('status', filter.status);
   if (filter.sort !== 'updated') search.set('sort', filter.sort);
-  if (cursor) search.set('cursor', cursor);
+  const after = cursor ?? nav.cursor;
+  if (after) search.set('cursor', after);
+  else if (nav.before) search.set('before', nav.before);
+  else if (nav.last) search.set('last', String(nav.last));
+  if (nav.page > 1) search.set('page', String(nav.page));
+  if (size !== FORMS_PAGE_SIZE) search.set('size', String(size));
   const qs = search.toString();
   return `${FORMS_PATH}${qs ? `?${qs}` : ''}`;
 }
 
-/** The forms list, keyset-paged ("Load more"); the filter is in the key. */
-export const formsListQuery = (filter: FormsFilter) =>
-  infiniteQueryOptions({
-    queryKey: [...formsKey, 'list', filter],
+const SIZE_KEY = 'intelform:forms-page-size';
+
+/** Forms per page this person last picked, in this browser. */
+export function rememberedFormsSize(): number {
+  try {
+    const n = Number(localStorage.getItem(SIZE_KEY));
+    return (FORMS_PAGE_SIZES as readonly number[]).includes(n) ? n : FORMS_PAGE_SIZE;
+  } catch {
+    return FORMS_PAGE_SIZE;
+  }
+}
+
+export function rememberFormsSize(n: number): void {
+  try {
+    localStorage.setItem(SIZE_KEY, String(n));
+  } catch {
+    // Storage blocked: the default size next time.
+  }
+}
+
+/** One numbered page of the forms list by keyset (the dashboard's pager); filter, size and position in the key. */
+export const formsListQuery = (filter: FormsFilter, size: number = FORMS_PAGE_SIZE, nav: PageNav = FIRST_PAGE) =>
+  queryOptions({
+    queryKey: [...formsKey, 'list', filter, size, nav],
     // The signal cancels a request a newer search has replaced.
-    queryFn: ({pageParam, signal}) => api<FormsPage>(formsListPath(filter, pageParam), {signal}),
-    initialPageParam: null as string | null,
-    getNextPageParam: last => last.nextCursor ?? undefined,
+    queryFn: ({signal}) => api<FormsPage>(formsListPath(filter, null, nav, size), {signal}),
     placeholderData: keepPreviousData,
+    gcTime: 60_000,
   });
 
 /** The first page in the default order: the overview's "Recent forms". */

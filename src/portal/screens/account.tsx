@@ -58,7 +58,7 @@ export function Account() {
 
   return (
     <div className="app-page account-screen">
-      <PageHeader title="Your account" description="Your profile, how you sign in, and the devices signed in to this account." />
+      <PageHeader title="Your account" />
       {!viewer ? (
         me.error ? (
           <ErrorNote error={me.error} />

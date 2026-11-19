@@ -1,6 +1,6 @@
-import {siteFetch} from '../platform/browser';
 import {putFile, type UploadGrant} from '../platform/files-browser';
 import {checkSignature, SIGNATURE_TYPE} from '../server/intelform/uploads/rules';
+import {respondentFetch} from './api';
 
 /**
  * Signature uploads from the public form (anonymous). The old app sent signatures inside the
@@ -18,7 +18,7 @@ export interface SignatureContext {
   formId: string;
   /** The signature field's id. */
   fieldId: string;
-  /** The page's render token (the form as the server handed it out). */
+  /** The page's render token (the form as the server handed it out), sent in its header. */
   renderToken: string;
   /** The unlock token of a password-protected form. */
   unlockToken?: string | null;
@@ -53,20 +53,23 @@ export async function uploadSignature(blob: Blob, ctx: SignatureContext): Promis
 
   let res: Response;
   try {
-    res = await siteFetch('/site-api/uploads/signature', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({
-        formId: ctx.formId,
-        fieldId: ctx.fieldId,
-        contentType: file.type,
-        size: file.size,
-        renderToken: ctx.renderToken,
-        ...(ctx.unlockToken ? {unlockToken: ctx.unlockToken} : {}),
-      }),
-      signal: ctx.signal,
-    });
+    // Anonymous, before `csrf` (embedded forms): the render token goes in its header.
+    res = await respondentFetch(
+      '/site-api/uploads/signature',
+      {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({
+          formId: ctx.formId,
+          fieldId: ctx.fieldId,
+          contentType: file.type,
+          size: file.size,
+          ...(ctx.unlockToken ? {unlockToken: ctx.unlockToken} : {}),
+        }),
+        signal: ctx.signal,
+      },
+      ctx.renderToken
+    );
   } catch (err) {
     if (ctx.signal?.aborted) throw err;
     throw new SignatureUploadError(0, 'offline', 'Can’t reach the server. Check your connection and try again.');

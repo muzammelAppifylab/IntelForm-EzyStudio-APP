@@ -1,7 +1,7 @@
 /*
- * The public site (home, /forms/, /about/, /privacy/, /terms/): IntelForm's "paper & ink" look on
+ * The public site (/forms/, /privacy/, /terms/): IntelForm's "paper & ink" look on
  * the template's tokens (src/styles/global.css), so dark mode follows on its own. Every rule is
- * under `.ps`; the home page also uses `.home-*` from src/styles/home.css.
+ * under `.ps`. The home page has its own, src/styles/home.css.
  */
 
 .ps .ps-sr-only {
@@ -16,24 +16,11 @@
   border: 0;
 }
 
-.ps .ps-display,
 .ps .ps-card-title,
-.ps .ps-contact h3,
 .ps .ps-intro h1 {
   font-family: var(--font-display);
   font-weight: 400;
   letter-spacing: -0.02em;
-}
-
-.ps .ps-overline {
-  margin: 0;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 /* ---------------------------------------------------------------- intro -- */
@@ -60,38 +47,6 @@
     line-height: 5.75rem;
     letter-spacing: -0.02em;
   }
-}
-
-/* Page rhythm (the old app's SiteFrame): one even gap between sections, 64px, 96px from 640px. */
-.ps[data-public-about] {
-  display: flex;
-  flex-direction: column;
-  gap: 64px;
-  padding-bottom: 64px;
-}
-
-.ps[data-public-about] > .ps-page-intro {
-  padding-top: 48px;
-}
-
-.ps[data-public-about] > .ps-page-intro .ps-intro {
-  margin-bottom: 0;
-}
-
-@media (min-width: 640px) {
-  .ps[data-public-about] {
-    gap: 96px;
-    padding-bottom: 96px;
-  }
-
-  .ps[data-public-about] > .ps-page-intro {
-    padding-top: 80px;
-  }
-}
-
-.ps .ps-values-section {
-  display: grid;
-  gap: 12px;
 }
 
 .ps .ps-intro .eyebrow,
@@ -228,197 +183,6 @@
   text-align: center;
 }
 
-.ps .ps-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 32px;
-  margin: 28px 0 0;
-  padding: 0;
-  list-style: none;
-  color: var(--muted);
-  font-size: 15px;
-}
-
-.ps .ps-facts li {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ps .ps-facts a,
-.ps .ps-story a,
-.ps .ps-contact-email {
-  color: var(--accent-text);
-  text-decoration: underline;
-  text-underline-offset: 4px;
-  border-radius: var(--radius-sm);
-}
-
-.ps .ps-facts a:hover,
-.ps .ps-story a:hover,
-.ps .ps-contact-email:hover {
-  text-decoration-thickness: 2px;
-}
-
-/* ------------------------------------------------- the form preview (hero) -- */
-
-.ps .ps-preview {
-  display: grid;
-  gap: 22px;
-  padding: clamp(22px, 3vw, 32px);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  box-shadow: var(--shadow-lg);
-  user-select: none;
-}
-
-.ps .ps-preview-track {
-  height: 6px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: var(--progress-track);
-}
-
-.ps .ps-preview-fill {
-  display: block;
-  width: 33%;
-  height: 100%;
-  border-radius: var(--radius-full);
-  background: var(--pine);
-}
-
-.ps .ps-preview-head {
-  display: grid;
-  gap: 6px;
-}
-
-.ps .ps-preview-question {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(24px, 2.6vw, 30px);
-  line-height: 1.15;
-}
-
-.ps .ps-preview-options {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ps .ps-preview-option {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--field);
-}
-
-.ps .ps-preview-option.selected {
-  border: 2px solid var(--edge);
-  background: var(--option-selected);
-  color: var(--option-selected-ink);
-}
-
-.ps .ps-preview-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.ps .ps-preview-time {
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.ps .ps-preview-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 40px;
-  padding: 0 16px;
-  border: 2px solid var(--edge);
-  border-radius: var(--radius);
-  background: var(--primary);
-  color: var(--primary-ink);
-  font-weight: 600;
-}
-
-/* ------------------------------------------------------ about and contact -- */
-
-.ps .ps-about {
-  display: grid;
-  gap: 40px;
-}
-
-/* The 2px ink rule spans the content, not the page gutter (`.wrap`'s padding). */
-.ps .ps-about::before {
-  content: '';
-  grid-column: 1 / -1;
-  height: 2px;
-  margin-bottom: 8px;
-  background: var(--edge);
-}
-
-@media (min-width: 1024px) {
-  .ps .ps-about-split {
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-    gap: 64px;
-  }
-}
-
-.ps .ps-about-copy {
-  display: grid;
-  align-content: start;
-  justify-items: start;
-  gap: 14px;
-}
-
-.ps .ps-about-copy .home-sub {
-  max-width: 65ch;
-  margin: 0;
-}
-
-.ps .ps-contact {
-  display: grid;
-  align-content: start;
-  align-self: start;
-  gap: 12px;
-  padding: clamp(22px, 3vw, 32px);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-}
-
-.ps .ps-contact h3,
-.ps .ps-contact p {
-  margin: 0;
-}
-
-.ps .ps-contact h3 {
-  font-size: 24px;
-}
-
-.ps .ps-contact-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border: 2px solid var(--edge);
-  border-radius: var(--radius-full);
-}
-
-.ps .ps-contact-email {
-  justify-self: start;
-  font-size: 18px;
-  overflow-wrap: anywhere;
-}
-
 /* --------------------------------------------------------------- /forms/ -- */
 
 .ps .ps-search {
@@ -503,105 +267,6 @@
 
 .ps .pager {
   margin-top: 28px;
-}
-
-/* ---------------------------------------------------------------- /about/ -- */
-
-.ps .ps-story {
-  display: grid;
-  gap: 20px;
-  max-width: 65ch;
-  padding-top: 40px;
-  border-top: 2px solid var(--edge);
-  color: var(--muted);
-  font-size: clamp(17px, 1.6vw, 19px);
-  line-height: 1.6;
-}
-
-.ps .ps-story p {
-  margin: 0;
-}
-
-.ps .ps-values {
-  margin: 28px 0 0;
-  padding: 0;
-  list-style: none;
-  border-top: 2px solid var(--edge);
-}
-
-.ps .ps-values li {
-  display: grid;
-  gap: 12px;
-  padding: 32px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-@media (min-width: 768px) {
-  .ps .ps-values li {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
-    gap: 40px;
-  }
-}
-
-.ps .ps-values h3 {
-  margin: 0;
-  font-size: 1.75rem;
-  line-height: 2rem;
-}
-
-.ps .ps-values p {
-  margin: 0;
-  max-width: 60ch;
-  color: var(--muted);
-}
-
-/* Section titles: 40px, 56px from 640px. */
-.ps h2.ps-display {
-  margin: 0;
-  font-size: 2.5rem;
-  line-height: 2.75rem;
-  letter-spacing: -0.01em;
-}
-
-@media (min-width: 640px) {
-  .ps h2.ps-display {
-    font-size: 3.5rem;
-    line-height: 3.5rem;
-    letter-spacing: -0.015em;
-  }
-}
-
-.ps .ps-cta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  background: var(--card);
-}
-
-@media (min-width: 640px) {
-  .ps .ps-cta {
-    padding: 40px;
-  }
-}
-
-.ps .ps-cta p {
-  margin: 0;
-  font-size: 1.75rem;
-  line-height: 2rem;
-}
-
-/* The site's large buttons (the old app's PRIMARY_BUTTON): 48px, 8px corners, 16px medium. */
-.ps .button.home-button-lg {
-  min-height: 48px;
-  padding: 0 24px;
-  font-size: 1rem;
-  font-weight: 500;
-  border-radius: var(--radius-sm);
 }
 
 /* ------------------------------------------------------- privacy / terms -- */

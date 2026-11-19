@@ -196,7 +196,6 @@ export function Roles() {
     <div className="app-page screen-roles">
       <PageHeader
         title="Roles"
-        description="Each person has one role, and a role decides what they can see and change. Give roles to people on the Users screen."
         actions={
           <Button
             icon="plus"

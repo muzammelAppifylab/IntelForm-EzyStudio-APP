@@ -6,12 +6,16 @@ import {buttonClass, EmptyState, PageHeader, Tabs} from '../../ui';
 import {ResponseDrawer} from '../../intelform/responses/ResponseDrawer';
 import {SummaryView} from '../../intelform/responses/SummaryView';
 import {TableView} from '../../intelform/responses/TableView';
+import {useBuilder} from '../../intelform/builder/store';
 import {
   applySearchPatch,
   readResponseId,
   readSummaryState,
   readTableState,
   readView,
+  defaultView,
+  rememberedView,
+  rememberView,
   summaryToTablePatch,
   type Search,
   type SearchPatch,
@@ -20,7 +24,8 @@ import {
 } from '../../intelform/responses/state';
 
 /**
- * `/forms/$formId/responses`: Summary (default) and Table views, plus the response drawer
+ * `/forms/$formId/responses`: Summary and Table views (which one opens: `?view=`, else the
+ * person's last pick for this form, else `defaultView` for its questions), plus the response drawer
  * (legacy src/pages/builder/responses/ResponsesTab.tsx). All view state is in the URL
  * (?view=table&q=&filter=…&response=<id>), so every view can be linked, and charts open the
  * table filtered to what was clicked.
@@ -30,7 +35,11 @@ export function ResponsesTab() {
   const search = useSearch({strict: false}) as Search;
   const navigate = useNavigate();
 
-  const view = readView(search);
+  // The URL wins (links, charts → table); else what this person last picked for this form;
+  // else what suits the form's questions.
+  const types = useBuilder(s => s.doc.draft.fields.map(f => f.type).join(','));
+  const fallback = useMemo(() => rememberedView(formId) ?? defaultView(types ? types.split(',') : []), [formId, types]);
+  const view = readView(search, fallback);
   // Stable while their own keys stay the same, so opening the drawer or switching views keeps
   // the table's selection and the queries' identity.
   const tableKey = JSON.stringify(readTableState(search));
@@ -75,7 +84,11 @@ export function ResponsesTab() {
       <Tabs
         label="Responses view"
         value={view}
-        onChange={v => update({view: v === 'table' ? 'table' : null})}
+        onChange={v => {
+          const next = v === 'table' ? 'table' : 'summary';
+          rememberView(formId, next);
+          update({view: next});
+        }}
         items={[
           {value: 'summary', label: 'Summary'},
           {value: 'table', label: 'Table'},

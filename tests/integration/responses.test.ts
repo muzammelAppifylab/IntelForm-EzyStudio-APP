@@ -4,6 +4,7 @@ import {app} from '../../src/server/app';
 // Registers the job handlers: locally an export job runs as soon as it is sent.
 import '../../src/server/background';
 import {unzip} from '../intelform/unzip';
+import {syncFormCounts} from '../../src/server/intelform/forms/counts';
 import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -141,6 +142,34 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect((await viewer.get(`${base}/responses?cursor=junk`)).status).toBe(422);
   });
 
+  it('pages by number: rows per page, previous and last pages, all by keyset', async () => {
+    const ids = (r: {json: Record<string, unknown>}) => (r.json.rows as {id: string}[]).map(x => x.id);
+    const range = (from: number, n: number) => Array.from({length: n}, (_, i) => rid(from + i));
+    // 25 a page: 60 rows are pages of 25, 25, 10.
+    const p1 = await viewer.get(`${base}/responses?size=25`);
+    expect(ids(p1)).toEqual(range(1, 25));
+    expect(p1.json).toMatchObject({pageSize: 25, total: 60, prevCursor: null});
+    const p2 = await viewer.get(`${base}/responses?size=25&page=2&cursor=${p1.json.nextCursor as string}`);
+    expect(ids(p2)).toEqual(range(26, 25));
+    expect(p2.json.total).toBe(60);
+    // The last page holds total - 2 × 25 = 10 rows, read from the end.
+    const p3 = await viewer.get(`${base}/responses?size=25&page=3&last=10`);
+    expect(ids(p3)).toEqual(range(51, 10));
+    expect(p3.json.nextCursor).toBeNull();
+    // Back from the last page: page 2 again, then page 1 (no previous left).
+    const back2 = await viewer.get(`${base}/responses?size=25&page=2&before=${p3.json.prevCursor as string}`);
+    expect(ids(back2)).toEqual(range(26, 25));
+    expect(back2.json.nextCursor).toBeTruthy();
+    const back1 = await viewer.get(`${base}/responses?size=25&before=${back2.json.prevCursor as string}`);
+    expect(ids(back1)).toEqual(range(1, 25));
+    expect(back1.json.prevCursor).toBeNull();
+    // Only the sizes the table offers; a broken cursor is a 422, never a 500.
+    expect((await viewer.get(`${base}/responses?size=1000`)).status).toBe(422);
+    expect((await viewer.get(`${base}/responses?size=7`)).status).toBe(422);
+    expect((await viewer.get(`${base}/responses?before=junk`)).status).toBe(422);
+    expect((await viewer.get(`${base}/responses?last=101`)).status).toBe(422);
+  });
+
   it('filters, searches and sorts', async () => {
     const apples = await viewer.get(`${base}/responses?filter=f_choice01:o_aaaa01`);
     expect(apples.json.total).toBe(30);
@@ -241,6 +270,11 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
       ids: [rid(2), rid(3), rid(1001)],
     });
     expect(bulk.json).toEqual({deleted: 2});
+    // The exact count (form_counts) moved at once: the table's total says so.
+    const table = await editor.get(`${base}/responses`);
+    expect((table.json as {formTotal: number}).formTotal).toBe(57);
+    // The copy on forms (and last_response_at, moving back) follows with the minute sync.
+    await syncFormCounts(db);
     const form = await db.form.findUniqueOrThrow({
       where: {id: FORM},
       select: {responseCount: true, lastResponseAt: true},

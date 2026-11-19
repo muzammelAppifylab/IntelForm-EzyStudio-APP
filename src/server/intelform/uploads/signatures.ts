@@ -110,62 +110,103 @@ export async function claimSignatures(requestUrl: string | URL, input: ClaimInpu
   }
   if (!pending.length) return {ok: true, fileIds: []};
 
+  // Each signature is three platform calls (look, complete, read back): the signatures of one
+  // submit run side by side, at most CLAIM_CONCURRENCY at a time. Once one fails, the ones not
+  // started yet are skipped; whatever was completed is deleted again.
   const claimed: string[] = [];
+  const outcomes: (ClaimResult | {ok: true; size: number} | undefined)[] = Array.from({length: pending.length}, () => undefined);
+  let failed = false;
+  let crash: unknown = null;
+  let next = 0;
+  const worker = async () => {
+    while (!failed && next < pending.length) {
+      const i = next++;
+      try {
+        const outcome = await claimOne(requestUrl, pending[i]!, invalid, fileId => claimed.push(fileId));
+        outcomes[i] = outcome;
+        if (!outcome.ok) failed = true;
+      } catch (err) {
+        crash ??= err;
+        failed = true;
+      }
+    }
+  };
+  await Promise.all(Array.from({length: Math.min(CLAIM_CONCURRENCY, pending.length)}, worker));
+
   const fail = async (result: ClaimResult): Promise<ClaimResult> => {
     await deleteStoredFiles(requestUrl, claimed);
     return result;
   };
-  let total = 0;
-  for (const {fieldId, fileId} of pending) {
-    // A file already completed was claimed by an earlier submit: one signature, one response.
-    const info = await guarded(() => getFile(requestUrl, fileId));
-    if (!info.ok) {
-      if (info.status === 503 || info.status === 0) {
-        return fail({ok: false, status: info.status === 503 ? 503 : 502, code: info.code, message: info.message});
-      }
-      return fail(invalid(fieldId));
-    }
-    if (
-      info.data.status !== 'pending' ||
-      info.data.visibility !== 'private' ||
-      info.data.name !== SIGNATURE_NAME ||
-      info.data.contentType !== SIGNATURE_TYPE
-    ) {
-      return fail(invalid(fieldId));
-    }
-    const done = await guarded(() => completeUpload(requestUrl, fileId));
-    if (!done.ok) {
-      if (done.status === 503 || done.code === 'E_PLATFORM_UNREACHABLE') {
-        return fail({ok: false, status: 502, code: 'storage_failed', message: 'Your signature couldn’t be saved. Try again in a moment.'});
-      }
-      return fail(invalid(fieldId));
-    }
-    claimed.push(fileId);
-    if (done.data.size > SIGNATURE_MAX_BYTES) return fail(invalid(fieldId));
-    total += done.data.size;
-    if (total > SIGNATURES_PER_SUBMIT_MAX_BYTES) {
-      return fail({
-        ok: false,
-        status: 413,
-        code: 'payload_too_large',
-        message: 'Your signatures are too large to save. Clear them, sign again and resubmit.',
-      });
-    }
-    const read = await readStoredBytes(requestUrl, fileId, SIGNATURE_MAX_BYTES, {exact: true});
-    if (!read.ok) {
-      return fail(
-        read.status === 413
-          ? invalid(fieldId)
-          : {ok: false, status: 502, code: 'storage_failed', message: 'Your signature couldn’t be saved. Try again in a moment.'}
-      );
-    }
-    try {
-      await validatePng(read.bytes);
-    } catch (err) {
-      if (!(err instanceof PngError)) throw err;
-      return fail(invalid(fieldId));
-    }
-    input.answers[fieldId] = {fileId} satisfies StoredSignature;
+  if (crash !== null) {
+    await deleteStoredFiles(requestUrl, claimed);
+    throw crash;
   }
+  // The first failing field in the form's order, as one at a time would have answered.
+  const firstFailure = outcomes.find((o): o is Exclude<ClaimResult, {ok: true}> => !!o && !o.ok);
+  if (firstFailure) return fail(firstFailure);
+  let total = 0;
+  for (const o of outcomes) total += o && o.ok && 'size' in o ? o.size : 0;
+  if (total > SIGNATURES_PER_SUBMIT_MAX_BYTES) {
+    return fail({
+      ok: false,
+      status: 413,
+      code: 'payload_too_large',
+      message: 'Your signatures are too large to save. Clear them, sign again and resubmit.',
+    });
+  }
+  for (const {fieldId, fileId} of pending) input.answers[fieldId] = {fileId} satisfies StoredSignature;
   return {ok: true, fileIds: claimed};
+}
+
+/** Signatures of one submit claimed at once (each is a few platform calls). */
+const CLAIM_CONCURRENCY = 4;
+
+const STORAGE_FAILED = 'Your signature couldn’t be saved. Try again in a moment.';
+
+/**
+ * One signature: still a pending private signature upload, completed (`onCompleted` as soon as
+ * it is, so a later failure deletes it), within its size, and a strict PNG once read back.
+ */
+async function claimOne(
+  requestUrl: string | URL,
+  {fieldId, fileId}: {fieldId: string; fileId: string},
+  invalid: (fieldId: string) => ClaimResult,
+  onCompleted: (fileId: string) => void
+): Promise<ClaimResult | {ok: true; size: number}> {
+  // A file already completed was claimed by an earlier submit: one signature, one response.
+  const info = await guarded(() => getFile(requestUrl, fileId));
+  if (!info.ok) {
+    if (info.status === 503 || info.status === 0) {
+      return {ok: false, status: info.status === 503 ? 503 : 502, code: info.code, message: info.message};
+    }
+    return invalid(fieldId);
+  }
+  if (
+    info.data.status !== 'pending' ||
+    info.data.visibility !== 'private' ||
+    info.data.name !== SIGNATURE_NAME ||
+    info.data.contentType !== SIGNATURE_TYPE
+  ) {
+    return invalid(fieldId);
+  }
+  const done = await guarded(() => completeUpload(requestUrl, fileId));
+  if (!done.ok) {
+    if (done.status === 503 || done.code === 'E_PLATFORM_UNREACHABLE') {
+      return {ok: false, status: 502, code: 'storage_failed', message: STORAGE_FAILED};
+    }
+    return invalid(fieldId);
+  }
+  onCompleted(fileId);
+  if (done.data.size > SIGNATURE_MAX_BYTES) return invalid(fieldId);
+  const read = await readStoredBytes(requestUrl, fileId, SIGNATURE_MAX_BYTES, {exact: true});
+  if (!read.ok) {
+    return read.status === 413 ? invalid(fieldId) : {ok: false, status: 502, code: 'storage_failed', message: STORAGE_FAILED};
+  }
+  try {
+    await validatePng(read.bytes);
+  } catch (err) {
+    if (!(err instanceof PngError)) throw err;
+    return invalid(fieldId);
+  }
+  return {ok: true, size: done.data.size};
 }

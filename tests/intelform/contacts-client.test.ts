@@ -1,6 +1,5 @@
 import {describe, expect, it} from 'vitest';
 
-import type {ContactsListResponse} from '../../src/lib/intelform/api-contacts';
 import {checkFilters} from '../../src/portal/intelform/contacts/Filters';
 import {
   contactSubtitle,
@@ -93,13 +92,11 @@ describe('contacts list state', () => {
     });
   });
 
-  it('asks for the rows after the last one while there is a next cursor', () => {
-    const q = contactsListQuery(DEFAULT_CONTACTS_STATE);
-    const page = (nextCursor: string | null): ContactsListResponse => ({contacts: [], pageSize: 50, nextCursor});
-    const next = q.getNextPageParam!;
-    expect(next(page('abc'), [], null, [])).toBe('abc');
-    expect(next(page(null), [], 'abc', [])).toBeUndefined();
-    expect(q.queryKey).toEqual(['intelform', 'contacts', 'list', DEFAULT_CONTACTS_STATE]);
+  it('keys each numbered page by its filters, size and position', () => {
+    const first = contactsListQuery(DEFAULT_CONTACTS_STATE);
+    expect(first.queryKey).toEqual(['intelform', 'contacts', 'list', DEFAULT_CONTACTS_STATE, 50, {page: 1}]);
+    const next = contactsListQuery(DEFAULT_CONTACTS_STATE, 25, {page: 2, cursor: 'abc'});
+    expect(next.queryKey).toEqual(['intelform', 'contacts', 'list', DEFAULT_CONTACTS_STATE, 25, {page: 2, cursor: 'abc'}]);
   });
 });
 

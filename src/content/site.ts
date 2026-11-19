@@ -1,5 +1,5 @@
 /**
- * The site's own words: navigation, home, forms, about and legal page copy.
+ * The site's own words: navigation, home, forms and legal page copy.
  *
  * Edit freely. The site's NAME and LOGO are not here: they come from the
  * platform (`GET /site-api/site`), so a rename in the dashboard shows
@@ -13,7 +13,7 @@
 /** Search and social basics. The NAME comes from the platform (above). */
 export const SITE = {
   /** One sentence: the meta description of pages that have none of their own. Use `{name}`. */
-  description: 'Bookings, questions and feedback for {name}, all in one place.',
+  description: 'Forms from {name}.',
   /** `en`, `fr`, … : the page language (screen readers, search engines). */
   lang: 'en',
   /**
@@ -37,67 +37,29 @@ export interface NavItem {
 }
 
 /**
- * Top navigation. Every href is a page of THIS site (`/`, `/forms/`,
- * `/about/`, `/dashboard`, `/account/…`): plain links. The home page is rendered per
- * visit (its forms come from the database) but reads no visitor and may be kept a minute, so a
- * prefetch of it is used.
+ * Top navigation. Empty on purpose: the public site is a quiet front desk for the forms the owner
+ * shares, not a site to browse, so the header carries only the brand (and Dashboard for a
+ * signed-in visitor). Every href added here is a page of THIS site, as a plain link.
  */
-export const NAV: NavItem[] = [{label: 'About', href: '/about/'}];
+export const NAV: NavItem[] = [];
 
 /**
- * The home page, top to bottom (`src/pages/index.astro`): the creator's public
- * forms hub. Rewrite every word for the business. No invented reviews or numbers.
+ * The home page (`src/pages/index.astro`): what someone sees who lands on the root address,
+ * usually from a shared or embedded form. It confirms whose forms these are and stops there:
+ * nothing here asks anyone to fill in more. `{name}`: the site name.
  */
 export const HOME = {
-  hero: {
-    /** The headline is the app name (Settings, General); this is the text under it. */
-    body: 'Bookings, questions and feedback, all in one place. Pick a form and you’re done in a few minutes.',
-    /** Several forms: jump to the list. One form: its own title starts it. */
-    seeForms: 'See the forms',
-    about: 'About',
-  },
-  /** The decorative form preview next to the headline (hidden from screen readers). */
-  preview: {
-    progress: 'Question 2 of 6',
-    question: 'How was your visit?',
-    options: ['Great, thank you', 'Good, with a few notes', 'Not quite right'],
-    time: 'About 2 min',
-    button: 'Continue',
-  },
-  forms: {
-    eyebrow: 'Open now',
-    title: 'Forms',
-    /** `{count}`: how many forms are open. */
-    seeAll: 'See all {count} forms',
-    empty: 'Nothing is open right now. Check back soon.',
-    /** With a contact email (Settings, Public site). `{email}`: the address. */
-    emptyWithEmail: 'Nothing is open right now. Questions? Email {email}.',
-  },
-  goodToKnow: {
-    label: 'Good to know',
-    noAccount: 'No account needed',
-    anyDevice: 'Works on any device',
-    privacy: 'How your answers are used',
-  },
-  how: {
-    eyebrow: 'How it works',
-    title: 'Three steps, a few minutes',
-    steps: [
-      {title: 'Pick a form', body: 'Open the one that fits, whether it’s a booking, a question or feedback.'},
-      {title: 'Answer a few questions', body: 'One question at a time, with the time it takes shown up front.'},
-      {title: 'We read and reply', body: 'A person reads every answer and gets back to you when it needs a reply.'},
-    ],
-  },
-  about: {
-    eyebrow: 'About',
-    title: 'Who you’re talking to',
-    body: '{name} uses these forms to hear from clients and anyone curious about the work. Every answer is read by a person, and you’ll hear back if it needs a reply.',
-    link: 'More about {name}',
-  },
-  contact: {
-    title: 'Rather write?',
-    body: 'Questions about a form, or something else entirely.',
-  },
+  /** Under the name when no form is listed (each form's Share tab, "Show on the homepage"). */
+  byLink: 'Forms from {name} are shared by link. If you were sent one, open that link to get started.',
+  /** Above the list when the owner lists forms on the homepage. */
+  listed: 'If you were sent a link to a form, use that link. The forms below are open to anyone.',
+  /** The list's heading, for screen readers and the outline. */
+  formsHeading: 'Open forms',
+  /** More forms listed than the home page shows. `{count}`: how many. */
+  seeAll: 'All {count} forms',
+  /** With a contact email (Settings, Public site). */
+  contact: 'Questions?',
+  error: 'This page didn’t load. Refresh to try again.',
   /** The dashboard picture of the template's original home page (`src/components/home/HeroVisual.astro`). Unused by IntelForm. */
   visual: {
     nav: ['Overview', 'Forms', 'Responses', 'Contacts', 'Settings'],
@@ -119,37 +81,12 @@ export const HOME = {
 /** /forms/: every listed open form, searchable. */
 export const FORMS = {
   title: 'All forms',
-  description: 'Every form {name} has open right now: bookings, questions and feedback.',
+  description: 'Forms from {name} that are open to anyone.',
   search: 'Search forms',
   /** `{query}`: the search. */
   noMatch: 'No forms match this search. Try another word.',
   error: 'The forms didn’t load.',
   more: 'More forms',
-};
-
-export const ABOUT = {
-  title: 'About {name}',
-  lede: 'Who’s asking, and why.',
-  story: [
-    '{name} would rather ask than guess. These forms are how clients, collaborators and anyone curious about the work get in touch.',
-    'Whether you’re booking a slot, asking a question or saying how it went, a few minutes of your time helps get it right.',
-  ],
-  /** `{email}`: the contact email (Settings, Public site); hidden when there is none. */
-  write: 'Rather write? Email',
-  values: {
-    eyebrow: 'How we work',
-    title: 'What you can expect',
-    items: [
-      {title: 'Short by design', body: 'We only ask what we need, and each form says up front about how long it takes.'},
-      {title: 'Read by a person', body: 'Your answers are read, not filed away, and you’ll hear back when they need a reply.'},
-      {title: 'Your data, kept small', body: 'We ask only for what we need, and use it only to follow up on what you sent.'},
-    ],
-  },
-  cta: {
-    ready: 'Ready when you are.',
-    none: 'New forms land on the home page.',
-    button: 'Browse forms',
-  },
 };
 
 /** Privacy and Terms: their texts are written in Settings, Public site. */

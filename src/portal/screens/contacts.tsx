@@ -1,12 +1,13 @@
-import {useInfiniteQuery, useQuery} from '@tanstack/react-query';
+import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 
 import {
   CONTACT_SEGMENT_LABEL,
   CONTACT_SEGMENTS,
   CONTACT_SORT_LABEL,
   CONTACT_SORTS,
+  CONTACTS_PAGE_SIZES,
   type ContactRow,
   type ContactSort,
 } from '../../lib/intelform/api-contacts';
@@ -26,6 +27,7 @@ import {
 } from '../intelform/contacts/format';
 import {COLUMN_LABEL, COLUMNS, type ColumnId, useHiddenColumns} from '../intelform/contacts/prefs';
 import {Strip} from '../intelform/contacts/Strip';
+import {Pager, type PageTarget} from '../intelform/lib/Pager';
 import {useCan} from '../intelform/lib/can';
 import {useExport} from '../intelform/lib/exports';
 import {
@@ -39,8 +41,11 @@ import {
   DEFAULT_CONTACTS_STATE,
   defaultDir,
   isFiltered,
+  rememberContactsSize,
+  rememberedContactsSize,
   useDeleteContacts,
 } from '../intelform/queries/contacts';
+import {FIRST_PAGE, type PageNav} from '../intelform/queries/responses';
 import {ago, when} from '../shared';
 import {
   Avatar,
@@ -54,7 +59,6 @@ import {
   ErrorNote,
   Icon,
   IconButton,
-  LoadMore,
   Menu,
   type MenuItem,
   PageHeader,
@@ -103,27 +107,65 @@ export function Contacts() {
     return () => window.clearTimeout(t);
   }, [q, state.q, update]);
 
-  const list = useInfiniteQuery(contactsListQuery(state));
-  const overview = useQuery(contactsOverviewQuery);
-  const strip = overview.data?.strip;
-  const facets = overview.data?.facets;
-  const more = !!list.data?.pages.at(-1)?.nextCursor;
-  const exporter = useExport();
-  // A contact can move between pages while paging (a new response): show it once.
-  const rows = useMemo(() => {
-    if (!list.data) return undefined;
-    const seen = new Set<string>();
-    return list.data.pages.flatMap(p => p.contacts).filter(c => (seen.has(c.key) ? false : (seen.add(c.key), true)));
-  }, [list.data]);
+  // Numbered keyset pages with a rows-per-page choice: the same pager as the responses table.
+  const [size, setSize] = useState(rememberedContactsSize);
+  const [nav, setNav] = useState<PageNav>(FIRST_PAGE);
+  const [via, setVia] = useState<PageTarget | null>(null);
+  const topRef = useRef<HTMLDivElement>(null);
 
-  // Selection is cleared whenever the filters or sort change.
+  // Selection is cleared, and the list goes back to page 1, whenever the filters or sort change.
   const [selected, setSelected] = useState<Map<string, ContactRow>>(() => new Map());
   const stateSig = JSON.stringify(state);
   const [selectionSig, setSelectionSig] = useState(stateSig);
   if (stateSig !== selectionSig) {
     setSelectionSig(stateSig);
     setSelected(new Map());
+    setNav(FIRST_PAGE);
   }
+
+  const list = useQuery(contactsListQuery(state, size, nav));
+  const overview = useQuery(contactsOverviewQuery);
+  const strip = overview.data?.strip;
+  const facets = overview.data?.facets;
+  const exporter = useExport();
+  const data = list.data;
+  const rows = data?.contacts;
+  const settled = !!data && !list.isPlaceholderData;
+
+  // A page that came back empty or out of step (contacts deleted meanwhile): back to page 1.
+  useEffect(() => {
+    if (!settled || !data || nav.page === 1) return;
+    if (data.contacts.length === 0 || (nav.before && !data.prevCursor)) setNav(FIRST_PAGE);
+  }, [settled, data, nav]);
+
+  const page = nav.page;
+  const lastPage = !data || data.totalCapped ? null : Math.max(1, Math.ceil(data.total / size));
+  const pending = list.isPlaceholderData ? via : null;
+  const go = (to: PageTarget) => {
+    if (!data) return;
+    let next: PageNav;
+    if (to === 'first' || (to === 'prev' && (page <= 2 || !data.prevCursor))) next = FIRST_PAGE;
+    else if (to === 'prev') next = {page: page - 1, before: data.prevCursor!};
+    else if (to === 'next') {
+      if (!data.nextCursor) return;
+      next = {page: page + 1, cursor: data.nextCursor};
+    } else {
+      if (lastPage === null) return;
+      next = lastPage === 1 ? FIRST_PAGE : {page: lastPage, last: data.total - (lastPage - 1) * size};
+    }
+    setVia(to);
+    setNav(next);
+    // Back to the top of the table when the pager was clicked below it.
+    const top = topRef.current;
+    if (top && top.getBoundingClientRect().top < 0) top.scrollIntoView({block: 'start'});
+  };
+  const changeSize = (n: number) => {
+    setSize(n);
+    setNav(FIRST_PAGE);
+    rememberContactsSize(n);
+  };
+  const fromRow = rows?.length ? (page - 1) * size + 1 : 0;
+  const toRow = (page - 1) * size + (rows?.length ?? 0);
   const select = useCallback((targets: ContactRow[], on: boolean) => {
     setSelected(prev => {
       const next = new Map(prev);
@@ -272,7 +314,6 @@ export function Contacts() {
     <div className="app-page screen-contacts">
       <PageHeader
         title="Contacts"
-        description="Everyone who answered your forms, in one place."
         actions={
           rows && !noContacts ? (
             <Button
@@ -376,7 +417,7 @@ export function Contacts() {
           )}
 
           <Card flush>
-            <div aria-busy={list.isFetching || undefined} className={list.isPlaceholderData ? 'contacts-stale' : undefined}>
+            <div ref={topRef} aria-busy={list.isFetching || undefined} className={list.isPlaceholderData ? 'contacts-stale' : undefined}>
               <DataTable
                 caption="Contacts"
                 columns={columns}
@@ -406,7 +447,33 @@ export function Contacts() {
               />
             </div>
           </Card>
-          <LoadMore query={list} />
+          {data && (
+            <div className="list-foot">
+              <p className="muted list-count" aria-live="polite">
+                {data.total > data.contacts.length || page > 1 ? (
+                  <>
+                    Showing <strong>{formatNumber(fromRow)}–{formatNumber(toRow)}</strong> of{' '}
+                  </>
+                ) : null}
+                {formatNumber(data.total)}
+                {data.totalCapped ? '+' : ''} {data.total === 1 && !data.totalCapped ? 'contact' : 'contacts'}
+                {filtered && strip && data.total !== strip.total && ` (filtered from ${formatNumber(strip.total)})`}
+              </p>
+              {((strip?.total ?? data.total) > CONTACTS_PAGE_SIZES[0] || page > 1) && (
+                <Pager
+                  page={page}
+                  lastPage={lastPage}
+                  lastPageCapped={data.totalCapped}
+                  hasPrev={page > 1}
+                  hasNext={!!data.nextCursor}
+                  size={size}
+                  pending={pending}
+                  onGo={go}
+                  onSize={changeSize}
+                />
+              )}
+            </div>
+          )}
 
           {selected.size > 0 && (
             <div role="region" aria-label="Selection" className="contacts-bulk">
@@ -431,9 +498,6 @@ export function Contacts() {
             </div>
           )}
 
-          <p className="visually-hidden" role="status">
-            {rows ? `${plural(rows.length, 'contact')}${more ? '+' : ''} ${filtered ? 'found' : 'shown'}` : ''}
-          </p>
         </>
       )}
 

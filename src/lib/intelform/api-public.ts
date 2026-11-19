@@ -99,6 +99,11 @@ export const submitInput = z.object({
   unlockToken: z.string().max(400).optional(),
   /** One-response-per-browser token (cookie + localStorage); the server stores only its hash. */
   browserToken: z.string().max(100).optional(),
+  /**
+   * One random id per fill, kept across retries of that fill: a retry whose first try was saved
+   * answers success again instead of saving a second response.
+   */
+  submissionId: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
 })
 export type SubmitInput = z.infer<typeof submitInput>
 

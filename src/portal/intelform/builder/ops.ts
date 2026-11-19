@@ -23,10 +23,43 @@ export interface FieldDefaults {
   dateFormat?: string
 }
 
+/**
+ * A new question's starter title, so a form never shows "Untitled question" because nobody typed
+ * one. The builder selects it when the question is added, so typing replaces it.
+ */
+const STARTER_LABEL: Record<FieldType, string> = {
+  email: 'What’s your email?',
+  name: 'What’s your name?',
+  phone: 'What’s your phone number?',
+  address: 'What’s your address?',
+  country: 'Which country are you in?',
+  short_text: 'Your question here',
+  long_text: 'Tell us more',
+  number: 'Enter a number',
+  url: 'What’s your website?',
+  date: 'Pick a date',
+  time: 'Pick a time',
+  single_choice: 'Choose an option',
+  multiple_choice: 'Choose all that apply',
+  dropdown: 'Choose an option',
+  yes_no: 'Yes or no?',
+  picture_choice: 'Choose a picture',
+  rating: 'How would you rate us?',
+  nps: 'How likely are you to recommend us to a friend?',
+  signature: 'Please sign below',
+  consent: 'Do you agree?',
+  section_break: 'New section',
+}
+
+/** True while a question still has the starter title of its type (nobody has edited it). */
+export function hasStarterLabel(f: Pick<FormField, 'type' | 'label'>): boolean {
+  return f.label === STARTER_LABEL[f.type]
+}
+
 /** A new field with a sensible starting label. */
 export function createField(type: FieldType, defaults: FieldDefaults = {}): FormField {
   const f = newField(type) as FormField
-  f.label = type === 'section_break' ? 'New section' : ''
+  f.label = STARTER_LABEL[type]
   if (f.type === 'date' && (DATE_FORMATS as readonly string[]).includes(defaults.dateFormat ?? '')) {
     f.props.format = defaults.dateFormat as DateFormat
   }
@@ -92,6 +125,8 @@ export function changeType(def: FormDefinition, id: string, type: FieldType, fre
   if (i < 0) return null
   const src = def.fields[i]
   const next = structuredClone(changeFieldType(src, type)) as FormField
+  // An unedited starter title follows the new type ("What's your email?" is wrong on a phone).
+  if (hasStarterLabel(src)) next.label = STARTER_LABEL[type]
   if (!FIELD_TYPE_META[type].stores) delete next.requiredError
   if (freshId) {
     next.id = newFieldId()

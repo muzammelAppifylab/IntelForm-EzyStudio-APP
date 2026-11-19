@@ -7,8 +7,9 @@
  * Two kinds of file:
  * - IMAGES a team member picks for a form or the app (logo, favicon, question / picture-choice
  *   image, social preview image). Public: they show on public forms and pages. Editors only.
- * - SIGNATURES a respondent draws. Public with an unguessable id (as in the old app), stored as
- *   {url}; anonymous, rate limited, tied to one live form's signature field by a signed token.
+ * - SIGNATURES a respondent draws. PRIVATE: shown only through a route that checks
+ *   site:response:read (a fresh short link each time); uploaded anonymously, rate limited, tied to
+ *   one live form's signature field by a signed token.
  */
 
 export const IMAGE_PURPOSES = ['logo', 'favicon', 'image', 'og'] as const;
@@ -100,10 +101,13 @@ export const SIGNATURE_TOKEN_TTL_SECONDS = 60 * 60;
 
 /** Rate limits for anonymous signature uploads (per caller address block). */
 export const SIGNATURE_RATE = {
-  /** Per caller and form. */
-  perForm: {limit: 20, windowSeconds: 10 * 60},
+  /**
+   * Per caller and form. Generous on purpose: a caller is an address, and everyone on a school,
+   * office or event Wi-Fi shares one (the render token and the live-form check gate the rest).
+   */
+  perForm: {limit: 200, windowSeconds: 10 * 60},
   /** Per caller, all forms. */
-  perCaller: {limit: 60, windowSeconds: 60 * 60},
+  perCaller: {limit: 600, windowSeconds: 60 * 60},
 } as const;
 
 /** Rate limit for editors' image uploads (per user). The old app: 60 per 10 minutes. */

@@ -48,14 +48,7 @@ export function Templates() {
 
   return (
     <div className="app-page screen-templates">
-      <PageHeader
-        title="Templates"
-        description={
-          canUse
-            ? 'Start a form from a ready-made template, or from one your team saved.'
-            : 'Ready-made forms and the ones your team saved. Editors can start new forms from them.'
-        }
-      />
+      <PageHeader title="Templates" />
 
       {templates.isPending && <TemplateGridSkeleton count={6} />}
 

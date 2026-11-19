@@ -4,7 +4,7 @@ import {useEffect, useRef} from 'react';
 import {RichText} from '../../../respondent/rich/RichText';
 import {Button, DefinitionList, Drawer, ErrorNote, IconButton, LoadingBlock, Tooltip} from '../../ui';
 import {useCan} from '../lib/can';
-import {responseDetailQuery, responsesListQuery} from '../queries/responses';
+import {responseDetailQuery, responsesListPrefix, type ResponsesPage} from '../queries/responses';
 import {useConfirmDelete} from './ConfirmDelete';
 import {countryLabel, deviceLabel, formatDateTime, formatDuration, formatNumber} from './format';
 import {navKey, type TableState} from './state';
@@ -34,13 +34,18 @@ export function ResponseDrawer({
   const confirming = useRef(false);
   // While the next response loads, the previous one stays on screen (aria-busy).
   const detail = open ? data : undefined;
-  // "3 of 120" from the table rows already loaded (the server no longer counts per open).
+  // "3 of 120" from the table pages already loaded (the server no longer counts per open).
   const qc = useQueryClient();
-  const list = qc.getQueryData(responsesListQuery(formId, table).queryKey);
-  const first = list?.pages[0];
-  const index = detail && list ? list.pages.flatMap(p => p.rows).findIndex(r => r.id === detail.id) : -1;
-  const position =
-    index >= 0 && first ? `${formatNumber(index + 1)} of ${formatNumber(first.total)}${first.totalCapped ? '+' : ''} · ` : '';
+  const position = (() => {
+    if (!detail) return '';
+    for (const [, page] of qc.getQueriesData<ResponsesPage>({queryKey: responsesListPrefix(formId, table)})) {
+      const i = page?.rows.findIndex(r => r.id === detail.id) ?? -1;
+      if (!page || i < 0) continue;
+      const at = (page.page - 1) * page.pageSize + i;
+      return `${formatNumber(at + 1)} of ${formatNumber(page.total)}${page.totalCapped ? '+' : ''} · `;
+    }
+    return '';
+  })();
 
   useEffect(() => {
     if (!open || !detail) return;
@@ -124,7 +129,7 @@ export function ResponseDrawer({
                   <dt>{a.label}</dt>
                   <dd>
                     {a.type === 'signature' && a.url ? (
-                      <a href={a.url} target="_blank" rel="noreferrer" className="responses-signature">
+                      <a href={a.url} target="_blank" rel="noopener noreferrer" className="responses-signature">
                         <img src={a.url} alt={`Signature for “${a.label}”`} />
                       </a>
                     ) : a.html ? (

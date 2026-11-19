@@ -86,6 +86,38 @@
   stroke: var(--chart-1);
   stroke-width: 2;
 }
+/* Hover: each day's strip shows its guide line, a filled point and a label. Only the strip
+   catches the pointer, so the label never blocks the next day. */
+.screen-responses .responses-series-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.screen-responses .responses-series-hover > :not(.responses-series-hit) {
+  visibility: hidden;
+  pointer-events: none;
+}
+.screen-responses .responses-series-hover:hover > * {
+  visibility: visible;
+}
+.screen-responses .responses-series-guide {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.screen-responses .responses-series-dot-on {
+  fill: var(--chart-1);
+  stroke: var(--card);
+}
+.screen-responses .responses-series-tip {
+  fill: var(--chamber);
+}
+.screen-responses .responses-series-tip-text {
+  fill: var(--chamber-ink);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
 
 /* bars (choice rows, funnel) */
 .screen-responses .responses-bar {
@@ -497,17 +529,6 @@
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.screen-responses .responses-table-foot {
-  display: grid;
-  gap: 0.75rem;
-  justify-items: center;
-}
-.screen-responses .responses-count {
-  margin: 0;
-  font-size: 0.85rem;
-  font-variant-numeric: tabular-nums;
-}
-
 /* popovers: range, filter, columns */
 .screen-responses .responses-range-trigger {
   white-space: nowrap;

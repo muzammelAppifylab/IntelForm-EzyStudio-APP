@@ -204,8 +204,11 @@ describe('webhook URL', () => {
 
 describe('the list query and its keyset cursor', () => {
   it('falls back to the defaults on bad values', () => {
-    expect(listQuery.parse({})).toEqual({status: 'all', sort: 'updated'});
-    expect(listQuery.parse({status: 'gone', sort: 'random', q: '  zeta '})).toEqual({status: 'all', sort: 'updated', q: 'zeta'});
+    expect(listQuery.parse({})).toEqual({status: 'all', sort: 'updated', size: 24});
+    expect(listQuery.parse({status: 'gone', sort: 'random', q: '  zeta '})).toEqual({status: 'all', sort: 'updated', q: 'zeta', size: 24});
+    // Only the pager's sizes; a bad last / page is dropped.
+    expect(listQuery.parse({size: '48', last: '5', page: '3'})).toMatchObject({size: 48, last: 5, page: 3});
+    expect(listQuery.parse({size: '1000', last: '0', page: '-1'})).toEqual({status: 'all', sort: 'updated', size: 24});
   });
 
   it('round-trips each sort order', () => {

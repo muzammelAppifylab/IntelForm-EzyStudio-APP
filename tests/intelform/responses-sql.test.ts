@@ -9,6 +9,7 @@ import {buildPart, type BuildContext, type BuildState} from '../../src/server/in
 import {decodeCursor, encodeCursor, sortSpec} from '../../src/server/intelform/responses/query';
 import {formSummary} from '../../src/server/intelform/responses/summary';
 import {deleteResponses, listResponses, responseDetail} from '../../src/server/intelform/responses/table';
+import {syncFormCounts} from '../../src/server/intelform/forms/counts';
 
 /**
  * The Responses SQL against a real Postgres holding the sample data (prisma/seed.sql): every
@@ -155,7 +156,7 @@ describe.skipIf(!URL_)('responses SQL on the sample data', () => {
     expect(zip.readUInt32LE(zip.length - 22)).toBe(0x06054b50);
   });
 
-  it('deletes and keeps the counter in step (rolled back)', async () => {
+  it('deletes; the exact count moves at once and the copy with the sync (rolled back)', async () => {
     const db = getDb();
     const cat = (await loadCatalog(db, CONTACT))!;
     const page = await listResponses(db, cat, {
@@ -170,6 +171,10 @@ describe.skipIf(!URL_)('responses SQL on the sample data', () => {
         const t = tx as unknown as PrismaClient;
         const r = await deleteResponses(t, CONTACT, [...ids, '00000000-0000-4000-8000-0000000000ff']);
         expect(r).toEqual({formFound: true, deleted: 2});
+        // The exact count (form_counts, kept by the delete trigger) moves at once…
+        expect((await loadCatalog(t, CONTACT))!.form.responseCount).toBe(cat.form.responseCount - 2);
+        // …and the copy on forms with the every-minute sync, last_response_at moving back too.
+        await syncFormCounts(t);
         const [form] = await t.$queryRaw<{response_count: number; last: Date | null}[]>`
           SELECT response_count, last_response_at AS last FROM forms WHERE id = ${CONTACT}::uuid`;
         expect(form.response_count).toBe(cat.form.responseCount - 2);

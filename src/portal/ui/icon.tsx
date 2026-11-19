@@ -138,6 +138,18 @@ const ICONS = {
   ),
   'chevron-down': <path d="m6 9 6 6 6-6" />,
   'chevron-right': <path d="m9 18 6-6-6-6" />,
+  'chevrons-left': (
+    <>
+      <path d="m11 17-5-5 5-5" />
+      <path d="m18 17-5-5 5-5" />
+    </>
+  ),
+  'chevrons-right': (
+    <>
+      <path d="m6 17 5-5-5-5" />
+      <path d="m13 17 5-5-5-5" />
+    </>
+  ),
   'chevrons-up-down': (
     <>
       <path d="m7 15 5 5 5-5" />

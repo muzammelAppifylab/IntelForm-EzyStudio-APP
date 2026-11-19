@@ -3,6 +3,7 @@
  * src/layouts/App.astro AFTER app.css (so a screen's scoped rule wins over the kit's).
  * Each file is owned by its screen; add a new area as a new file and one line here.
  */
+@import './pager.css';
 @import './overview.css';
 @import './forms.css';
 @import './templates.css';

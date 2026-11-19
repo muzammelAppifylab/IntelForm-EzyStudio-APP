@@ -7,7 +7,7 @@ import type * as z from 'zod';
 
 export const ARRAY_KEYS = new Set(['form', 'country', 'has', 'key']);
 export const FILTER_KEYS = ['q', 'segment', 'form', 'country', 'has', 'from', 'to', 'tz', 'min', 'max', 'sort', 'dir'];
-export const LIST_KEYS = [...FILTER_KEYS, 'cursor'];
+export const LIST_KEYS = [...FILTER_KEYS, 'cursor', 'before', 'last', 'size'];
 export const CSV_KEYS = [...FILTER_KEYS, 'key'];
 
 export type Parsed<T> = {ok: true; data: T} | {ok: false; message: string; fields: Record<string, string>};

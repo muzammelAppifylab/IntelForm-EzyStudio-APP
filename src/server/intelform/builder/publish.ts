@@ -1,9 +1,11 @@
 import type {FormStatus, PublishResponse} from '../../../lib/intelform/api-forms';
-import type {Prisma} from '../../../generated/prisma/client';
+import {Prisma} from '../../../generated/prisma/client';
+import {exactResponsesSql} from '../forms/counts';
+import {writeCatalogAtPublish} from '../responses/catalog';
 import {publishCheck, readTheme} from './draft';
 import {formGone} from './errors';
 
-type Tx = Pick<Prisma.TransactionClient, '$queryRaw'>;
+type Tx = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
 
 interface PublishRow {
   draft: unknown;
@@ -16,6 +18,9 @@ interface PublishRow {
   published_version_id: string | null;
 }
 
+/** The exact response count for the header the answer updates (forms.response_count is a minute-old copy). */
+const EXACT_COUNT = exactResponsesSql(Prisma.sql`forms.id`);
+
 /**
  * Publish: copies the draft and theme into a new `form_versions` row (1, 2, 3… per form) and
  * makes it the live version. Runs inside the caller's transaction (plain, or `idempotent()` when
@@ -24,6 +29,9 @@ interface PublishRow {
  *
  * Idempotent on its own too: when nothing changed since the live version (no unpublished
  * changes), a repeat answers the live version instead of writing an identical one.
+ *
+ * The field catalog the responses screens and exports read (form_catalogs) is updated in the
+ * same transaction from the previous one (responses/catalog.ts `writeCatalogAtPublish`).
  *
  * Refusals throw a 422 BuilderError (`invalid_input` with fields, `empty_form`, or
  * `logic_issues` with `issues`), which rolls the transaction back.
@@ -35,7 +43,7 @@ export async function publishInTx(tx: Tx, formId: string, userId: number): Promi
   // snapshot, so the join comes back empty, the "nothing changed" check fails and it writes an
   // identical duplicate version (pushing mid-form respondents past the one-version grace).
   const [row] = await tx.$queryRaw<PublishRow[]>`
-    SELECT draft, theme, settings, status, revision, response_count, has_unpublished,
+    SELECT draft, theme, settings, status, revision, ${EXACT_COUNT} AS response_count, has_unpublished,
       published_version_id::text AS published_version_id
     FROM forms
     WHERE id = ${formId}::uuid
@@ -68,6 +76,8 @@ export async function publishInTx(tx: Tx, formId: string, userId: number): Promi
       ${JSON.stringify(readTheme(row.theme))}::jsonb, ${userId}::int
     FROM form_versions WHERE form_id = ${formId}::uuid
     RETURNING id::text AS id, version, published_at`;
+  // The responses catalog (form_catalogs) moves on with it, merged in O(fields), same transaction.
+  await writeCatalogAtPublish(tx, formId, row.published_version_id, version!, checked.definition.fields);
   const [after] = await tx.$queryRaw<{revision: number; response_count: number}[]>`
     UPDATE forms SET
       published_version_id = ${version!.id}::uuid,
@@ -77,7 +87,7 @@ export async function publishInTx(tx: Tx, formId: string, userId: number): Promi
       updated_by = ${userId},
       updated_at = now()
     WHERE id = ${formId}::uuid
-    RETURNING revision, response_count`;
+    RETURNING revision, ${EXACT_COUNT} AS response_count`;
   return {
     version: version!.version,
     publishedAt: new Date(version!.published_at).toISOString(),

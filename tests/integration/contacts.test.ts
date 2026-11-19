@@ -6,6 +6,7 @@ import {app} from '../../src/server/app';
 import '../../src/server/background';
 import {CATALOGUE, PERMISSIONS} from '../../src/server/permissions';
 import {encodeContactCursor} from '../../src/server/intelform/contacts/sql';
+import {syncFormCounts} from '../../src/server/intelform/forms/counts';
 import {type Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
@@ -143,7 +144,7 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
       const all = await keys(`sort=${sort}&dir=asc`);
       const ada = (await db.contact.findUniqueOrThrow({where: {key: all[0]!}, select: {lastSeen: true, firstSeen: true, name: true, email: true, n: true}}));
       const v = {name: ada.name?.toLowerCase() ?? null, last_seen: ada.lastSeen.toISOString(), first_seen: ada.firstSeen.toISOString(), email: ada.email, responses: String(ada.n)}[sort];
-      const cursor = encodeContactCursor({v, t: ada.lastSeen.toISOString(), k: all[0]!});
+      const cursor = encodeContactCursor({v, k: all[0]!});
       expect(await keys(`sort=${sort}&dir=asc&cursor=${cursor}`), sort).toEqual(all.slice(1));
     }
     expect((await editor.get('/site-api/contacts?min=3&max=2')).status).toBe(422);
@@ -186,6 +187,10 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     const res = await editor.post('/site-api/contacts/delete', {keys: ['e:ada@example.com', 'e:nobody@example.com']});
     expect(res.status).toBe(200);
     expect(res.json).toEqual({contacts: 1, responses: 2});
+    // The delete trigger keeps form_counts exact; the copy on forms follows with the minute sync.
+    const exact = await db.formCount.groupBy({by: ['formId'], where: {formId: {in: [survey.id, signup.id]}}, _sum: {responses: true}});
+    expect(Object.fromEntries(exact.map(e => [e.formId, e._sum.responses]))).toEqual({[survey.id]: 2, [signup.id]: 0});
+    await syncFormCounts(db);
     const counts = await db.form.findMany({where: {id: {in: [survey.id, signup.id]}}, select: {id: true, responseCount: true, lastResponseAt: true}});
     const byId = Object.fromEntries(counts.map(c => [c.id, c]));
     expect(byId[survey.id]!.responseCount).toBe(2);

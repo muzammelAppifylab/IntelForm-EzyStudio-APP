@@ -1,14 +1,11 @@
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
-import {type FormEvent, useState} from 'react';
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
+import {type FormEvent, useEffect, useRef, useState} from 'react';
 
 import type {AdminUser} from '../../lib/types';
 import {api, read} from '../api';
 import {AddUserDrawer} from './add-user';
+import {Pager, type PageTarget} from '../intelform/lib/Pager';
+import {formatNumber} from '../intelform/responses/format';
 import {rolesQuery, usersQuery} from '../queries';
 import {ago, useMe, when} from '../shared';
 import {
@@ -21,7 +18,6 @@ import {
   EmptyState,
   ErrorNote,
   LoadingBlock,
-  LoadMore,
   Menu,
   Notice,
   type MenuItem,
@@ -44,7 +40,9 @@ const STATUS_FILTERS: {value: StatusFilter; label: string}[] = [
 ];
 
 /**
- * `/users` (site:user:read): every account, newest first, keyset-paged.
+ * `/users` (site:user:read): every account, newest first, 25 a page with the dashboard's pager
+ * (keyset: the admin API sends only the next page's start and no total, so there is no last page
+ * or page-size choice; Previous and First reuse the starts already walked).
  * Find one by its exact email. Actions need site:user:update; the server
  * refuses anything that would act on someone with more access than you.
  */
@@ -63,7 +61,36 @@ export function Users() {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [adding, setAdding] = useState(false);
 
-  const users = useInfiniteQuery(usersQuery(filter));
+  // befores[i] is where page i + 1 starts ('' = the newest). A new filter starts over.
+  const [befores, setBefores] = useState<string[]>(['']);
+  const [via, setVia] = useState<PageTarget | null>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const filterSig = JSON.stringify(filter);
+  const [seenSig, setSeenSig] = useState(filterSig);
+  if (filterSig !== seenSig) {
+    setSeenSig(filterSig);
+    setBefores(['']);
+  }
+  const page = befores.length;
+  const users = useQuery(usersQuery(filter, befores.at(-1)));
+  // A page that came back empty (people removed meanwhile): back to page 1.
+  const emptyLater = !!users.data && !users.isPlaceholderData && page > 1 && users.data.users.length === 0;
+  useEffect(() => {
+    if (emptyLater) setBefores(['']);
+  }, [emptyLater]);
+  const nextBefore = users.data?.nextBefore;
+  const go = (to: PageTarget) => {
+    if (to === 'first') setBefores(['']);
+    else if (to === 'prev') setBefores(b => (b.length > 1 ? b.slice(0, -1) : b));
+    else if (to === 'next') {
+      if (!nextBefore) return;
+      setBefores(b => [...b, String(nextBefore)]);
+    } else return;
+    setVia(to);
+    // Back to the top of the table when the pager was clicked below it.
+    const top = topRef.current;
+    if (top && top.getBoundingClientRect().top < 0) top.scrollIntoView({block: 'start'});
+  };
   // Role names for the badges; only people who may see roles can read them.
   const roles = useQuery({...rolesQuery, enabled: Boolean(abilities?.manageRoles)});
   const roleNames = new Map(roles.data?.roles.map(role => [role.slug, role.name]));
@@ -95,7 +122,10 @@ export function Users() {
     (endSessions.isPending && endSessions.variables) ||
     (disableTwoFactor.isPending && disableTwoFactor.variables) ||
     null;
-  const rows = users.data?.pages.flatMap(page => page.users);
+  const rows = users.data?.users;
+  const pageSize = 25;
+  const fromRow = rows?.length ? (page - 1) * pageSize + 1 : 0;
+  const toRow = (page - 1) * pageSize + (rows?.length ?? 0);
 
   const search = (event: FormEvent) => {
     event.preventDefault();
@@ -284,7 +314,6 @@ export function Users() {
     <div className="app-page screen-users">
       <PageHeader
         title="Users"
-        description="Everyone with an account on this site. Add people yourself, or let them sign up."
         actions={
           abilities?.inviteUsers && (
             <Button icon="user-plus" onClick={() => setAdding(true)}>
@@ -319,48 +348,72 @@ export function Users() {
       </div>
 
       <Card flush>
-        <DataTable
-          caption="Users"
-          columns={columns}
-          rows={rows}
-          rowKey={user => user.id}
-          loading={users.isPending}
-          error={users.error}
-          busyKey={busyId}
-          empty={
-            filtered ? (
-              <EmptyState
-                icon="search"
-                title={filter.email ? 'No user has that email' : 'No users match'}
-                action={
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setEmail('');
-                      setFilter({email: '', status: ''});
-                    }}>
-                    Show everyone
-                  </Button>
-                }>
-                {filter.email
-                  ? 'Check the spelling: the search needs the whole address.'
-                  : 'Try another status.'}
-              </EmptyState>
-            ) : (
-              <EmptyState
-                icon="users"
-                title="No users yet"
-                action={
-                  abilities?.inviteUsers && <Button onClick={() => setAdding(true)}>Add user</Button>
-                }>
-                People show here once they sign up or you add them.
-              </EmptyState>
-            )
-          }
-        />
+        <div ref={topRef} className={users.isPlaceholderData ? 'list-stale' : undefined} aria-busy={users.isFetching || undefined}>
+          <DataTable
+            caption="Users"
+            columns={columns}
+            rows={rows}
+            rowKey={user => user.id}
+            loading={users.isPending}
+            error={users.error}
+            busyKey={busyId}
+            empty={
+              filtered ? (
+                <EmptyState
+                  icon="search"
+                  title={filter.email ? 'No user has that email' : 'No users match'}
+                  action={
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setEmail('');
+                        setFilter({email: '', status: ''});
+                      }}>
+                      Show everyone
+                    </Button>
+                  }>
+                  {filter.email
+                    ? 'Check the spelling: the search needs the whole address.'
+                    : 'Try another status.'}
+                </EmptyState>
+              ) : (
+                <EmptyState
+                  icon="users"
+                  title="No users yet"
+                  action={
+                    abilities?.inviteUsers && <Button onClick={() => setAdding(true)}>Add user</Button>
+                  }>
+                  People show here once they sign up or you add them.
+                </EmptyState>
+              )
+            }
+          />
+        </div>
       </Card>
       {users.error && rows?.length ? <ErrorNote error={users.error} /> : null}
-      <LoadMore query={users} />
+      {rows && rows.length > 0 ? (
+        <div className="list-foot">
+          <p className="muted list-count" aria-live="polite">
+            {page === 1 && !nextBefore ? (
+              `${formatNumber(rows.length)} ${rows.length === 1 ? 'user' : 'users'}`
+            ) : (
+              <>
+                Showing <strong>{formatNumber(fromRow)}–{formatNumber(toRow)}</strong> {filtered ? 'matching users' : 'users'}
+              </>
+            )}
+          </p>
+          {(nextBefore || page > 1) && <Pager
+            page={page}
+            lastPage={nextBefore ? null : page}
+            lastPageCapped={false}
+            hasPrev={page > 1}
+            hasNext={!!nextBefore}
+            size={pageSize}
+            pending={users.isPlaceholderData ? via : null}
+            onGo={go}
+          />}
+        </div>
+      ) : null}
 
       {adding && (
         <AddUserDrawer

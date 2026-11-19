@@ -6,7 +6,6 @@ import {
   daysSummary,
   deleteMatches,
   formatRate,
-  formsSubtitle,
   groupByCategory,
   layoutIcon,
   layoutLabel,
@@ -58,15 +57,16 @@ describe('forms list helpers', () => {
     expect(formsListPath({q: 'a&b', status: 'all', sort: 'updated'})).toBe('/site-api/forms?q=a%26b');
   });
 
+  it('asks for a numbered page: before / last, the page number and a non-default size', () => {
+    expect(formsListPath(DEFAULT_FORMS_FILTER, null, {page: 3, before: 'xyz'}, 48)).toBe('/site-api/forms?before=xyz&page=3&size=48');
+    expect(formsListPath(DEFAULT_FORMS_FILTER, null, {page: 5, last: 7})).toBe('/site-api/forms?last=7&page=5');
+    expect(formsListPath(DEFAULT_FORMS_FILTER, null, {page: 2, cursor: 'c'})).toBe('/site-api/forms?cursor=c&page=2');
+  });
+
   it('words the empty result', () => {
     expect(noMatchText('', 'closed')).toEqual({title: 'No closed forms', body: 'You have no closed forms.'});
     expect(noMatchText('x', 'live').title).toBe('No forms match');
     expect(noMatchText('x', 'all').body).toMatch(/another search/);
-  });
-
-  it('says how many forms and how many are live', () => {
-    expect(formsSubtitle(undefined)).toMatch(/Every form/);
-    expect(formsSubtitle({all: 1, live: 0, draft: 1, closed: 0})).toBe('1 form · 0 live');
   });
 
   it('checks the typed title like the server (trimmed, exact)', () => {

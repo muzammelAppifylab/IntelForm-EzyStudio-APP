@@ -148,9 +148,9 @@ describe('the /forms/ list page', () => {
   });
 
   it('says how many forms are open', () => {
-    expect(formsCountText(0)).toBe('Nothing is open right now. Check back soon.');
-    expect(formsCountText(1)).toBe('1 open form. Pick one to get started.');
-    expect(formsCountText(3)).toBe('3 open forms. Pick one to get started.');
+    expect(formsCountText(0)).toBe('No forms are listed here right now.');
+    expect(formsCountText(1)).toBe('1 open form.');
+    expect(formsCountText(3)).toBe('3 open forms.');
   });
 
   it('links a form to its public page', () => {
@@ -174,13 +174,12 @@ describe('legal pages', () => {
 });
 
 describe('sitemap', () => {
-  const pages = ['/', '/about/', '/blog/', '/forms/', '/privacy/', '/terms/'];
+  const pages = ['/', '/blog/', '/forms/', '/privacy/', '/terms/'];
 
   it('lists the public site only while it may be indexed, and legal pages once written', () => {
     const data = {indexing: true, hasPrivacy: true, hasTerms: false, forms: [{slug: 'contact-us', lastmod: '2026-01-02T00:00:00.000Z'}]};
     expect(sitemapPaths(pages, data)).toEqual([
       {path: '/'},
-      {path: '/about/'},
       {path: '/blog/'},
       {path: '/forms/'},
       {path: '/privacy/'},

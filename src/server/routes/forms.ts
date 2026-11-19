@@ -29,12 +29,12 @@ import {
   listQuery,
   normalizeDraft,
   notFound,
-  PAGE_SIZE,
   readSettings,
   readTheme,
   repairOrBlank,
   savedTemplateSlug,
 } from '../intelform/forms/core';
+import {sumShards} from '../intelform/forms/counts';
 import {fail, formIdParam, zodJson} from '../intelform/forms/http';
 import {
   closeForm,
@@ -46,7 +46,7 @@ import {
   reopenForm,
 } from '../intelform/forms/store';
 import {clearPublicSiteCache} from '../intelform/public-site/data';
-import {clearPublicFormCache} from '../intelform/respondent/cache';
+import {clearPublicFormCache, clearPublicFormCacheFor} from '../intelform/respondent/cache';
 import {findBuiltinTemplate} from '../intelform/templates/builtins';
 import {scheduleFileCleanup} from '../intelform/uploads/trash';
 import {clearSummaryCache} from '../intelform/responses/summary';
@@ -88,14 +88,16 @@ export const formsRoutes = new Hono()
     withDb,
     async c => {
       const query = c.req.valid('query');
-      const page = await listForms(c.var.db, query, decodeCursor(query.cursor, query.sort));
-      return c.json<FormsListResponse & {nextCursor: string | null}>({
+      const cursor = decodeCursor(query.cursor, query.sort);
+      const page = await listForms(c.var.db, query, cursor, cursor ? null : decodeCursor(query.before, query.sort));
+      return c.json<FormsListResponse>({
         forms: page.forms,
         total: page.total,
         matched: page.matched,
         page: page.page,
-        pageSize: PAGE_SIZE,
+        pageSize: page.pageSize,
         nextCursor: page.nextCursor,
+        prevCursor: page.prevCursor,
       });
     }
   )
@@ -213,7 +215,9 @@ export const formsRoutes = new Hono()
           revision: true,
           publishedVersionId: true,
           hasUnpublished: true,
-          responseCount: true,
+          // The exact count (the header compares it right after a delete): the form's
+          // form_counts shards (at most 16) in the same query, summed below.
+          counts: {select: {responses: true}, take: 16},
           createdAt: true,
           updatedAt: true,
           publishedVersion: {select: {version: true, publishedAt: true}},
@@ -241,7 +245,7 @@ export const formsRoutes = new Hono()
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       updatedBy: row.updatedBy ? {id: row.updatedBy.id, name: row.updatedBy.name} : null,
-      counts: {...countFields(draft), responses: row.responseCount},
+      counts: {...countFields(draft), responses: sumShards(row.counts)},
     });
   })
 
@@ -251,7 +255,7 @@ export const formsRoutes = new Hono()
       const {id} = c.req.valid('param');
       const result = await closeForm(c.var.db, id, c.var.viewer.id!);
       await logActivity(c, 'form_closed', ['form', id]);
-      await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
+      await Promise.all([clearPublicSiteCache(), clearPublicFormCacheFor(c.var.db, id)]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
       return fail(c, err);
@@ -263,7 +267,7 @@ export const formsRoutes = new Hono()
       const {id} = c.req.valid('param');
       const result = await reopenForm(c.var.db, id, c.var.viewer.id!);
       await logActivity(c, 'form_reopened', ['form', id]);
-      await Promise.all([clearPublicSiteCache(), clearPublicFormCache()]);
+      await Promise.all([clearPublicSiteCache(), clearPublicFormCacheFor(c.var.db, id)]);
       return c.json<FormStatusResponse>(result);
     } catch (err) {
       return fail(c, err);

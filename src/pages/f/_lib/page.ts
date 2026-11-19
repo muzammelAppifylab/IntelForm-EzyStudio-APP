@@ -10,8 +10,8 @@ import {type EmbedOptions, embedQuery} from '../../../respondent/embed';
 import {themeFontFiles} from '../../../respondent/fonts';
 import {styleHash, themeCss} from '../../../respondent/theme-css';
 import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
-import {payloadForSlug, SLUG_RE, type Db} from '../../../server/intelform/respondent/load';
-import {hit, retryAfter} from '../../../server/intelform/respondent/rate-limit';
+import {SLUG_RE, type Db} from '../../../server/intelform/respondent/load';
+import {limitedPayload, PUBLIC_GET_RATE_LIMIT} from '../../../server/intelform/respondent/page';
 
 /**
  * Server half of the public form page (src/pages/f/[slug].astro): which state the slug is in,
@@ -21,10 +21,11 @@ import {hit, retryAfter} from '../../../server/intelform/respondent/rate-limit';
  * Files under `src/pages/**` whose name starts with `_` are not routes.
  */
 
-/** Page loads per caller per minute; the JSON read (/site-api/public/forms/:slug) shares the key. */
-export const PUBLIC_GET_RATE_LIMIT = 300;
-export const PUBLIC_GET_WINDOW = 60;
-export const publicGetKey = (ipKey: string) => `public-form:${ipKey}`;
+/**
+ * Page loads per caller per minute; the JSON read (/site-api/public/forms/:slug) shares the key
+ * and the limit (src/server/intelform/respondent/page.ts).
+ */
+export {PUBLIC_GET_RATE_LIMIT};
 
 export type FormPageState =
   | {kind: 'form'; payload: PublicFormLive | PublicFormLocked}
@@ -52,11 +53,11 @@ export async function loadFormPage({db, secret, slug, ip, now = Date.now()}: Loa
   if (!SLUG_RE.test(clean)) return {kind: 'missing'};
   if (!db || !secret) return {kind: 'unavailable'};
   try {
-    // The limit and the form in one trip (the form usually comes from the Site Cache).
-    const ipKey = await ipKeyFor(secret, ip);
-    const [count, payload] = await Promise.all([hit(db, publicGetKey(ipKey), PUBLIC_GET_WINDOW), payloadForSlug(db, secret, clean)]);
-    if (count > PUBLIC_GET_RATE_LIMIT) return {kind: 'limited', retryAfter: retryAfter(PUBLIC_GET_WINDOW, now)};
-    return stateOf(payload);
+    // The form from the Site Cache, then ONE statement: the limit's hit and, for a capped form,
+    // its exact count. A cache miss reads the form first (one more trip).
+    const out = await limitedPayload(db, secret, await ipKeyFor(secret, ip), clean, null, now);
+    if (out.kind === 'limited') return {kind: 'limited', retryAfter: out.retryAfter};
+    return stateOf(out.payload);
   } catch {
     return {kind: 'unavailable'};
   }
@@ -153,6 +154,10 @@ export interface PageCsp {
  * the template's `X-Frame-Options: DENY` in every current browser (CSP Level 2+: when
  * frame-ancestors is present, X-Frame-Options is ignored).
  */
-export function allowFraming(csp: PageCsp | undefined): void {
+export function allowFraming(csp: PageCsp | undefined, headers?: Headers): void {
   csp?.insertDirective('frame-ancestors *');
+  // Astro sends this page's CSP as a <meta> tag, and browsers IGNORE frame-ancestors in a meta
+  // CSP, so the template's `X-Frame-Options: DENY` header would still block every embed. A real
+  // CSP header carrying only frame-ancestors makes browsers ignore X-Frame-Options (CSP Level 2+).
+  headers?.set('Content-Security-Policy', 'frame-ancestors *');
 }

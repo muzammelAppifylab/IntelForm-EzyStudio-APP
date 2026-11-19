@@ -210,6 +210,18 @@ export interface DeliverOptions {
   responseId: string
   /** Tests: the fetch to use. */
   fetchImpl?: typeof fetch
+  /**
+   * The form's webhook settings and secret, already read by the caller (the notify drain reads
+   * each form once per run, so a busy form isn't read again per response). A secret created on
+   * first use is written back into this object. Omitted: read here.
+   */
+  form?: WebhookFormRow | null
+}
+
+/** What a delivery needs from the form's row. */
+export interface WebhookFormRow {
+  settings: unknown
+  webhookSecret: string | null
 }
 
 /**
@@ -218,7 +230,7 @@ export interface DeliverOptions {
  * is turned off.
  */
 export async function deliverWebhook(db: PrismaClient, formId: string, payload: unknown, opts: DeliverOptions): Promise<DeliveryResult> {
-  const form = await db.form.findUnique({ where: { id: formId }, select: { settings: true, webhookSecret: true } })
+  const form = opts.form !== undefined ? opts.form : await db.form.findUnique({ where: { id: formId }, select: { settings: true, webhookSecret: true } })
   if (!form) throw new WebhookError(404, 'not_found', 'That form no longer exists')
   const cfg = readWebhookConfig(form.settings)
   if (!cfg.url) throw new WebhookError(422, 'webhook_not_configured', 'Add a webhook URL first')
@@ -226,6 +238,7 @@ export async function deliverWebhook(db: PrismaClient, formId: string, payload: 
 
   const secret = await ensureWebhookSecret(db, formId, form.webhookSecret)
   if (!secret) throw new WebhookError(404, 'not_found', 'That form no longer exists')
+  form.webhookSecret = secret
   const webhookId = newWebhookId(opts.responseId)
   const out = await postSigned({ url: cfg.url, headers: cfg.headers, secret, webhookId, payload }, { fetchImpl: opts.fetchImpl })
 
@@ -283,16 +296,81 @@ export async function deliveredOnce(db: PrismaClient, responseId: string): Promi
   return !!row
 }
 
-/** Keeps the newest KEEP_DELIVERIES_PER_FORM log rows per form (bounded: 5000 rows a call). */
-export async function trimWebhookDeliveries(db: PrismaClient): Promise<number> {
-  return db.$executeRaw`
-    DELETE FROM webhook_deliveries d
-    USING (
-      SELECT id FROM (
-        SELECT id, row_number() OVER (PARTITION BY form_id ORDER BY created_at DESC, id DESC) AS n FROM webhook_deliveries
-      ) ranked WHERE n > ${KEEP_DELIVERIES_PER_FORM}
-      LIMIT 5000
-    ) old
-    WHERE d.id = old.id
+/** Log rows older than this go whatever the form (the builder shows the newest few). */
+export const WEBHOOK_LOG_KEEP_DAYS = 30
+/** Forms whose log grew lately: those that had a delivery in this window (the hourly job + slack). */
+const TRIM_RECENT = '3 hours'
+/** Forms trimmed per statement, and rows per form per statement. */
+const TRIM_FORMS = 50
+const TRIM_PER_FORM = 2000
+/** Rows per statement of the age trim. */
+const TRIM_BATCH = 5000
+
+export interface TrimResult {
+  rows: number
+  more: boolean
+}
+
+/**
+ * Keeps the delivery log bounded, in short statements within `budgetMs`:
+ *
+ *   1. by age: rows older than WEBHOOK_LOG_KEEP_DAYS, oldest first, on the created_at index;
+ *   2. by form: the newest KEEP_DELIVERIES_PER_FORM rows of each form that had a delivery in the
+ *      last few hours (one read of the created_at index), each form an OFFSET on its own
+ *      (form_id, created_at DESC, id DESC) index, 50 forms a statement. Never a window function
+ *      over the whole table.
+ */
+export async function trimWebhookDeliveries(
+  db: Pick<PrismaClient, '$executeRaw' | '$queryRaw'>,
+  opts: { budgetMs?: number; now?: () => number } = {},
+): Promise<TrimResult> {
+  const now = opts.now ?? Date.now
+  const until = now() + (opts.budgetMs ?? 10_000)
+  let rows = 0
+
+  for (;;) {
+    const n = await db.$executeRaw`
+      DELETE FROM webhook_deliveries WHERE ctid = ANY(ARRAY(
+        SELECT ctid FROM webhook_deliveries
+        WHERE created_at < now() - make_interval(days => ${WEBHOOK_LOG_KEEP_DAYS}::int)
+        ORDER BY created_at
+        LIMIT ${TRIM_BATCH}
+      ))
+    `
+    rows += n
+    if (n < TRIM_BATCH) break
+    if (now() >= until) return { rows, more: true }
+  }
+
+  const recent = await db.$queryRaw<{ form_id: string }[]>`
+    SELECT DISTINCT form_id::text AS form_id FROM webhook_deliveries WHERE created_at > now() - ${TRIM_RECENT}::interval LIMIT 5000
   `
+  const forms = recent.map((r) => r.form_id)
+  for (let i = 0; i < forms.length; ) {
+    if (now() >= until) return { rows, more: true }
+    const chunk = forms.slice(i, i + TRIM_FORMS)
+    const [r] = await db.$queryRaw<{ deleted: number; full: boolean }[]>`
+      WITH old AS (
+        SELECT f.form_id, d.id FROM unnest(${chunk}::uuid[]) AS f(form_id)
+        CROSS JOIN LATERAL (
+          SELECT w.id FROM webhook_deliveries w WHERE w.form_id = f.form_id
+          ORDER BY w.created_at DESC, w.id DESC
+          OFFSET ${KEEP_DELIVERIES_PER_FORM} LIMIT ${TRIM_PER_FORM}
+        ) d
+      ),
+      -- A success row is the response's "webhook sent" marker while its other steps still retry:
+      -- keep it until the response leaves the notify queue, or the retry would send it again.
+      gone AS (
+        DELETE FROM webhook_deliveries w WHERE w.id IN (SELECT id FROM old)
+          AND NOT (w.response_id IS NOT NULL AND EXISTS (SELECT 1 FROM intelform_notify_queue q WHERE q.response_id = w.response_id))
+        RETURNING w.form_id
+      )
+      SELECT (SELECT count(*) FROM gone)::int AS deleted,
+        COALESCE((SELECT max(n) FROM (SELECT count(*) AS n FROM gone GROUP BY form_id) c), 0) >= ${TRIM_PER_FORM} AS full
+    `
+    rows += Number(r?.deleted ?? 0)
+    // A form with more than TRIM_PER_FORM extra rows: the same chunk again (the others are done).
+    if (!r?.full) i += TRIM_FORMS
+  }
+  return { rows, more: false }
 }

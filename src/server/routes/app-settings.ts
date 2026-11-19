@@ -1,7 +1,7 @@
 import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
-import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {can, problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {type AppSettingsPatch, appSettingsPatch} from '../../lib/intelform/settings-app';
 import {checkPatch, loadSettingsView, saveAppSettings} from '../intelform/settings/settings';
 import {fieldErrorsOf} from '../intelform/settings/view';
@@ -36,6 +36,10 @@ export const appSettingsRoutes = new Hono()
   })
   .patch('/', patchBody, withViewer, requireAuth, requirePermission(PERMISSIONS.APP_SETTINGS), withDb, async c => {
     const patch = c.req.valid('json');
+    // Retention deletes responses: only someone who may delete them can shorten it.
+    if ((patch as {data?: {retentionDays?: unknown}}).data?.retentionDays !== undefined && !(await can(c as unknown as Parameters<typeof can>[0], PERMISSIONS.RESPONSE_DELETE))) {
+      return c.json(problem('forbidden', 'You need permission to delete responses to change how long they are kept.'), 403);
+    }
     const db = c.var.db;
     const fields = await checkPatch(db, patch);
     if (Object.keys(fields).length) {

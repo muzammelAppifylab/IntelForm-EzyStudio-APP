@@ -63,7 +63,7 @@ export function LinkSection() {
       title="Link"
       description={status === 'draft' ? 'The link works once you publish the form. Until then visitors see “not found”.' : undefined}
       actions={
-        <a className={buttonClass({variant: 'secondary', size: 'sm'})} href={url} target="_blank" rel="noreferrer">
+        <a className={buttonClass({variant: 'secondary', size: 'sm'})} href={url} target="_blank" rel="noopener noreferrer">
           <Icon name="external" size={16} />
           Open
         </a>

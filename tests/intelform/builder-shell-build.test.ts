@@ -49,6 +49,9 @@ describe('publish checks', () => {
     expect(publishProblems(def([]))).toEqual([{message: 'Add at least one question before you publish.'}]);
     expect(publishProblems(def([section()]))).toHaveLength(1);
     expect(publishProblems(def([name()]))).toEqual([]);
+    const untitled = newField('short_text', {id: 'f_blank', label: '  '});
+    expect(publishProblems(def([untitled]))).toEqual([{message: 'Question 1 has no title. Add one so people know what to answer.', fieldId: 'f_blank'}]);
+    expect(publishProblems(def([name(), newField('section_break', {id: 'f_s', label: ''})]))).toEqual([]);
   });
 
   it('lists broken logic with the field it is on', () => {

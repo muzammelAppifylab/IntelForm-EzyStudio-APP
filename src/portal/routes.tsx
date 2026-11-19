@@ -30,8 +30,8 @@ import {
 import {AccountMenu, ThemeMenu} from './account-menu';
 import {useMe, useSite} from './shared';
 import {appSettingsQuery} from './intelform/queries/app-settings';
-import {contactsListQuery, contactsOverviewQuery, DEFAULT_CONTACTS_STATE} from './intelform/queries/contacts';
-import {DEFAULT_FORMS_FILTER, formsListQuery, formsStripQuery, recentFormsQuery} from './intelform/queries/forms';
+import {contactsListQuery, contactsOverviewQuery, DEFAULT_CONTACTS_STATE, rememberedContactsSize} from './intelform/queries/contacts';
+import {DEFAULT_FORMS_FILTER, formsListQuery, formsStripQuery, recentFormsQuery, rememberedFormsSize} from './intelform/queries/forms';
 import {templatesQuery} from './intelform/queries/templates';
 import {
   Button,
@@ -41,7 +41,6 @@ import {
   Icon,
   IconButton,
   type IconName,
-  initials,
   LoadingBlock,
   ToastProvider,
 } from './ui';
@@ -244,7 +243,9 @@ function Shell() {
       {!fullPage && (
       <aside className="app-sidebar" aria-label="Sidebar">
         <a className="app-brand" href="/">
-          <span className="app-brand-mark">{logo ? <img src={logo} alt="" /> : initials(name) || '·'}</span>
+          <span className={logo ? 'app-brand-mark' : 'app-brand-mark is-default'}>
+            <img src={logo || '/brand/mark.svg'} alt="" />
+          </span>
           <span className="app-brand-name">{name}</span>
         </a>
         <nav className="app-nav" aria-label="Dashboard">
@@ -345,7 +346,7 @@ const formsRoute = createRoute({
   path: '/forms',
   staticData: {title: 'Forms'},
   loader: ({context: {queryClient}}) =>
-    warm(queryClient.ensureInfiniteQueryData(formsListQuery(DEFAULT_FORMS_FILTER)), queryClient.ensureQueryData(formsStripQuery)),
+    warm(queryClient.ensureQueryData(formsListQuery(DEFAULT_FORMS_FILTER, rememberedFormsSize())), queryClient.ensureQueryData(formsStripQuery)),
   component: lazyRouteComponent(() => import('./screens/forms'), 'Forms'),
 });
 const templatesRoute = createRoute({
@@ -361,7 +362,7 @@ const contactsRoute = createRoute({
   staticData: {title: 'Contacts'},
   loader: ({context: {queryClient}}) =>
     warm(
-      queryClient.ensureInfiniteQueryData(contactsListQuery(DEFAULT_CONTACTS_STATE)),
+      queryClient.ensureQueryData(contactsListQuery(DEFAULT_CONTACTS_STATE, rememberedContactsSize())),
       queryClient.ensureQueryData(contactsOverviewQuery)
     ),
   component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
@@ -426,7 +427,7 @@ const usersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/users',
   staticData: {title: 'Users'},
-  loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(usersQuery({email: '', status: ''}))),
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(usersQuery({email: '', status: ''}))),
   component: lazyRouteComponent(() => import('./screens/users'), 'Users'),
 });
 const rolesRoute = createRoute({

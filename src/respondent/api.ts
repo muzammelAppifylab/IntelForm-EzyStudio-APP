@@ -7,19 +7,23 @@ import type {
   UNLOCK_HEADER as UnlockHeader,
   UnlockResponse,
 } from '../lib/intelform/api-public';
-import {siteFetch} from '../platform/browser';
-
 /**
  * The respondent's network calls to the Site API's public form routes
  * (`/site-api/public/forms/:slug`, src/server/routes/public-forms.ts). No router, no query
- * cache, no dashboard code. Writes go through `siteFetch` (it sends the CSRF token the Site API
- * requires on every write).
+ * cache, no dashboard code.
+ *
+ * A plain same-origin `fetch`, not `siteFetch`, on purpose: these routes are anonymous and
+ * mounted BEFORE `csrf` (the form runs in other websites' iframes, where the CSRF cookie is never
+ * stored), so there is no session to carry and no CSRF token to fetch first. Every write instead
+ * carries the page's render token in RENDER_HEADER, which the server checks against the form.
  *
  * Same value as UNLOCK_HEADER in src/lib/intelform/api-public.ts (the literal type keeps them in
  * step). Not imported at runtime: that module builds zod schemas, which would pull zod into the
  * respondent bundle.
  */
 const UNLOCK_HEADER: typeof UnlockHeader = 'x-intelform-unlock';
+/** Same value as RENDER_HEADER in src/server/routes/public-forms.ts (a test keeps them equal). */
+export const RENDER_HEADER = 'x-intelform-render';
 
 export const PUBLIC_FORMS_API = '/site-api/public/forms';
 export const publicFormPath = (slug: string) => `${PUBLIC_FORMS_API}/${encodeURIComponent(slug)}`;
@@ -47,10 +51,17 @@ export function normalizeFields(fields: ApiErrorBody['fields'] | null | undefine
   return out;
 }
 
-async function call<T>(url: string, init: RequestInit): Promise<T> {
+/** `fetch` for the respondent routes: this site only, with the render token on writes. */
+export function respondentFetch(url: string, init: RequestInit = {}, renderToken?: string | null): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (renderToken) headers.set(RENDER_HEADER, renderToken);
+  return fetch(url, {...init, headers, credentials: 'same-origin'});
+}
+
+async function call<T>(url: string, init: RequestInit, renderToken?: string | null): Promise<T> {
   let res: Response;
   try {
-    res = await siteFetch(url, init);
+    res = await respondentFetch(url, init, renderToken);
   } catch {
     throw new PublicApiError(0, null);
   }
@@ -65,25 +76,25 @@ export function fetchForm(slug: string, unlockToken?: string | null): Promise<Pu
   return call(publicFormPath(slug), {headers: unlockToken ? {[UNLOCK_HEADER]: unlockToken} : undefined});
 }
 
-export function unlockForm(slug: string, password: string): Promise<UnlockResponse> {
-  return call(`${publicFormPath(slug)}/unlock`, {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({password})});
+/** `renderToken`: the one the locked form came with (the server checks it before the password). */
+export function unlockForm(slug: string, password: string, renderToken: string): Promise<UnlockResponse> {
+  return call(`${publicFormPath(slug)}/unlock`, {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({password})}, renderToken);
 }
 
 export function submitResponse(slug: string, input: SubmitInput): Promise<SubmitResponse> {
-  return call(`${publicFormPath(slug)}/responses`, {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(input)});
+  return call(`${publicFormPath(slug)}/responses`, {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(input)}, input.renderToken);
 }
 
 /**
  * Funnel event ("view" / "start"), fire and forget. A keepalive fetch rather than sendBeacon:
- * a beacon cannot carry the CSRF header every Site API write needs.
+ * a beacon cannot carry the render-token header.
  */
-export function sendEvent(slug: string, type: FormEventType, session: string): void {
-  void siteFetch(`${publicFormPath(slug)}/events`, {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({type, session}),
-    keepalive: true,
-  }).catch(() => {});
+export function sendEvent(slug: string, type: FormEventType, session: string, renderToken: string): void {
+  void respondentFetch(
+    `${publicFormPath(slug)}/events`,
+    {method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({type, session}), keepalive: true},
+    renderToken
+  ).catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +124,27 @@ export function newUuid(): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const h = Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/** A submit id: 16 random bytes, base64url (22 characters; the server accepts 16–64 of [A-Za-z0-9_-]). */
+export function newSubmissionId(): string {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * The id of the fill in progress. Every try of the same fill sends the same id (a failed or
+ * lost submit, pressed again), so the server saves it once; only a saved fill starts a new one.
+ */
+export class FillId {
+  #id: string | null = null;
+  get(): string {
+    return (this.#id ??= newSubmissionId());
+  }
+  /** The fill was saved: the next one gets a new id. */
+  done(): void {
+    this.#id = null;
+  }
 }
 
 /** One uuid per form per browser session, for view/start dedupe. */

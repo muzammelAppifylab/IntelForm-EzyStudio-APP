@@ -3,6 +3,7 @@ import {Link} from '@tanstack/react-router';
 import {FORM_STATUS_LABEL, type FormsStrip} from '../../../lib/intelform/api-forms';
 import {Card, Skeleton, StatCard} from '../../ui';
 import {useAbilities} from '../lib/can';
+import {formatDay} from '../responses/format';
 import {barHeights, daysSummary, formatCount, formatRate, plural, weekday, weekTrend} from './format';
 
 /** The three numbers of the week: responses (against last week), live forms, average completion. */
@@ -34,12 +35,16 @@ export function WeekStats({strip}: {strip: FormsStrip | undefined}) {
   );
 }
 
-/** Responses per day for the last 7 days (SVG bars, today highlighted, numbers for screen readers). */
+/**
+ * Responses per day for the last 7 days: one column per day, each its own SVG bar (sized by SVG
+ * attributes, CSP: no inline style), today highlighted. Hovering a column lights its bar and shows
+ * the day and its count; screen readers get the same numbers from the caption.
+ */
 export function DayBars({days}: {days: FormsStrip['days']}) {
   if (days.length === 0) return <p className="muted">No data yet.</p>;
   const {top, heights} = barHeights(days);
-  const slot = 100 / days.length;
   const today = days.at(-1);
+  const last = days.length - 1;
   return (
     <figure className="if-day-bars">
       <figcaption className="visually-hidden">{daysSummary(days)}</figcaption>
@@ -54,27 +59,30 @@ export function DayBars({days}: {days: FormsStrip['days']}) {
           <span>{top / 2}</span>
           <span>0</span>
         </span>
-        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="if-day-bars-svg">
-          <line x1="0" x2="100" y1="0.5" y2="0.5" className="if-grid-dash" vectorEffect="non-scaling-stroke" />
-          <line x1="0" x2="100" y1="50" y2="50" className="if-grid-dash" vectorEffect="non-scaling-stroke" />
-          <line x1="0" x2="100" y1="99.5" y2="99.5" className="if-grid-base" vectorEffect="non-scaling-stroke" />
-          {heights.map((h, i) => (
-            <rect
-              key={days[i]!.date}
-              x={i * slot + slot * 0.18}
-              width={slot * 0.64}
-              y={100 - h}
-              height={h}
-              rx={1}
-              className={i === days.length - 1 ? 'if-bar if-bar-today' : 'if-bar'}
-            />
-          ))}
-        </svg>
+        <div className="if-day-bars-area">
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="if-day-bars-grid">
+            <line x1="0" x2="100" y1="0.5" y2="0.5" className="if-grid-dash" vectorEffect="non-scaling-stroke" />
+            <line x1="0" x2="100" y1="50" y2="50" className="if-grid-dash" vectorEffect="non-scaling-stroke" />
+            <line x1="0" x2="100" y1="99.5" y2="99.5" className="if-grid-base" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div className="if-day-bars-cols">
+            {days.map((d, i) => (
+              <div key={d.date} className="if-day-col" data-today={i === last ? '' : undefined}>
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="if-day-col-svg">
+                  <rect x={18} width={64} y={100 - heights[i]!} height={heights[i]} rx={3} className={i === last ? 'if-bar if-bar-today' : 'if-bar'} />
+                </svg>
+                <span className="if-day-tip">
+                  {i === last ? 'Today' : `${weekday(d.date)} ${formatDay(d.date)}`} · {plural(d.count, 'response')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
       <ol className="if-day-bars-labels" aria-hidden="true">
         {days.map((d, i) => (
-          <li key={d.date} data-today={i === days.length - 1 ? '' : undefined}>
-            {i === days.length - 1 ? 'Today' : weekday(d.date)}
+          <li key={d.date} data-today={i === last ? '' : undefined}>
+            {i === last ? 'Today' : weekday(d.date)}
           </li>
         ))}
       </ol>

@@ -1,5 +1,9 @@
 {
   "lists": {
+    "intelform-every-minute": {
+      "retries": 0,
+      "concurrency": 5
+    },
     "intelform-response-notify": {
       "retries": 4,
       "concurrency": 10
@@ -30,14 +34,17 @@
     }
   },
   "schedules": {
+    "intelform-every-minute": {
+      "every": "minute",
+      "label": "IntelForm: send response notifications and webhooks, refresh form counts and summaries"
+    },
     "intelform-retention": {
-      "every": "day",
-      "at": "04:30",
+      "cron": "30 * * * *",
       "label": "IntelForm: delete responses past the retention period"
     },
     "intelform-maintenance": {
       "every": "hour",
-      "label": "IntelForm: close forms past their close date, trim logs"
+      "label": "IntelForm: close forms past their close date, owner digests, trim logs and old counts"
     }
   }
 }

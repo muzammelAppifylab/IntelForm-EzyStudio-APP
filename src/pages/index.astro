@@ -1,25 +1,25 @@
 ---
 /**
- * The home page: the creator's public forms hub (legacy src/pages/public/HomePage.tsx). Who you
- * are, the forms open right now, how it works and how to reach you.
+ * The root address: a quiet front desk. People arrive here from a form that was shared or
+ * embedded (they clicked the brand, or cut the link back), or the owner and team come to sign in.
+ * It says whose forms these are and stops: no hero, no pitch, nothing asking anyone to fill in
+ * more. If the owner listed forms (each form's Share tab, "Show on the homepage") they appear as a
+ * plain list; otherwise one line says forms are shared by link. Sign in lives in the footer.
  *
- * RENDERED PER VISIT, not prerendered: its forms, contact email, description, social image and
- * whether search engines may index it change in the dashboard without a Publish, and crawlers and
- * link previews must see them in the HTML. It reads no visitor (the header fills the visitor in, in
- * the browser, like a static page), so it may be kept by browsers and caches for a minute, and its
- * data comes from the Site Cache (src/server/intelform/public-site/data.ts): usually no query.
+ * RENDERED PER VISIT, not prerendered: the listed forms, contact email, description, social image
+ * and whether search engines may index it change in the dashboard without a Publish. It reads no
+ * visitor (the footer fills the visitor in, in the browser, like a static page), so it may be kept
+ * a minute, and its data comes from the Site Cache (src/server/intelform/public-site/data.ts).
  *
- * Words in `HOME`, `src/content/site.ts`; styles in src/components/public-site/public-site.css.
+ * Words in `HOME`, src/content/site.ts; styles in src/styles/home.css.
  */
 import '../styles/home.css';
-import '../components/public-site/public-site.css';
 
-import FormCard from '../components/public-site/FormCard.astro';
-import FormPreview from '../components/public-site/FormPreview.astro';
+import BrandMark from '../components/BrandMark.astro';
 import SiteIcon from '../components/public-site/SiteIcon.astro';
 import {HOME, SITE, withName} from '../content/site';
 import Base from '../layouts/Base.astro';
-import type {PublicHome} from '../lib/intelform/api-front';
+import {minutesLabel, type PublicHome} from '../lib/intelform/api-front';
 import type {Site} from '../lib/types';
 import {GUEST} from '../platform/auth';
 import {backend, read} from '../server/backend';
@@ -28,11 +28,10 @@ import {formHref, HOME_FORMS} from '../server/intelform/public-site/shape';
 export const prerender = false;
 
 // Both in-process (src/server/backend.ts), at once. No `pageContext`: the page never reads the
-// visitor, so one copy serves everyone; `isStatic` below lets the header fill them in.
+// visitor, so one copy serves everyone; `isStatic` below lets the footer fill them in.
 const api = backend(Astro.request);
 const [brand, home] = await Promise.all([read<{site: Site | null}>(api.site.$get()), read<PublicHome>(api['public-site'].home.$get())]);
 const site = brand?.site ?? null;
-const viewer = GUEST;
 const name = site?.name ?? 'IntelForm';
 
 if (home) {
@@ -47,145 +46,75 @@ if (home) {
 }
 
 const forms = home?.forms ?? [];
-const only = forms.length === 1 ? forms[0]! : null;
-const more = forms.length > HOME_FORMS;
+const shown = forms.slice(0, HOME_FORMS);
 const contactEmail = home?.contactEmail ?? '';
-const description = home?.description || withName(SITE.description, name);
-const empty = contactEmail ? HOME.forms.emptyWithEmail.replace('{email}', contactEmail) : HOME.forms.empty;
+// The owner's own words (Settings, Public site) under the name; never our filler.
+const about = home?.description.trim() ?? '';
+const description = about || withName(SITE.description, name);
 ---
 
-<Base site={site} viewer={viewer} isStatic description={description} image={home?.ogImage ?? null} noindex={!home || !home.indexing}>
-  <main id="main" tabindex="-1" class="home ps">
-    <section class="home-hero" aria-labelledby="hero-title">
-      <div class="wrap home-hero-grid">
-        <div class="home-hero-copy">
-          <h1 id="hero-title" data-brand-text="{name}">{name}</h1>
-          <p class="home-lede">{HOME.hero.body}</p>
-          <div class="home-actions">
-            {
-              only ? (
-                <a class="button home-button-lg" href={formHref(only.slug)}>
-                  {only.title}
-                  <SiteIcon name="arrow-right" size={18} />
+<Base site={site} viewer={GUEST} isStatic bare description={description} image={home?.ogImage ?? null} noindex={!home || !home.indexing}>
+  <main id="main" tabindex="-1" class="desk">
+    <div class="desk-inner">
+      <header class="desk-head">
+        <BrandMark site={site} size={56} />
+        <h1 data-brand-text="{name}">{name}</h1>
+        {about && <p class="desk-about">{about}</p>}
+      </header>
+
+      {
+        !home ? (
+          <p class="desk-note" role="alert">
+            {HOME.error}
+          </p>
+        ) : forms.length === 0 ? (
+          <p class="desk-note" data-brand-text={HOME.byLink}>
+            {withName(HOME.byLink, name)}
+          </p>
+        ) : (
+          <>
+            <p class="desk-note">{HOME.listed}</p>
+            <section class="desk-forms" aria-labelledby="forms-title">
+              <h2 id="forms-title" class="desk-label">
+                {HOME.formsHeading}
+              </h2>
+              <ul class="desk-list">
+                {shown.map(form => (
+                  <li>
+                    <a class="desk-row" href={formHref(form.slug)}>
+                      <span class="desk-row-text">
+                        <span class="desk-row-title">{form.title}</span>
+                        {form.description && <span class="desk-row-desc">{form.description}</span>}
+                      </span>
+                      {form.minutes ? (
+                        <span class="desk-row-time">
+                          <SiteIcon name="clock" size={14} />
+                          <span class="desk-sr">{minutesLabel(form.minutes)}</span>
+                          <span aria-hidden="true">{form.minutes} min</span>
+                        </span>
+                      ) : null}
+                      <SiteIcon name="arrow-right" size={16} class="desk-row-go" />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              {forms.length > shown.length && (
+                <a class="desk-all" href="/forms/" data-astro-prefetch>
+                  {HOME.seeAll.replace('{count}', String(forms.length))}
                 </a>
-              ) : (
-                forms.length > 0 && (
-                  <a class="button home-button-lg" href="#forms-title">
-                    {HOME.hero.seeForms}
-                    <SiteIcon name="arrow-right" size={18} />
-                  </a>
-                )
-              )
-            }
-            <a class="button ghost home-button-lg" href="/about/" data-astro-prefetch>{HOME.hero.about}</a>
-          </div>
-        </div>
-        <div class="home-hero-visual">
-          <FormPreview />
-        </div>
-      </div>
-    </section>
+              )}
+            </section>
+          </>
+        )
+      }
 
-    <section class="home-section" aria-labelledby="forms-title">
-      <div class="wrap">
-        <div class="home-head home-head-row">
-          <div>
-            <p class="home-eyebrow">{HOME.forms.eyebrow}</p>
-            <h2 id="forms-title">{HOME.forms.title}</h2>
-          </div>
-          {
-            more && (
-              <a class="home-more" href="/forms/" data-astro-prefetch>
-                {HOME.forms.seeAll.replace('{count}', String(forms.length))}
-                <SiteIcon name="arrow-up-right" size={16} />
-              </a>
-            )
-          }
-        </div>
-        {
-          !home ? (
-            <p class="notice" role="alert">
-              The forms didn’t load. Refresh the page to try again.
-            </p>
-          ) : forms.length === 0 ? (
-            <p class="ps-empty">{empty}</p>
-          ) : (
-            <ul class="ps-cards">
-              {forms.slice(0, HOME_FORMS).map((form, i) => (
-                <FormCard form={form} index={i} />
-              ))}
-            </ul>
-          )
-        }
-        <ul class="ps-facts" aria-label={HOME.goodToKnow.label}>
-          <li>
-            <SiteIcon name="user-x" size={16} />
-            {HOME.goodToKnow.noAccount}
-          </li>
-          <li>
-            <SiteIcon name="monitor-smartphone" size={16} />
-            {HOME.goodToKnow.anyDevice}
-          </li>
-          {
-            home?.hasPrivacy && (
-              <li>
-                <SiteIcon name="shield-check" size={16} />
-                <a href="/privacy/" data-astro-prefetch>
-                  {HOME.goodToKnow.privacy}
-                </a>
-              </li>
-            )
-          }
-        </ul>
-      </div>
-    </section>
-
-    <section class="home-section home-band" id="how" aria-labelledby="how-title">
-      <div class="wrap">
-        <div class="home-head">
-          <p class="home-eyebrow">{HOME.how.eyebrow}</p>
-          <h2 id="how-title">{HOME.how.title}</h2>
-        </div>
-        <ol class="home-steps">
-          {
-            HOME.how.steps.map((step, i) => (
-              <li class="home-step">
-                <span class="home-step-num">{String(i + 1).padStart(2, '0')}</span>
-                <h3>{step.title}</h3>
-                <p>{step.body}</p>
-              </li>
-            ))
-          }
-        </ol>
-      </div>
-    </section>
-
-    <section class="home-section home-section-last" aria-labelledby="about-title">
-      <div class:list={['wrap', 'ps-about', {'ps-about-split': contactEmail}]}>
-        <div class="ps-about-copy">
-          <p class="home-eyebrow">{HOME.about.eyebrow}</p>
-          <h2 id="about-title">{HOME.about.title}</h2>
-          <p class="home-sub" data-brand-text={HOME.about.body}>{withName(HOME.about.body, name)}</p>
-          <a class="home-more" href="/about/" data-astro-prefetch>
-            <span data-brand-text={HOME.about.link}>{withName(HOME.about.link, name)}</span>
-            <SiteIcon name="arrow-up-right" size={16} />
-          </a>
-        </div>
-        {
-          contactEmail && (
-            <div class="ps-contact">
-              <span class="ps-contact-icon">
-                <SiteIcon name="mail" size={20} />
-              </span>
-              <h3>{HOME.contact.title}</h3>
-              <p class="muted">{HOME.contact.body}</p>
-              <a class="ps-contact-email" href={`mailto:${contactEmail}`}>
-                {contactEmail}
-              </a>
-            </div>
-          )
-        }
-      </div>
-    </section>
+      {
+        contactEmail && (
+          <p class="desk-contact">
+            {HOME.contact} <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+          </p>
+        )
+      }
+    </div>
   </main>
 </Base>

@@ -501,6 +501,12 @@ model Form {
   tablePrefs        ResponseTablePref[]
   presence          FormPresence[]
   responseHours     FormResponseHour[]
+  counts            FormCount[]
+  capRow            FormCap?
+  catalog           FormCatalog?
+  summaryState      FormSummaryState?
+  summaryDays       FormSummaryDay[]
+  notifyHours       IntelformNotifyHour[]
   exports           IntelformExport[]
 
   @@index([updatedAt(sort: Desc), id(sort: Desc)])
@@ -572,6 +578,9 @@ model Response {
   ttc           Json?     @db.JsonB
   /// One response per email: the normalised address of the checked answer (partial unique index in SQL).
   emailKey      String?   @map("email_key") @db.VarChar(254)
+  /// One id per fill, made by the browser and kept across retries: a retried submit is saved once
+  /// (partial unique index responses_submission_key in SQL).
+  submissionId  String?   @map("submission_id") @db.VarChar(64)
   /// Filled by the trigger, never by code.
   contactEmail  String?   @map("contact_email") @db.VarChar(254)
   contactName   String?   @map("contact_name") @db.VarChar(200)
@@ -581,8 +590,14 @@ model Response {
   form              Form              @relation(fields: [formId], references: [id], onDelete: Cascade)
   formVersion       FormVersion       @relation(fields: [formVersionId], references: [id], onDelete: Cascade)
   webhookDeliveries WebhookDelivery[]
+  notifyQueue       IntelformNotifyQueue?
 
   @@index([formId, submittedAt(sort: Desc), id(sort: Desc)])
+  /// Table sorts by completion time, device, browser and country (keyset, NULLS LAST in SQL).
+  @@index([formId, durationMs, id])
+  @@index([formId, device, id])
+  @@index([formId, browser, id])
+  @@index([formId, country, id])
   @@index([formVersionId])
   @@index([submittedAt])
   /// Substring search (ILIKE) on search_text. Needs pg_trgm (created in the migration).
@@ -613,13 +628,53 @@ model FormEvent {
 model FormEventCount {
   formId String   @map("form_id") @db.Uuid
   bucket DateTime @db.Timestamptz(3)
+  /// 0–15, as FormResponseHour: readers sum the shards.
+  shard  Int      @default(0) @db.SmallInt
   views  Int      @default(0)
   starts Int      @default(0)
 
   form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
 
-  @@id([formId, bucket])
+  @@id([formId, bucket, shard])
+  @@index([bucket])
   @@map("form_event_counts")
+}
+
+/// A form's all-time counters in 16 shards, so a burst of submits and "start" beacons never
+/// queues on one row. Responses and last_response_at are kept by the responses_rollups_*
+/// triggers (SQL); starts by the events route. Exact value = sum over the form's shards; a shard
+/// may go negative after deletes. forms.response_count / starts_total / last_response_at are a
+/// copy refreshed every minute (the forms list sorts on them).
+model FormCount {
+  formId         String    @map("form_id") @db.Uuid
+  shard          Int       @db.SmallInt
+  responses      Int       @default(0)
+  starts         Int       @default(0)
+  lastResponseAt DateTime? @map("last_response_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([formId, shard])
+  @@map("form_counts")
+}
+
+/// Responses whose notification, confirmation and webhook are still to be sent. Written in the
+/// same statement as the response; worked through by the every-minute job (one job a minute,
+/// however many responses arrive), never one job per response.
+model IntelformNotifyQueue {
+  responseId String    @id @map("response_id") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Set while a drain run works on it; a claim older than a few minutes is taken again.
+  claimedAt  DateTime? @map("claimed_at") @db.Timestamptz(3)
+  attempts   Int       @default(0)
+  /// When the drain may take it: now for a new row, after its back-off for a failed one (set by the claim).
+  nextAt     DateTime  @default(now()) @map("next_at") @db.Timestamptz(3)
+
+  response Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([nextAt])
+  @@map("intelform_notify_queue")
 }
 
 /// Responses per form per hour, kept by the responses_rollups_* triggers (SQL). The dashboard
@@ -627,11 +682,14 @@ model FormEventCount {
 model FormResponseHour {
   formId String   @map("form_id") @db.Uuid
   hour   DateTime @db.Timestamptz(3)
+  /// 0–15: each insert statement adds to one shard, so busy forms don't queue on one row.
+  /// Readers sum the shards (a shard may go negative after deletes; the sum is exact).
+  shard  Int      @default(0) @db.SmallInt
   n      Int      @default(0)
 
   form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
 
-  @@id([formId, hour])
+  @@id([formId, hour, shard])
   @@index([hour])
   @@map("form_response_hours")
 }
@@ -650,10 +708,10 @@ model Contact {
   formIds   String[]  @default([]) @map("form_ids") @db.Uuid
   formCount Int       @default(0) @map("form_count")
 
-  @@index([lastSeen(sort: Desc), key], map: "contacts_last_seen_idx")
-  @@index([firstSeen(sort: Desc), lastSeen(sort: Desc), key], map: "contacts_first_seen_idx")
-  @@index([email, lastSeen(sort: Desc), key], map: "contacts_email_idx")
-  @@index([n(sort: Desc), lastSeen(sort: Desc), key], map: "contacts_n_idx")
+  @@index([lastSeen, key], map: "contacts_last_seen_key_idx")
+  @@index([firstSeen, key], map: "contacts_first_seen_key_idx")
+  @@index([email, key], map: "contacts_email_key_idx")
+  @@index([n, key], map: "contacts_n_key_idx")
   @@index([country], map: "contacts_country_idx")
   @@index([formIds], map: "contacts_form_ids_idx", type: Gin)
   @@map("contacts")
@@ -687,6 +745,10 @@ model IntelformExport {
   fileName    String    @map("file_name") @db.VarChar(200)
   contentType String    @map("content_type") @db.VarChar(60)
   error       String?   @db.VarChar(300)
+  /// The next run's job key is `export-<id>-<runs>`.
+  runs        Int       @default(0)
+  /// A run's send was refused (jobs limit): the every-minute job sends it (resendPendingExports).
+  sendPending Boolean   @default(false) @map("send_pending")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
 
@@ -852,7 +914,7 @@ model IntelformRateLimit {
   count         Int      @default(1)
 
   @@id([key, windowStart])
-  @@index([windowStart])
+  /// Swept on the expression index intelform_rate_limits_window_end_idx (SQL only).
   @@map("intelform_rate_limits")
 }
 
@@ -900,4 +962,92 @@ model IntelformSettings {
 
   @@index([updatedById])
   @@map("intelform_settings")
+}
+
+/// A capped form's slots ("first N people"): `taken` is kept by statement triggers on responses
+/// (SQL), so a capped submit is ONE statement whose target row re-checks `taken < cap` exactly.
+model FormCap {
+  formId String @id @map("form_id") @db.Uuid
+  cap    Int
+  taken  Int    @default(0)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@map("form_caps")
+}
+
+/// The responses catalog (every field a form ever had, without descriptions), merged at publish:
+/// the table, Summary and exports read one row instead of every version.
+model FormCatalog {
+  formId    String   @id @map("form_id") @db.Uuid
+  versionId String?  @map("version_id") @db.Uuid
+  catalog   Json
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@map("form_catalogs")
+}
+
+/// Summary rollup progress per form (app time zone, generation, watermark). SQL functions and
+/// triggers in the summary_days migration.
+model FormSummaryState {
+  formId        String    @id @map("form_id") @db.Uuid
+  tz            String    @db.VarChar(64)
+  gen           Int       @default(1)
+  wmAt          DateTime? @map("wm_at") @db.Timestamptz(3)
+  wmId          String?   @map("wm_id") @db.Uuid
+  evWm          DateTime? @map("ev_wm") @db.Timestamptz(3)
+  fields        Json      @default("{}") @db.JsonB
+  fieldsVersion String?   @map("fields_version") @db.Uuid
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@map("form_summary_state")
+}
+
+/// Summary totals per form per day / month, kept by refreshSummaryRollups and the delete trigger.
+model FormSummaryDay {
+  formId  String   @map("form_id") @db.Uuid
+  gen     Int
+  grain   String   @db.Char(1)
+  day     DateTime @db.Date
+  fieldId String   @map("field_id") @db.VarChar(64)
+  kind    String   @db.Char(1)
+  key     String   @db.VarChar(64)
+  n       Int
+  s       Decimal? @db.Decimal
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([formId, gen, grain, day, fieldId, kind, key])
+  @@map("form_summary_days")
+}
+
+/// Per form per hour: responses counted for the team notification, those waiting for (and covered
+/// by) the hourly digest, confirmations sent and held back by the hourly cap.
+model IntelformNotifyHour {
+  formId        String   @map("form_id") @db.Uuid
+  hour          DateTime @db.Timestamptz(3)
+  notified      Int      @default(0)
+  digestPending Int      @default(0) @map("digest_pending")
+  digestSent    Int      @default(0) @map("digest_sent")
+  confirmed     Int      @default(0)
+  confirmCapped Int      @default(0) @map("confirm_capped")
+
+  form Form @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@id([formId, hour])
+  @@index([hour])
+  @@map("intelform_notify_hours")
+}
+
+/// "This step of this job already happened" (notify), swept on expires_at.
+model IntelformDoneMarker {
+  key       String   @id @db.VarChar(200)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("intelform_done_markers")
 }

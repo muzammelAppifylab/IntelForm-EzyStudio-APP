@@ -206,8 +206,6 @@ export interface PublicFormSettings {
   passwordRequired: boolean
   onePerBrowser: boolean
   afterSubmit: AfterSubmit
-  redirectUrl: string | null
-  redirectAppendAnswers: boolean
   stepSound: StepSound
   seoTitle: string
   seoDescription: string
@@ -221,8 +219,7 @@ export function publicSettings(settings: FormSettings): PublicFormSettings {
     passwordRequired: !!settings.passwordHash,
     onePerBrowser: settings.onePerBrowser,
     afterSubmit: settings.afterSubmit,
-    redirectUrl: settings.afterSubmit === 'redirect' ? settings.redirectUrl : null,
-    redirectAppendAnswers: settings.redirectAppendAnswers,
+    // The redirect address is never sent before a submit: it comes back in the submit's answer.
     stepSound: settings.stepSound,
     seoTitle: settings.seoTitle,
     seoDescription: settings.seoDescription,

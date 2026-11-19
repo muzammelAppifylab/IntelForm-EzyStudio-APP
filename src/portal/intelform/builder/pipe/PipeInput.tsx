@@ -28,6 +28,8 @@ export interface PipeInputProps {
   invalid?: boolean;
   onFocus?(): void;
   autoFocus?: boolean;
+  /** With autoFocus: select the whole text (see PipeEditor). */
+  selectOnFocus?: boolean;
   /** Rich text (descriptions): HTML value, formatting toolbar. See PipeEditor. */
   rich?: boolean;
   maxLength?: number;

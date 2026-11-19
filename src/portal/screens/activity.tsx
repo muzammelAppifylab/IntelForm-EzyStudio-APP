@@ -674,7 +674,6 @@ export function Activity() {
     <div className="app-page screen-activity">
       <PageHeader
         title="Activity"
-        description="Everything that happened on this site: sign-ins, security, users and roles, forms, responses and settings."
         actions={
           <Button
             variant="secondary"

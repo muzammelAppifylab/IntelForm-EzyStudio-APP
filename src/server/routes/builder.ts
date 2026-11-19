@@ -12,12 +12,16 @@ import {
 import {formDefinition} from '../../lib/intelform/form/definition';
 import {webhookSettings, type WebhookSettings} from '../../lib/intelform/form/settings';
 import {config} from '../../platform/config';
+import {storageUsage} from '../../platform/files';
 import type {PrismaClient} from '../../platform/db';
 import {can, problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {readSettings} from '../intelform/builder/draft';
+import {clearPublicFormCacheFor} from '../intelform/respondent/cache';
 import {BuilderError, builderError, formGone, GONE, uuidOrNull} from '../intelform/builder/errors';
 import {formDraftRoutes} from '../intelform/builder/form-routes';
 import {leavePresence, pollPresence} from '../intelform/builder/presence';
+import {notifyStats} from '../intelform/notify';
+import {mailProviderConfigured} from '../intelform/notify/mailer';
 import {rateLimit} from '../intelform/builder/rate-limit';
 import {preparePatch, saveFormPatch} from '../intelform/builder/save';
 import {deliveryState} from '../intelform/builder/webhook-core';
@@ -56,6 +60,20 @@ type ViewerContext = Context<{Variables: {viewer: Viewer}}>;
  */
 
 const notFound = problem('not_found', GONE);
+
+/** Storage the owner hasn't set up (files.md "Limits and errors"): the builder warns about it. */
+const STORAGE_NOT_SET_UP = new Set(['E_STORAGE_NEEDS_PACK', 'E_STORAGE_OFF', 'E_STORAGE_UNAVAILABLE']);
+
+async function storageState(requestUrl: string): Promise<BuilderCapabilities['storage']> {
+  if (!config.siteKey) return 'not_set_up';
+  try {
+    const usage = await storageUsage(requestUrl);
+    if (usage.ok) return 'ready';
+    return STORAGE_NOT_SET_UP.has(usage.code) ? 'not_set_up' : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
 const DELIVERY_GONE = 'That delivery is no longer in the log';
 const TEST_LIMIT = {count: 20, windowSeconds: 600};
 
@@ -121,7 +139,11 @@ async function webhookView(db: PrismaClient, formId: string) {
 /** Saves the form's webhook through the autosave path (validation, SSRF check, revision bump). */
 async function saveWebhook(db: PrismaClient, formId: string, userId: number, webhook: Partial<WebhookSettings>) {
   const patch = await preparePatch({settings: {webhook}});
-  return saveFormPatch(db, {formId, patch, expected: null, userId});
+  const saved = await saveFormPatch(db, {formId, patch, expected: null, userId});
+  // The cached public form decides whether a submit queues notify work (`needsJobs`): without
+  // this, a webhook turned on here would miss every response until that cache entry expired.
+  if (saved.status !== 'draft') await clearPublicFormCacheFor(db, formId);
+  return saved;
 }
 
 export const builderRoutes = new Hono()
@@ -130,6 +152,8 @@ export const builderRoutes = new Hono()
     return c.json<BuilderCapabilities>({
       // Notification and confirmation emails go through the platform's relay (the Site Key).
       emailEnabled: Boolean(config.siteKey) || config.localDev,
+      mailProvider: mailProviderConfigured(),
+      storage: await storageState(c.req.url),
     });
   })
 
@@ -160,7 +184,15 @@ export const builderRoutes = new Hono()
   })
 
   // ------------------------------------------------------------------- webhook
-  .get('/forms/:id/webhook', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+  // Notification counts for the last 24 h (confirmations held back by the hourly cap, responses
+  // covered by the hourly digest). Numbers only, no addresses.
+  .get('/forms/:id/notify-stats', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_READ), withDb, async c => {
+    const formId = uuidOrNull(c.req.param('id'));
+    const stats = formId ? await notifyStats(c.var.db, formId) : null;
+    if (!stats) return c.json(notFound, 404);
+    return c.json(stats);
+  })
+  .get('/forms/:id/webhook', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
     const formId = uuidOrNull(c.req.param('id'));
     const view = formId ? await webhookView(c.var.db, formId) : null;
     if (!view) return c.json(notFound, 404);
@@ -171,7 +203,7 @@ export const builderRoutes = new Hono()
     zodJson(webhookSettings.partial().strict(), 'Check the webhook settings.'),
     withViewer,
     requireAuth,
-    requirePermission(PERMISSIONS.FORM_WRITE),
+    requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ),
     withDb,
     async c => {
       const formId = uuidOrNull(c.req.param('id'));
@@ -187,7 +219,7 @@ export const builderRoutes = new Hono()
       }
     }
   )
-  .delete('/forms/:id/webhook', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+  .delete('/forms/:id/webhook', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
     const formId = uuidOrNull(c.req.param('id'));
     if (!formId) return c.json(notFound, 404);
     try {
@@ -202,7 +234,7 @@ export const builderRoutes = new Hono()
   })
 
   /** Generates or regenerates the signing secret. The only time it is shown. */
-  .post('/forms/:id/webhook/secret', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+  .post('/forms/:id/webhook/secret', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
     const formId = uuidOrNull(c.req.param('id'));
     if (!formId) return c.json(notFound, 404);
     try {
@@ -215,7 +247,7 @@ export const builderRoutes = new Hono()
     }
   })
 
-  .post('/forms/:id/webhook/test', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+  .post('/forms/:id/webhook/test', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
     const formId = uuidOrNull(c.req.param('id'));
     if (!formId) return c.json(notFound, 404);
     const db = c.var.db;
@@ -241,7 +273,7 @@ export const builderRoutes = new Hono()
     }
   })
 
-  .get('/forms/:id/webhook/deliveries', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), withDb, async c => {
+  .get('/forms/:id/webhook/deliveries', withViewer, requireAuth, requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ), withDb, async c => {
     const formId = uuidOrNull(c.req.param('id'));
     if (!formId) return c.json(notFound, 404);
     const form = await c.var.db.form.findUnique({
@@ -256,7 +288,7 @@ export const builderRoutes = new Hono()
     '/forms/:id/webhook/deliveries/:deliveryId',
     withViewer,
     requireAuth,
-    requirePermission(PERMISSIONS.FORM_WRITE),
+    requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ),
     withDb,
     async c => {
       const formId = uuidOrNull(c.req.param('id'));
@@ -274,7 +306,7 @@ export const builderRoutes = new Hono()
     '/forms/:id/webhook/deliveries/:deliveryId/resend',
     withViewer,
     requireAuth,
-    requirePermission(PERMISSIONS.FORM_WRITE),
+    requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ),
     withDb,
     async c => {
       const formId = uuidOrNull(c.req.param('id'));

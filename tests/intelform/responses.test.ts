@@ -1,7 +1,13 @@
 import {describe, expect, it} from 'vitest';
 
 import type {SummaryQuery} from '../../src/lib/intelform/api-responses';
-import {buildCatalog, parseField, type FormCatalog} from '../../src/server/intelform/responses/catalog';
+import {EMPTY_CATALOG, entriesOf, finishCatalog, foldVersions, parseField, type FormCatalog} from '../../src/server/intelform/responses/catalog';
+/** The catalog of these versions, as the app builds it (stored form, then entries). */
+const buildCatalog = (versions: Parameters<typeof foldVersions>[1], published: string | null) => {
+  const folded = foldVersions(EMPTY_CATALOG, versions, published, null);
+  return entriesOf(finishCatalog(folded.cat, folded.published));
+};
+
 import {csvFilename, dataRow, headerRow} from '../../src/server/intelform/responses/csv';
 import {contentDisposition, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
 import {buildSearchText, displayAnswer, signatureLinkFor} from '../../src/server/intelform/responses/format';
@@ -355,7 +361,11 @@ describe('query pieces', () => {
     expect(sortSpec(cat, 'duration', 'desc').type).toBe('int');
     expect(sortSpec(cat, Q.yes, 'desc').type).toBe('boolean');
     const k = keysetFragments(sortSpec(cat, 'submitted_at', 'desc'));
-    expect(k.after.sql).toBe('(submitted_at < cur.k OR (submitted_at = cur.k AND id < cur.kid))');
+    // A row comparison, so the (form_id, submitted_at DESC, id DESC) index starts at the cursor.
+    expect(k.after.sql).toBe('(submitted_at, id) < (cur.k, cur.kid)');
+    expect(k.before.sql).toBe('(submitted_at, id) > (cur.k, cur.kid)');
+    const asc = keysetFragments(sortSpec(cat, 'submitted_at', 'asc'));
+    expect(asc.after.sql).toBe('(submitted_at, id) > (cur.k, cur.kid)');
     expect(keysetFragments(nps).after.sql).toContain('CASE WHEN cur.k IS NULL');
   });
 

@@ -1,6 +1,6 @@
 import type {CatalogField, TableColumnPref} from '../../../lib/intelform/api-responses';
 import {Button, buttonClass, Checkbox, Collapsible, Icon, IconButton, Popover, ScrollArea} from '../../ui';
-import {moveColumn, toggleColumn} from './columns';
+import {MAX_VISIBLE_COLUMNS, moveColumn, toggleColumn} from './columns';
 import {countryLabel} from './format';
 
 /** "Filter": one section per choice question, its options as checkboxes (OR within a question, AND across). */
@@ -71,6 +71,7 @@ export function ColumnsMenu({
   onReset: () => void;
 }) {
   const visibleCount = columns.filter(c => c.visible).length;
+  const full = visibleCount >= MAX_VISIBLE_COLUMNS;
   return (
     <Popover
       label="Table columns"
@@ -99,8 +100,9 @@ export function ColumnsMenu({
                   <Checkbox
                     label={label}
                     checked={c.visible}
-                    // Keep at least one column.
-                    disabled={c.visible && visibleCount === 1}
+                    description={!c.visible && full ? `Hide a column first: at most ${MAX_VISIBLE_COLUMNS} show at once` : undefined}
+                    // Keep at least one column, and at most MAX_VISIBLE_COLUMNS.
+                    disabled={(c.visible && visibleCount === 1) || (!c.visible && full)}
                     onChange={on => onChange(toggleColumn(columns, c.id, on))}
                   />
                   <span className="responses-columns-moves">

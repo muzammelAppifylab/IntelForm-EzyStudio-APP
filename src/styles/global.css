@@ -792,11 +792,11 @@
 }
 
 .form-status[data-tone='ok'] {
-  color: #1a7f4b;
+  color: var(--success);
 }
 
 .form-status[data-tone='error'] {
-  color: #c0362c;
+  color: var(--danger);
 }
 
 .search {
@@ -1666,4 +1666,9 @@
   .list-skeleton-row span {
     animation: none;
   }
+}
+
+/* IntelForm's own mark (BrandMark without an uploaded logo) is square. */
+.brand-logo-default[class*='brand-size-'] {
+  width: var(--brand-size);
 }

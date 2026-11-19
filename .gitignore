@@ -14,3 +14,6 @@ src/generated
 
 # `npm run test:coverage` reports.
 coverage/
+
+# Claude Code app settings (local only; store sites may not ship hidden files).
+.claude/

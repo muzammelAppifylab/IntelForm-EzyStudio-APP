@@ -312,15 +312,58 @@
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
+/*
+ * NPS 0–10: one connected scale on a wide form (shared borders, rounded only at the ends), so it
+ * reads as a single ruler rather than eleven buttons; two rows of separate tiles on a phone.
+ * The chosen score is filled; scores below it get a light tint, so the scale shows "how far".
+ */
 .ft-nps-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.5rem;
 }
+.ft-nps-grid .ft-tile-score {
+  min-width: 0;
+  font-weight: 600;
+}
+/* The chosen score looks like the form's button (theme-checked text contrast, ink edge). */
+.ft-nps-grid .ft-tile-score[data-state='checked'] {
+  background: var(--primary, var(--option-selected));
+  border-color: var(--primary-border, var(--form-answer, var(--edge)));
+  color: var(--primary-foreground, var(--option-selected-ink));
+  box-shadow: inset 0 0 0 1px var(--primary-border, var(--form-answer, var(--edge)));
+}
+.ft-nps-grid .ft-tile-score[data-below] {
+  background: var(--option-selected);
+}
 @container rf (min-width: 30rem) {
   .ft-nps-grid {
     grid-template-columns: repeat(11, minmax(0, 1fr));
-    gap: 0.25rem;
+    gap: 0;
+  }
+  .ft-nps-grid .ft-tile-score {
+    border-radius: 0;
+    height: calc(var(--rf-control, 3rem) + 0.5rem);
+  }
+  .ft-nps-grid .ft-tile-score + .ft-tile-score {
+    margin-inline-start: -1px;
+  }
+  .ft-nps-grid .ft-tile-score:first-child {
+    border-start-start-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+    border-end-start-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+  }
+  .ft-nps-grid .ft-tile-score:last-child {
+    border-start-end-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+    border-end-end-radius: min(var(--form-radius, var(--radius-sm)), 0.75rem);
+  }
+  /* The hovered, focused or chosen cell's border shows over its neighbours'. */
+  .ft-nps-grid .ft-tile-score:hover,
+  .ft-nps-grid .ft-tile-score:has(:focus-visible),
+  .ft-nps-grid .ft-tile-score[data-state='checked'] {
+    z-index: 1;
+  }
+  .ft-nps-grid .ft-tile-score:active {
+    scale: none;
   }
 }
 .ft-scale-ends {

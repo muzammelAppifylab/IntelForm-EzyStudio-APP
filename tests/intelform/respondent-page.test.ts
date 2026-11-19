@@ -14,6 +14,7 @@ import {
   themeStyle,
   type FormPageState,
 } from '../../src/pages/f/_lib/page';
+import {Prisma} from '../../src/generated/prisma-node/client';
 import type {PublicFormClosed, PublicFormLive} from '../../src/lib/intelform/api-public';
 import {blankDefinition} from '../../src/lib/intelform/form/definition';
 import {clearPublicFormCache} from '../../src/server/intelform/respondent/cache';
@@ -98,14 +99,16 @@ describe('page state', () => {
   // The published form is cached by slug (respondent/cache.ts): every case starts from the database.
   beforeEach(() => clearPublicFormCache());
   /** A fake db: the rate-limit upsert answers `count`, the form read answers `rows`. */
+  const responses = {n: 0};
   const dbOf = (rows: unknown[], count = 1, fail = false) => {
     const calls: string[] = [];
     const db = {
-      $queryRaw: async (strings: TemplateStringsArray) => {
-        const sql = strings.join('?');
+      $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        // Nested fragments inlined, as Prisma sends them.
+        const sql = Prisma.sql(strings, ...values).sql;
         calls.push(sql);
         if (fail) throw new Error('connection lost');
-        if (sql.includes('intelform_rate_limits')) return [{count}];
+        if (sql.includes('intelform_rate_limits')) return [{count, found: true, responses: responses.n, password_hash: null}];
         return rows;
       },
       intelformSettings: {findUnique: async () => null},
@@ -147,15 +150,37 @@ describe('page state', () => {
     const s = await loadFormPage({db, secret: SECRET, slug: 'Contact-Us', ip: '203.0.113.5'});
     expect(s.kind).toBe('form');
     expect(s.kind === 'form' && s.payload.status).toBe('live');
-    expect(calls[0]).toContain('intelform_rate_limits');
+    // A cache miss: the form read, then the limit.
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('intelform_rate_limits');
     expect(statusOf(s)).toBe(200);
+    // Cached now: ONE round trip, the limit's hit (no form read, nothing waiting behind a write).
+    calls.length = 0;
+    expect((await loadFormPage({db, secret: SECRET, slug: 'contact-us', ip: '203.0.113.5'})).kind).toBe('form');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('intelform_rate_limits');
+    expect(calls[0]).not.toContain('form_counts');
+  });
+
+  it('a cached capped form: its exact count comes in the limit statement (still one trip)', async () => {
+    const capped = {...row, settings: {responseCap: 2}, response_count: 0};
+    const {db, calls} = dbOf([capped]);
+    expect((await loadFormPage({db, secret: SECRET, slug: 'contact-us', ip: null})).kind).toBe('form');
+    calls.length = 0;
+    responses.n = 2;
+    const s = await loadFormPage({db, secret: SECRET, slug: 'contact-us', ip: null});
+    responses.n = 0;
+    expect(s.kind).toBe('closed');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('intelform_rate_limits');
+    expect(calls[0]).toContain('form_counts');
   });
 
   it('over the limit is a 429 with a wait', async () => {
     const {db, calls} = dbOf([row], PUBLIC_GET_RATE_LIMIT + 1);
     const s = await loadFormPage({db, secret: SECRET, slug: 'contact-us', ip: '203.0.113.5', now: 30_000});
     expect(s).toEqual({kind: 'limited', retryAfter: 30});
-    // The limit and the form read go together (one round trip); the 429 wins.
+    // The form read (a cache miss), then the limit; the 429 wins.
     expect(calls).toHaveLength(2);
     expect(statusOf(s)).toBe(429);
   });

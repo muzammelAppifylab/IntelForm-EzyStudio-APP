@@ -32,6 +32,8 @@ export interface PipeEditorProps {
   onFocus?(): void;
   /** Focus the end of the text once mounted. */
   autoFocus?: boolean;
+  /** With autoFocus: select the whole text, so typing replaces it (a new question's starter title). */
+  selectOnFocus?: boolean;
   /**
    * Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z (or Ctrl+Y) inside the editor. The builder passes its own
    * undo / redo, so typing undoes like the rest of the canvas. Without them the keys do nothing
@@ -224,7 +226,7 @@ export default function PipeEditor(props: PipeEditorProps) {
   }, [props.allSources]);
 
   useEffect(() => {
-    if (props.autoFocus && !readOnly) requestAnimationFrame(() => focusEnd());
+    if (props.autoFocus && !readOnly) requestAnimationFrame(() => (props.selectOnFocus ? focusAll() : focusEnd()));
     // Only on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -237,6 +239,18 @@ export default function PipeEditor(props: PipeEditorProps) {
     el.style.top = `${Math.round(menu.rect.bottom + 6)}px`;
     el.style.left = `${Math.round(Math.max(8, Math.min(menu.rect.left, window.innerWidth - width - 8)))}px`;
   }, [menu]);
+
+  function focusAll() {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
 
   function focusEnd() {
     const el = ref.current;
@@ -529,6 +543,7 @@ export default function PipeEditor(props: PipeEditorProps) {
       {fallbackChip && (
         <div className="if-pipe-fallback" role="dialog" aria-labelledby={`${fallbackId}-title`}>
           <form
+            noValidate
             onSubmit={e => {
               e.preventDefault();
               applyFallback();

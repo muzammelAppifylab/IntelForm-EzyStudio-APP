@@ -1,21 +1,22 @@
 import {putFile} from '../../../platform/files-browser';
-import {isUploadedFileUrl, MAX_UPLOAD_BYTES, UPLOAD_TYPES, type UploadPurpose} from '../../../lib/intelform/settings-app';
+import {isUploadedFileUrl, type UploadPurpose} from '../../../lib/intelform/settings-app';
+import {checkImage as checkImageRule, IMAGE_RULES} from '../../../server/intelform/uploads/rules';
 import {api, ApiRequestError} from '../lib/api';
 
-/** What each settings image accepts, in words, for the picker's help text. */
+/**
+ * What each settings image accepts, in words, for the picker's help text. The types and sizes
+ * come from the rules the uploads route enforces (src/server/intelform/uploads/rules.ts).
+ */
 export const UPLOAD_HELP: Record<UploadPurpose, string> = {
-  logo: 'PNG, JPG, WebP or SVG, up to 5 MB.',
-  favicon: 'PNG, ICO or SVG, square, 64 × 64 px or larger, up to 5 MB.',
-  image: 'PNG, JPG, WebP or GIF, up to 5 MB.',
-  og: '1200 × 630 px works best. JPG, PNG or WebP, up to 5 MB.',
+  logo: IMAGE_RULES.logo.help,
+  favicon: `Square, 64 × 64 px or larger. ${IMAGE_RULES.favicon.help}`,
+  image: IMAGE_RULES.image.help,
+  og: `1200 × 630 px works best. ${IMAGE_RULES.og.help}`,
 };
 
-/** The browser-side check before an upload starts (the uploads route checks again); null = fine. */
+/** The browser-side check before an upload starts (the uploads route checks the same again); null = fine. */
 export function checkImage(file: {type: string; size: number}, purpose: UploadPurpose): string | null {
-  if (!UPLOAD_TYPES[purpose].includes(file.type)) return `That file type isn’t supported. ${UPLOAD_HELP[purpose]}`;
-  if (file.size < 1) return 'That file is empty.';
-  if (file.size > MAX_UPLOAD_BYTES) return 'Choose an image under 5 MB.';
-  return null;
+  return checkImageRule(file, purpose);
 }
 
 /**

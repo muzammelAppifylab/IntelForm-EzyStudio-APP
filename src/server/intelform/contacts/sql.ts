@@ -81,64 +81,115 @@ interface SortSpec {
   expr: Sql;
   /** The SQL type a cursor value is cast back to. */
   cast: Sql;
-  /** Can be NULL (empty values sort last both ways). */
+  /** Can be NULL: empty values come last both ways, read by their own branch (by key). */
   nullable: boolean;
+  /** What a cursor value must look like (anything else starts from the top). */
+  valid: RegExp;
 }
 
+const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const ANY_TEXT = /^[\s\S]*$/;
+
+/**
+ * One index per sort, on (value, key): ascending reads it forward, descending backward, so the
+ * order is (value, key) both ASC or both DESC, and the keyset start is a row comparison the
+ * index scan starts from (no OR, no skipped rows: page N and a 500k-row CSV cost the same per
+ * row). Migrations 20261119140525..45 build them.
+ */
 const SORTS: Record<ContactSort, SortSpec> = {
-  last_seen: {expr: Prisma.sql`c.last_seen`, cast: Prisma.sql`timestamptz`, nullable: false},
-  first_seen: {expr: Prisma.sql`c.first_seen`, cast: Prisma.sql`timestamptz`, nullable: false},
-  name: {expr: Prisma.sql`lower(c.name)`, cast: Prisma.sql`text`, nullable: true},
-  email: {expr: Prisma.sql`c.email`, cast: Prisma.sql`text`, nullable: true},
-  responses: {expr: Prisma.sql`c.n`, cast: Prisma.sql`int`, nullable: false},
+  last_seen: {expr: Prisma.sql`c.last_seen`, cast: Prisma.sql`timestamptz`, nullable: false, valid: ISO_MS},
+  first_seen: {expr: Prisma.sql`c.first_seen`, cast: Prisma.sql`timestamptz`, nullable: false, valid: ISO_MS},
+  name: {expr: Prisma.sql`lower(c.name)`, cast: Prisma.sql`text`, nullable: true, valid: ANY_TEXT},
+  email: {expr: Prisma.sql`c.email`, cast: Prisma.sql`text`, nullable: true, valid: ANY_TEXT},
+  responses: {expr: Prisma.sql`c.n`, cast: Prisma.sql`int`, nullable: false, valid: /^\d{1,9}$/},
 };
 
 const sortOf = (sort: ContactSort) => SORTS[sort] ?? SORTS.last_seen;
-/** Sorted by latest activity already (an unknown sort falls back to it): no tie-break column. */
-const byActivity = (sort: ContactSort) => sortOf(sort) === SORTS.last_seen;
 
-/** The sort value of a row as cursor text (`(expr)::text`), selected beside the row. */
+/** The sort value of a row as cursor text, selected beside the row. */
 export function sortValue(sort: ContactSort): Sql {
-  const {expr} = sortOf(sort);
-  return sort === 'last_seen' || sort === 'first_seen'
+  const {expr, valid} = sortOf(sort);
+  return valid === ISO_MS
     ? Prisma.sql`to_char(${expr} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
     : Prisma.sql`(${expr})::text`;
 }
 
-/** The latest activity as cursor text (the tie-break after the sort value). */
-export const LAST_SEEN_TEXT = Prisma.sql`to_char(c.last_seen AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
-
-/**
- * ORDER BY from the fixed map; empty values last both ways, then the latest activity, then the
- * key (the indexes end the same way).
- */
-export function orderFragment(sort: ContactSort, dir: 'asc' | 'desc'): Sql {
-  const {expr, nullable} = sortOf(sort);
-  const way = dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
-  const head = nullable ? Prisma.sql`(${expr} IS NULL), ${expr} ${way}` : Prisma.sql`${expr} ${way}`;
-  return byActivity(sort) ? Prisma.sql`${head}, c.key ASC` : Prisma.sql`${head}, c.last_seen DESC, c.key ASC`;
-}
-
-/** A keyset position: the last row's sort value (null when empty), its latest activity and key. */
+/** A keyset position: the last row's sort value (null when empty) and its key. */
 export interface ContactCursor {
   v: string | null;
-  t: string;
   k: string;
 }
 
-/** Rows after `cur` in orderFragment's order. */
+/** The cursor if it can belong to this sort (a value of the right shape, or empty for a nullable one), else null. */
+export function cursorFor(sort: ContactSort, cur: ContactCursor | null): ContactCursor | null {
+  if (!cur) return null;
+  const {nullable, valid} = sortOf(sort);
+  if (cur.v === null) return nullable ? cur : null;
+  return valid.test(cur.v) ? cur : null;
+}
+
+/** ORDER BY for one branch: the value then the key, both the same way (one index, either direction). */
+export function orderFragment(sort: ContactSort, dir: 'asc' | 'desc'): Sql {
+  const {expr} = sortOf(sort);
+  const way = dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  return Prisma.sql`${expr} ${way}, c.key ${way}`;
+}
+
+/** Rows with a value after `cur` (a row comparison: the index scan's start bound). */
 export function afterFragment(sort: ContactSort, dir: 'asc' | 'desc', cur: ContactCursor): Sql {
-  const {expr, cast, nullable} = sortOf(sort);
-  // Within one sort value: later in (last_seen DESC, key ASC).
-  const tie =
-    byActivity(sort)
-      ? Prisma.sql`c.key > ${cur.k}`
-      : Prisma.sql`(c.last_seen < ${cur.t}::timestamptz OR (c.last_seen = ${cur.t}::timestamptz AND c.key > ${cur.k}))`;
-  if (cur.v === null) return Prisma.sql`(${expr} IS NULL AND ${tie})`;
-  const v = Prisma.sql`${cur.v}::${cast}`;
-  const past = dir === 'asc' ? Prisma.sql`${expr} > ${v}` : Prisma.sql`${expr} < ${v}`;
-  const tail = nullable ? Prisma.sql`${expr} IS NULL OR ` : Prisma.empty;
-  return Prisma.sql`(${tail}${past} OR (${expr} = ${v} AND ${tie}))`;
+  const {expr, cast} = sortOf(sort);
+  if (cur.v === null) return Prisma.sql`false`;
+  const op = dir === 'asc' ? Prisma.sql`>` : Prisma.sql`<`;
+  return Prisma.sql`(${expr}, c.key) ${op} (${cur.v}::${cast}, ${cur.k}::text)`;
+}
+
+/**
+ * One page of `contacts c` rows matching `where`, after `cursor`, in the sort's order. `columns`
+ * are selected from `c`, plus `sort_v` (cursor text). A nullable sort reads rows with a value,
+ * then (only if the page is not full) the empty ones by key: each branch is one index range.
+ */
+export function pageSql(sort: ContactSort, dir: 'asc' | 'desc', where: Sql, after: ContactCursor | null, limit: number, columns: Sql): Sql {
+  const {expr, nullable} = sortOf(sort);
+  const cursor = cursorFor(sort, after);
+  const way = dir === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const cols = Prisma.sql`${columns}, ${sortValue(sort)} AS sort_v`;
+  const valued = cursor ? afterFragment(sort, dir, cursor) : nullable ? Prisma.sql`${expr} IS NOT NULL` : Prisma.sql`true`;
+  const first = Prisma.sql`SELECT ${cols}, 0 AS empty FROM contacts c WHERE ${where} AND ${valued} ORDER BY ${orderFragment(sort, dir)} LIMIT ${limit}`;
+  if (!nullable) return first;
+  // Empty values: all of them after any value; after an empty-valued cursor, by key.
+  const op = dir === 'asc' ? Prisma.sql`>` : Prisma.sql`<`;
+  const emptyAfter = cursor?.v === null ? Prisma.sql`c.key ${op} ${cursor.k}::text` : Prisma.sql`true`;
+  const empty = Prisma.sql`SELECT ${cols}, 1 AS empty FROM contacts c WHERE ${where} AND ${expr} IS NULL AND ${emptyAfter} ORDER BY c.key ${way} LIMIT ${limit}`;
+  const head = cursor?.v === null ? Prisma.empty : Prisma.sql`(${first}) UNION ALL `;
+  return Prisma.sql`SELECT * FROM (${head}(${empty})) p ORDER BY p.empty, p.sort_v ${way}, p.key ${way} LIMIT ${limit}`;
+}
+
+/**
+ * The page just BEFORE `before` (or, with no cursor, the last page), read in the reverse of the
+ * list's order so it is the same index range walked backwards; the caller flips the rows. In the
+ * list's order empty values come last, so backwards they come first: the empty branch (by key),
+ * then, only if the page is not full, the valued one.
+ */
+export function pageBeforeSql(sort: ContactSort, dir: 'asc' | 'desc', where: Sql, before: ContactCursor | null, limit: number, columns: Sql): Sql {
+  const {expr, nullable} = sortOf(sort);
+  const cursor = cursorFor(sort, before);
+  const back = dir === 'asc' ? 'desc' : 'asc';
+  const way = back === 'asc' ? Prisma.sql`ASC` : Prisma.sql`DESC`;
+  const cols = Prisma.sql`${columns}, ${sortValue(sort)} AS sort_v`;
+  // Valued rows before a valued cursor; all of them from the end or from an empty-valued cursor.
+  const valuedWhere =
+    cursor && cursor.v !== null ? afterFragment(sort, back, cursor) : nullable ? Prisma.sql`${expr} IS NOT NULL` : Prisma.sql`true`;
+  const valued = Prisma.sql`SELECT ${cols}, 1 AS empty FROM contacts c WHERE ${where} AND ${valuedWhere} ORDER BY ${orderFragment(sort, back)} LIMIT ${limit}`;
+  if (!nullable || (cursor && cursor.v !== null)) return valued;
+  const op = back === 'asc' ? Prisma.sql`>` : Prisma.sql`<`;
+  const emptyBefore = cursor ? Prisma.sql`c.key ${op} ${cursor.k}::text` : Prisma.sql`true`;
+  const empty = Prisma.sql`SELECT ${cols}, 0 AS empty FROM contacts c WHERE ${where} AND ${expr} IS NULL AND ${emptyBefore} ORDER BY c.key ${way} LIMIT ${limit}`;
+  return Prisma.sql`SELECT * FROM ((${empty}) UNION ALL (${valued})) p ORDER BY p.empty, p.sort_v ${way}, p.key ${way} LIMIT ${limit}`;
+}
+
+/** At most `cap + 1` contacts matching `where`, counted: a bounded count, never the whole table. */
+export function cappedCountSql(where: Sql, cap: number): Sql {
+  return Prisma.sql`SELECT count(*)::int AS n FROM (SELECT 1 FROM contacts c WHERE ${where} LIMIT ${cap + 1}) t`;
 }
 
 const toBase64Url = (text: string) => {
@@ -152,22 +203,20 @@ const fromBase64Url = (text: string) => {
   return new TextDecoder().decode(Uint8Array.from(bin, ch => ch.charCodeAt(0)));
 };
 
-const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-
 /** `?cursor=` text ↔ ContactCursor (base64url JSON, UTF-8); null for anything malformed. */
 export function encodeContactCursor(c: ContactCursor): string {
-  return toBase64Url(JSON.stringify([c.v, c.t, c.k]));
+  return toBase64Url(JSON.stringify([c.v, c.k]));
 }
 
 export function decodeContactCursor(text: string | undefined): ContactCursor | null {
   if (!text || text.length > 1200) return null;
   try {
     const json = JSON.parse(fromBase64Url(text)) as unknown;
-    if (!Array.isArray(json) || json.length !== 3) return null;
-    const [v, t, k] = json as unknown[];
-    if ((v !== null && typeof v !== 'string') || typeof t !== 'string' || !ISO_MS.test(t) || typeof k !== 'string' || k.length > 260) return null;
+    if (!Array.isArray(json) || json.length !== 2) return null;
+    const [v, k] = json as unknown[];
+    if ((v !== null && typeof v !== 'string') || typeof k !== 'string' || k.length > 260) return null;
     if (typeof v === 'string' && v.length > 300) return null;
-    return {v, t, k};
+    return {v, k};
   } catch {
     return null;
   }

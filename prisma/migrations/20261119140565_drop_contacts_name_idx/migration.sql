@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS "contacts_name_idx";

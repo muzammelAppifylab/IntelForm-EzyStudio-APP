@@ -49,7 +49,11 @@ export function NpsScale({
         {SCORES.map(n => {
           const checked = value === n;
           return (
-            <label key={n} data-state={checked ? 'checked' : 'unchecked'} className="ft-tile ft-tile-score">
+            <label
+              key={n}
+              data-state={checked ? 'checked' : 'unchecked'}
+              data-below={value !== null && n < value ? '' : undefined}
+              className="ft-tile ft-tile-score">
               <input
                 type="radio"
                 name={name ?? id}

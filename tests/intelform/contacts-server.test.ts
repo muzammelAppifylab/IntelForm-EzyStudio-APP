@@ -12,18 +12,24 @@ import {
   contactsOverview,
   deleteContacts,
   listContacts,
+  OVERVIEW_KEY,
   toRow,
 } from '../../src/server/intelform/contacts/query';
 import {
   afterFragment,
+  CONTACT_COLUMNS,
+  cursorFor,
   dayRange,
   decodeContactCursor,
   encodeContactCursor,
   filterFragment,
   likePattern,
   orderFragment,
+  pageBeforeSql,
+  pageSql,
   searchPatterns,
 } from '../../src/server/intelform/contacts/sql';
+import {cache} from '../../src/platform/cache';
 import {intlKnowsZone, safeTz, todayIn} from '../../src/server/intelform/contacts/tz';
 import {Prisma} from '../../src/generated/prisma-node/client';
 
@@ -114,30 +120,75 @@ describe('contacts sql pieces', () => {
     expect(dayRange(Prisma.sql`x`, undefined, undefined, 'UTC')).toEqual([]);
   });
 
-  it('orders from a fixed map (one index each), empty values last, then latest activity, then the key', () => {
-    expect(orderFragment('name', 'asc').sql).toBe('(lower(c.name) IS NULL), lower(c.name) ASC, c.last_seen DESC, c.key ASC');
-    expect(orderFragment('responses', 'desc').sql).toBe('c.n DESC, c.last_seen DESC, c.key ASC');
+  it('orders from a fixed map: the value then the key, both the same way (one (value, key) index, either direction)', () => {
+    expect(orderFragment('name', 'asc').sql).toBe('lower(c.name) ASC, c.key ASC');
+    expect(orderFragment('responses', 'desc').sql).toBe('c.n DESC, c.key DESC');
+    // No leading (expr IS NULL) term: it would stop the index from giving the order.
+    expect(orderFragment('email', 'desc').sql).not.toContain('IS NULL');
     // An unknown sort (can't pass the schema, but just in case) falls back to last activity.
-    expect(orderFragment('nope' as never, 'desc').sql).toBe('c.last_seen DESC, c.key ASC');
+    expect(orderFragment('nope' as never, 'desc').sql).toBe('c.last_seen DESC, c.key DESC');
     expect(orderFragment('email', 'asc').values).toEqual([]);
   });
 
-  it('pages by keyset: after the cursor, empty values last', () => {
+  it('pages by keyset with a row comparison (the index scan starts there, no OR)', () => {
     const T = '2026-01-01T00:00:00.000Z';
-    const after = afterFragment('last_seen', 'desc', {v: T, t: T, k: 'e:a@x.io'});
-    expect(after.sql).toBe('(c.last_seen < ?::timestamptz OR (c.last_seen = ?::timestamptz AND c.key > ?))');
-    expect(after.values).toEqual(['2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'e:a@x.io']);
-    const named = afterFragment('name', 'asc', {v: 'ada', t: T, k: 'e:a@x.io'});
-    expect(named.sql).toContain('lower(c.name) IS NULL OR lower(c.name) >');
-    expect(named.sql).toContain('c.last_seen < ?::timestamptz');
-    expect(afterFragment('name', 'asc', {v: null, t: T, k: 'k'}).sql).toBe(
-      '(lower(c.name) IS NULL AND (c.last_seen < ?::timestamptz OR (c.last_seen = ?::timestamptz AND c.key > ?)))'
-    );
+    const after = afterFragment('last_seen', 'desc', {v: T, k: 'e:a@x.io'});
+    expect(after.sql).toBe('(c.last_seen, c.key) < (?::timestamptz, ?::text)');
+    expect(after.values).toEqual([T, 'e:a@x.io']);
+    expect(afterFragment('responses', 'asc', {v: '3', k: 'k'}).sql).toBe('(c.n, c.key) > (?::int, ?::text)');
+    expect(afterFragment('name', 'asc', {v: 'ada', k: 'k'}).sql).toBe('(lower(c.name), c.key) > (?::text, ?::text)');
     // Names are any text: the cursor is UTF-8 safe.
-    const cursor = {v: 'zoë 李', t: T, k: 'e:ada@example.com'};
+    const cursor = {v: 'zoë 李', k: 'e:ada@example.com'};
     expect(decodeContactCursor(encodeContactCursor(cursor))).toEqual(cursor);
     expect(decodeContactCursor('not-json')).toBeNull();
     expect(decodeContactCursor(undefined)).toBeNull();
+    // An old three-part cursor starts from the top.
+    expect(decodeContactCursor(Buffer.from(JSON.stringify([T, T, 'k'])).toString('base64url'))).toBeNull();
+  });
+
+  it('only keeps a cursor that fits the sort (else the first page, never a cast error)', () => {
+    expect(cursorFor('last_seen', {v: 'nope', k: 'k'})).toBeNull();
+    expect(cursorFor('last_seen', {v: null, k: 'k'})).toBeNull();
+    expect(cursorFor('responses', {v: '1e9', k: 'k'})).toBeNull();
+    expect(cursorFor('responses', {v: '12', k: 'k'})).toEqual({v: '12', k: 'k'});
+    expect(cursorFor('name', {v: null, k: 'k'})).toEqual({v: null, k: 'k'});
+  });
+
+  it('builds one index range per page; empty names / emails in their own branch, last both ways', () => {
+    const squash = (t: string) => t.replace(/\s+/g, ' ');
+    const plain = squash(pageSql('responses', 'desc', Prisma.sql`true`, {v: '4', k: 'e:a@x.io'}, 51, CONTACT_COLUMNS).sql);
+    expect(plain).toContain('FROM contacts c WHERE true AND (c.n, c.key) < (?::int, ?::text) ORDER BY c.n DESC, c.key DESC LIMIT ?');
+    expect(plain).not.toMatch(/UNION|OFFSET| OR /);
+
+    const first = squash(pageSql('name', 'asc', Prisma.sql`true`, null, 51, CONTACT_COLUMNS).sql);
+    expect(first).toContain('lower(c.name) IS NOT NULL ORDER BY lower(c.name) ASC, c.key ASC LIMIT ?');
+    expect(first).toContain('UNION ALL');
+    expect(first).toContain('lower(c.name) IS NULL AND true ORDER BY c.key ASC LIMIT ?');
+    expect(first).toMatch(/ORDER BY p\.empty, p\.sort_v ASC, p\.key ASC LIMIT \?$/);
+
+    // After an empty-valued row: only empty ones, after its key.
+    const empties = pageSql('email', 'desc', Prisma.sql`true`, {v: null, k: 'p:+15555550123'}, 51, CONTACT_COLUMNS);
+    expect(squash(empties.sql)).not.toContain('UNION');
+    expect(squash(empties.sql)).toContain('c.email IS NULL AND c.key < ?::text ORDER BY c.key DESC');
+    expect(empties.values).toContain('p:+15555550123');
+  });
+
+  it('reads the previous / last page as the same ranges walked backwards, empty values first', () => {
+    const squash = (t: string) => t.replace(/\s+/g, ' ');
+    const prev = squash(pageBeforeSql('responses', 'desc', Prisma.sql`true`, {v: '4', k: 'e:a@x.io'}, 51, CONTACT_COLUMNS).sql);
+    expect(prev).toContain('(c.n, c.key) > (?::int, ?::text) ORDER BY c.n ASC, c.key ASC LIMIT ?');
+    expect(prev).not.toMatch(/UNION|OFFSET| OR /);
+
+    // The last page of a nullable sort: the empty ones (last in the list) come first backwards.
+    const end = squash(pageBeforeSql('name', 'asc', Prisma.sql`true`, null, 20, CONTACT_COLUMNS).sql);
+    expect(end).toContain('lower(c.name) IS NULL AND true ORDER BY c.key DESC LIMIT ?');
+    expect(end).toContain('lower(c.name) IS NOT NULL ORDER BY lower(c.name) DESC, c.key DESC LIMIT ?');
+    expect(end).toMatch(/ORDER BY p\.empty, p\.sort_v DESC, p\.key DESC LIMIT \?$/);
+
+    // Before a valued row: only valued rows before it.
+    const valued = squash(pageBeforeSql('email', 'asc', Prisma.sql`true`, {v: 'm@x.io', k: 'e:m@x.io'}, 51, CONTACT_COLUMNS).sql);
+    expect(valued).not.toContain('UNION');
+    expect(valued).toContain('(c.email, c.key) < (?::text, ?::text) ORDER BY c.email DESC, c.key DESC');
   });
 });
 
@@ -237,34 +288,85 @@ describe('contacts queries (fake database)', () => {
     expect(row.forms.map(f => f.id)).toEqual(['f1', 'f2', 'f3']);
   });
 
-  it('lists one page from the contacts table by keyset, with each contact’s forms and no count', async () => {
-    const many = Array.from({length: 51}, (_, i) => ({...ada, key: `e:p${i}@x.io`, sort_v: `p${i}`, sort_t: '2026-11-01T10:00:00.000Z'}));
-    const {db, calls} = fakeDb([
-      many,
-      [
-        {key: 'e:p0@x.io', id: 'f2', title: 'Event signup', status: 'live', responses: 1},
-        {key: 'e:p0@x.io', id: 'f1', title: 'Survey', status: 'closed', responses: 1},
-      ],
-    ]);
+  it('lists one page from the contacts table by keyset, its forms from form_ids, with a capped count beside it', async () => {
+    const forms = [
+      {id: 'f2', title: 'Event signup', status: 'live'},
+      {id: 'f1', title: 'Survey', status: 'closed'},
+    ];
+    const many = Array.from({length: 51}, (_, i) => ({...ada, key: `e:p${i}@x.io`, sort_v: `p${i}`, forms: i ? [] : forms}));
+    const {db, calls} = fakeDb([many, [{n: 120}]]);
     const res = await listContacts(db, listQ({sort: 'name', dir: 'asc'}), 'UTC');
+    expect(calls).toHaveLength(2);
+    expect(res).toMatchObject({total: 120, totalCapped: false, prevCursor: null, pageSize: 50});
+    // The count stops at the cap: never a count over the whole table.
+    expect(calls[1]!.sql).toMatch(/SELECT count\(\*\)::int AS n FROM \(SELECT 1 FROM contacts c WHERE .* LIMIT \?\) t/s);
+    expect(calls[1]!.values.at(-1)).toBe(1001);
     expect(res.contacts).toHaveLength(50);
     expect(res.contacts[0]!.forms.map(f => f.title)).toEqual(['Event signup', 'Survey']);
-    expect(decodeContactCursor(res.nextCursor!)).toEqual({v: 'p49', t: '2026-11-01T10:00:00.000Z', k: 'e:p49@x.io'});
+    expect(decodeContactCursor(res.nextCursor!)).toEqual({v: 'p49', k: 'e:p49@x.io'});
     expect(calls[0]!.sql).toContain('FROM contacts c');
-    expect(calls[0]!.sql).not.toMatch(/count\(\*\) OVER|OFFSET|GROUP BY/);
+    // Titles from the first 3 stored form ids, never a count over responses.
+    expect(calls[0]!.sql).toContain('unnest(c.form_ids[1:3]) WITH ORDINALITY');
+    expect(calls[0]!.sql).not.toMatch(/count\(\*\) OVER|OFFSET|GROUP BY|FROM responses/);
     expect(calls[0]!.values.at(-1)).toBe(51);
     // The next page starts after that cursor.
-    const next = fakeDb([[], []]);
+    const next = fakeDb([[]]);
     const last = await listContacts(next.db, listQ({sort: 'name', dir: 'asc', cursor: res.nextCursor}), 'UTC');
     expect(last.nextCursor).toBeNull();
     expect(next.calls[0]!.values).toContain('p49');
   });
 
+  it('pages backwards: previous page and last page come back in list order with the right cursors', async () => {
+    // Read backwards (reverse order): p9, p8, … p0 then flipped; one extra row means a page before.
+    const back = Array.from({length: 26}, (_, i) => ({...ada, key: `e:p${30 - i}@x.io`, sort_v: `p${30 - i}`, forms: []}));
+    const prev = fakeDb([back, [{n: 80}]]);
+    const cur = encodeContactCursor({v: 'p31', k: 'e:p31@x.io'});
+    const res = await listContacts(prev.db, listQ({sort: 'name', dir: 'asc', before: cur, size: '25'}), 'UTC');
+    expect(res.contacts.map(c => c.key)).toEqual(Array.from({length: 25}, (_, i) => `e:p${6 + i}@x.io`));
+    expect(decodeContactCursor(res.prevCursor!)).toEqual({v: 'p6', k: 'e:p6@x.io'});
+    expect(decodeContactCursor(res.nextCursor!)).toEqual({v: 'p30', k: 'e:p30@x.io'});
+    expect(prev.calls[0]!.sql).toContain('DESC');
+
+    // The last page: exactly `last` rows, no next page.
+    const tail = fakeDb([back.slice(0, 6), [{n: 80}]]);
+    const lastPage = await listContacts(tail.db, listQ({sort: 'name', dir: 'asc', last: '5', size: '25'}), 'UTC');
+    expect(lastPage.contacts).toHaveLength(5);
+    expect(lastPage.nextCursor).toBeNull();
+    expect(lastPage.prevCursor).not.toBeNull();
+    expect(tail.calls[0]!.values.at(-1)).toBe(6);
+  });
+
+  it('says "1,000+" past the cap when filtered; unfiltered, the workspace total', async () => {
+    const filtered = fakeDb([[], [{n: 1001}]]);
+    const f = await listContacts(filtered.db, listQ({q: 'ada'}), 'UTC');
+    expect(f).toMatchObject({total: 1000, totalCapped: true});
+
+    await clearContactsOverview();
+    const whole = fakeDb([[], [{n: 1001}], [{kind: 0, code: null, id: null, title: null, status: null, contacts: 5400, new_week: 0, repeat: 0, with_phone: 0}]]);
+    const w = await listContacts(whole.db, listQ(), 'UTC');
+    expect(w).toMatchObject({total: 5400, totalCapped: false});
+    await clearContactsOverview();
+  });
+
+  it('accepts only the pager sizes', () => {
+    expect(contactsListQuery.safeParse({size: '100'}).success).toBe(true);
+    expect(contactsListQuery.safeParse({size: '30'}).success).toBe(false);
+  });
+
   it('sums the strip and keeps the top 3 forms', async () => {
     await clearContactsOverview();
     const forms = [5, 4, 3, 2].map((n, i) => ({id: `f${i}`, title: `F${i}`, status: 'live', contacts: n}));
-    const {db} = fakeDb([[{total: 3, new_week: 2, returning: 1, with_phone: 2}], [{code: 'US', contacts: 2}], forms]);
+    const {db, calls} = fakeDb([
+      [
+        {kind: 0, code: null, id: null, title: null, status: null, contacts: 3, new_week: 2, repeat: 1, with_phone: 2},
+        {kind: 1, code: 'US', id: null, title: null, status: null, contacts: 2, new_week: 0, repeat: 0, with_phone: 0},
+        ...forms.map(f => ({kind: 2, code: null, ...f, new_week: 0, repeat: 0, with_phone: 0})),
+      ],
+    ]);
     const o = await contactsOverview(db);
+    // One pass over contacts (grouping sets), not three.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.sql).toContain('GROUPING SETS ((), (c.country), (u.fid))');
     expect(o.strip).toMatchObject({total: 3, newThisWeek: 2, returning: 1, withPhonePct: 67});
     expect(o.strip.topForms).toHaveLength(3);
     expect(o.facets.forms).toHaveLength(4);
@@ -273,8 +375,19 @@ describe('contacts queries (fake database)', () => {
 
   it('says 0% with a phone when there are no contacts', async () => {
     await clearContactsOverview();
-    const {db} = fakeDb([[{total: 0, new_week: 0, returning: 0, with_phone: 0}], [], []]);
+    const {db} = fakeDb([[{kind: 0, code: null, id: null, title: null, status: null, contacts: 0, new_week: 0, repeat: 0, with_phone: 0}]]);
     expect((await contactsOverview(db)).strip.withPhonePct).toBe(0);
+  });
+
+  it("after responses were deleted ('soon'), a rebuild under a minute old lives one more minute; 'now' drops it", async () => {
+    await cache.set(OVERVIEW_KEY, {at: 1_000_000, data: {}}, 600);
+    await clearContactsOverview('soon', 1_000_000 + 30_000);
+    expect(await cache.get(OVERVIEW_KEY)).not.toBeNull();
+    await clearContactsOverview('soon', 1_000_000 + 61_000);
+    expect(await cache.get(OVERVIEW_KEY)).toBeNull();
+    await cache.set(OVERVIEW_KEY, {at: Date.now(), data: {}}, 600);
+    await clearContactsOverview();
+    expect(await cache.get(OVERVIEW_KEY)).toBeNull();
   });
 
   it('returns null for an unknown contact', async () => {
@@ -283,9 +396,9 @@ describe('contacts queries (fake database)', () => {
   });
 
   it('shapes the detail', async () => {
-    const {db} = fakeDb([
+    const {db, calls} = fakeDb([
       [ada],
-      [{key: ada.key, id: 'f1', title: 'Survey', status: 'live', responses: 2}],
+      [{id: 'f1', title: 'Survey', status: 'live', responses: 2}],
       [
         {
           id: 'r1',
@@ -309,32 +422,28 @@ describe('contacts queries (fake database)', () => {
       country: 'FR',
     });
     expect(d!.forms).toEqual([{id: 'f1', title: 'Survey', status: 'live', responses: 2}]);
+    // Per form, by the (contact_key, form_id, submitted_at DESC) index: a bounded count and the newest rows.
+    expect(calls[1]!.sql).toContain('WHERE r.contact_key = c.key AND r.form_id = u.fid LIMIT ?');
+    expect(calls[1]!.values).toContain(1001);
+    expect(calls[1]!.sql).not.toContain('GROUP BY');
+    expect(calls[2]!.sql).toContain('ORDER BY r.submitted_at DESC, r.id DESC');
+    expect(calls[2]!.sql).toContain('unnest(c.form_ids[1:?])');
   });
 
-  it('deletes under form locks and fixes each form’s counts', async () => {
-    const {db, calls} = fakeDb([
-      [{form_id: 'f1'}, {form_id: 'f2'}],
-      [{id: 'f1'}, {id: 'f2'}],
-      [
-        {form_id: 'f1', key: ada.key},
-        {form_id: 'f2', key: ada.key},
-        {form_id: 'f2', key: 'p:+15555550123'},
-      ],
-    ]);
+  it('deletes in one statement and leaves the counters to the delete trigger', async () => {
+    const {db, calls} = fakeDb([[{contacts: 2, responses: 3}]]);
     const res = await deleteContacts(db, [ada.key, ada.key, 'p:+15555550123', 'e:nobody@example.com']);
-    // Signature files go to the file trash in the delete trigger, not through this code.
+    // Signature files, form_counts and hourly counts follow from the delete trigger, not this code.
     expect(res).toEqual({contacts: 2, responses: 3});
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.values[0]).toEqual([ada.key, 'p:+15555550123', 'e:nobody@example.com']);
-    expect(calls[1]!.sql).toContain('FOR UPDATE');
-    expect(calls[3]!.sql).toContain('UPDATE forms');
-    expect(calls[3]!.values).toEqual([
-      ['f1', 'f2'],
-      [1, 2],
-    ]);
+    expect(calls[0]!.sql).toContain('DELETE FROM responses');
+    expect(calls[0]!.sql).not.toContain('FOR UPDATE');
+    expect(calls[0]!.sql).not.toContain('response_count');
   });
 
   it('deletes nothing for unknown contacts', async () => {
-    const {db, calls} = fakeDb([[]]);
+    const {db, calls} = fakeDb([[{contacts: 0, responses: 0}]]);
     expect(await deleteContacts(db, ['e:nobody@example.com'])).toEqual({contacts: 0, responses: 0});
     expect(calls).toHaveLength(1);
   });
@@ -350,5 +459,8 @@ describe('contacts queries (fake database)', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.values).toContainEqual([ada.key]);
     expect(calls[0]!.sql).not.toContain('OFFSET');
+    // Titles from form_ids, never an aggregate over responses.
+    expect(calls[0]!.sql).toContain('unnest(c.form_ids) WITH ORDINALITY');
+    expect(calls[0]!.sql).not.toContain('FROM responses');
   });
 });

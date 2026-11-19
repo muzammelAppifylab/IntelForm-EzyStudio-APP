@@ -174,6 +174,13 @@ describe.skipIf(!DATABASE_URL)('forms API (integration, real Postgres)', () => {
     expect(p1).toMatchObject({matched: 30, page: 1, pageSize: 24});
     expect(p2).toMatchObject({page: 2, nextCursor: null});
     expect(new Set([...p1.forms, ...p2.forms].map((f: Json) => f.id)).size).toBe(30);
+    // Previous from page 2 is page 1 again; the last page (6 rows) is page 2.
+    const back = (await viewer.get(`/site-api/forms?q=Paged&before=${p2.prevCursor}`)).json as Json;
+    expect(back.forms.map((f: Json) => f.id)).toEqual(p1.forms.map((f: Json) => f.id));
+    expect(back.prevCursor).toBeNull();
+    const tail = (await viewer.get('/site-api/forms?q=Paged&last=6&page=2')).json as Json;
+    expect(tail.forms.map((f: Json) => f.id)).toEqual(p2.forms.map((f: Json) => f.id));
+    expect(tail).toMatchObject({page: 2, nextCursor: null});
 
     await clearFormsStrip();
     const strip = (await owner.get('/site-api/forms/strip')).json as Json;

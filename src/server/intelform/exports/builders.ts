@@ -4,7 +4,7 @@ import type {ExportKind} from '../../../lib/intelform/api-exports';
 import {responsesCsvQuery, type ResponsesCsvQuery} from '../../../lib/intelform/api-responses';
 import {contactsCsvBatch, contactsCsvHeader} from '../contacts/query';
 import type {ContactCursor} from '../contacts/sql';
-import {loadCatalog, loadCatalogs, type FormCatalog} from '../responses/catalog';
+import {loadCatalog, type FormCatalog} from '../responses/catalog';
 import {dataRow, headerRow, type CsvRowData} from '../responses/csv';
 import {CSV_BOM} from '../responses/csv-text';
 import {safeTz, whereFragment} from '../responses/query';
@@ -13,14 +13,19 @@ import {ExportError} from './errors';
 
 /**
  * The pieces an export is built from, one bounded step at a time (job.ts calls `buildPart`
- * until a part is big enough or the run's time is up). Every step is a single indexed query
- * and returns the progress to save, so a run can stop after any step and the next one carries on:
+ * until its run's time is up, writing a part each PART_BYTES). Every step is a single indexed
+ * query and returns the progress to save, so a run can stop after any step and the next one
+ * carries on:
  *
- *   responses  one form's CSV, 500 rows a step, newest first: keyset on (submitted_at, id), the
- *              order of the responses_form_id_submitted_at_id index, whatever the table's sort
+ *   responses  one form's CSV, newest first: keyset on (submitted_at, id), the order of the
+ *              responses_form_id_submitted_at_id index, whatever the table's sort. Rows a step
+ *              from the form's width (`batchRows`), so a wide form's batch stays a few MB
  *   contacts   the contacts CSV, 1,000 a step from the contacts table in the list's sort (keyset)
- *   all        a ZIP of every form's CSV (STORE, zip.ts): forms 20 at a time with their catalogs
- *              in ONE query, each form's rows as above; CRC-32 and offsets carried in the progress
+ *   all        a ZIP of every form's CSV (STORE, zip.ts): forms 20 ids at a time, each form's
+ *              catalog read when its file starts, rows as above; CRC-32 and offsets in the progress
+ *
+ * A form's catalog (one row, responses/catalog.ts) is read once per run and kept on the context.
+ * An unfiltered export is sized from its first batch and refused at once when it can't fit.
  */
 
 export interface BuildContext {
@@ -28,8 +33,11 @@ export interface BuildContext {
   kind: ExportKind;
   formId: string | null;
   params: Record<string, unknown>;
-  /** Catalogs read in this run (not saved: re-read in one query by the next run). */
-  catalogs?: Map<string, FormCatalog>;
+  /** The catalog in use this run, of form `catalogOf` (not saved: re-read in one query by the next run). */
+  catalog?: FormCatalog | null;
+  catalogOf?: string;
+  /** Bytes of the export before this step (sizes it early). */
+  written?: number;
 }
 
 export type BuildState = Record<string, unknown>;
@@ -43,10 +51,43 @@ export interface Built {
 
 const encoder = new TextEncoder();
 const sql = Prisma.sql;
-/** Response rows per step. */
+/** Response rows per step, at most (a narrow form). */
 export const RESPONSE_BATCH = 500;
+/** Answer cells per step: a 500-field form reads 50 rows a step, a 50-field one 500. */
+const BATCH_CELLS = 25_000;
+/** Response rows per step, at least. */
+const MIN_BATCH = 50;
 /** Forms per step of the all-forms ZIP. */
 const FORM_BATCH = 20;
+/** A file past this stops with a message (stays well inside a Worker's memory and the ZIP limit). */
+export const MAX_EXPORT_BYTES = 512 * 1024 * 1024;
+
+/** Rows a step for a form with this many fields: a batch's memory is about rows × fields. */
+export function batchRows(fields: number): number {
+  return Math.max(MIN_BATCH, Math.min(RESPONSE_BATCH, Math.floor(BATCH_CELLS / Math.max(1, fields))));
+}
+
+const MB = 1024 * 1024;
+
+/**
+ * The whole file's size from its first batch: what is written, plus the rest of the form's rows
+ * at this batch's average. Throws when it can't fit, before hours of work.
+ */
+export function checkEstimate(written: number, batchBytes: number, batchRows_: number, totalRows: number, what: string): void {
+  if (batchRows_ <= 0) return;
+  const estimate = written + batchBytes + (batchBytes / batchRows_) * Math.max(0, totalRows - batchRows_);
+  if (estimate > MAX_EXPORT_BYTES) {
+    throw new ExportError(
+      `${what} would be about ${Math.ceil(estimate / MB).toLocaleString('en-US')} MB, more than the ${MAX_EXPORT_BYTES / MB} MB one export can hold. ` +
+        'Narrow it with filters (a date range), or export fewer responses.'
+    );
+  }
+}
+
+/** No filter at all: every response of the form is in the file (its count sizes the file). */
+function unfiltered(q: ResponsesCsvQuery): boolean {
+  return !q.ids.length && !q.q && !q.from && !q.to && !q.filter.length && !q.has;
+}
 
 interface RowCursor {
   at: string;
@@ -69,7 +110,8 @@ export async function responsesBatch(
   query: ResponsesCsvQuery,
   tz: string,
   origin: string | null,
-  cursor: RowCursor | null
+  cursor: RowCursor | null,
+  limit = batchRows(cat.entries.length)
 ): Promise<{text: string; rows: number; next: RowCursor | null}> {
   const where = query.ids.length ? sql`form_id = ${cat.form.id}::uuid AND id = ANY(${query.ids}::uuid[])` : whereFragment(cat, query, tz);
   const after = cursor ? sql`(submitted_at, id) < (${cursor.at}::timestamptz, ${cursor.id}::uuid)` : sql`true`;
@@ -79,24 +121,28 @@ export async function responsesBatch(
       duration_ms, device, browser, country, answers
     FROM responses WHERE ${where} AND ${after}
     ORDER BY submitted_at DESC, id DESC
-    LIMIT ${RESPONSE_BATCH}
+    LIMIT ${limit}
   `;
-  let text = '';
-  for (const r of batch) text += dataRow(cat, r, origin);
+  const lines = batch.map(r => dataRow(cat, r, origin));
   const last = batch.at(-1);
-  return {text, rows: batch.length, next: batch.length === RESPONSE_BATCH && last ? {at: last.at, id: last.id} : null};
+  return {text: lines.join(''), rows: batch.length, next: batch.length === limit && last ? {at: last.at, id: last.id} : null};
 }
 
 async function responsesStep(ctx: BuildContext, state: BuildState): Promise<Built> {
   const {query, tz, origin} = responsesParams(ctx.params);
-  const cat = ctx.formId ? await loadCatalog(ctx.db, ctx.formId) : null;
+  const cat = ctx.formId ? await catalogFor(ctx, ctx.formId) : null;
   if (!cat) throw new ExportError('The form was deleted while it was being exported.');
   if (!state.started) {
     return {bytes: encoder.encode(CSV_BOM + headerRow(cat)), rows: 0, state: {started: true, cur: null}, done: false};
   }
   const cursor = isCursor(state.cur) ? state.cur : null;
   const b = await responsesBatch(ctx.db, cat, query, tz, origin, cursor);
-  return {bytes: encoder.encode(b.text), rows: b.rows, state: {started: true, cur: b.next}, done: !b.next};
+  const bytes = encoder.encode(b.text);
+  // The first rows size the whole file (an unfiltered one: the form's count is its row count).
+  if (!cursor && b.next && unfiltered(query)) {
+    checkEstimate(ctx.written ?? 0, bytes.length, b.rows, cat.form.responseCount, 'This export');
+  }
+  return {bytes, rows: b.rows, state: {started: true, cur: b.next}, done: !b.next};
 }
 
 async function contactsStep(ctx: BuildContext, state: BuildState): Promise<Built> {
@@ -157,12 +203,13 @@ const concat = (...parts: Uint8Array[]) => {
   return out;
 };
 
-async function catalogFor(ctx: BuildContext, z: ZipState, formId: string): Promise<FormCatalog | null> {
-  if (!ctx.catalogs?.has(formId)) {
-    // A new run: the current form and the rest of the batch, in one query.
-    ctx.catalogs = await loadCatalogs(ctx.db, [formId, ...z.queue]);
+/** The form's catalog: read when its file starts or a new run carries on with it, then kept. */
+async function catalogFor(ctx: BuildContext, formId: string): Promise<FormCatalog | null> {
+  if (ctx.catalogOf !== formId) {
+    ctx.catalog = await loadCatalog(ctx.db, formId);
+    ctx.catalogOf = formId;
   }
-  return ctx.catalogs.get(formId) ?? null;
+  return ctx.catalog ?? null;
 }
 
 function checkSize(offset: number) {
@@ -177,10 +224,11 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
   // 1. Inside a form's CSV: its header, then its rows a batch at a time, then its descriptor.
   if (z.cur) {
     const cur = z.cur;
-    const cat = await catalogFor(ctx, z, cur.formId);
+    const cat = await catalogFor(ctx, cur.formId);
     let text = '';
     let rows = 0;
     let finished = false;
+    let sizeFrom = 0;
     if (!cat) {
       // Deleted meanwhile: what was written stays a (short) file.
       finished = true;
@@ -188,13 +236,17 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
       text = CSV_BOM + headerRow(cat);
       cur.started = true;
     } else {
+      const first = !cur.cursor;
       const b = await responsesBatch(ctx.db, cat, responsesCsvQuery.parse({}), tz, origin, cur.cursor);
       text = b.text;
       rows = b.rows;
       cur.cursor = b.next;
       finished = !b.next;
+      if (first && b.next) sizeFrom = cat.form.responseCount;
     }
     const data = encoder.encode(text);
+    // Sized by a form's first rows: its whole file plus everything before it.
+    if (sizeFrom) checkEstimate(z.offset, data.length, rows, sizeFrom, 'This ZIP');
     cur.crc = crc32(data, cur.crc);
     cur.size += data.length;
     let bytes = data;
@@ -211,7 +263,7 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
   // 2. The next form of the batch: its local header.
   while (z.queue.length) {
     const formId = z.queue.shift()!;
-    const cat = await catalogFor(ctx, z, formId);
+    const cat = await catalogFor(ctx, formId);
     if (!cat) continue;
     const used = new Set(z.used);
     const name = entryName(cat.form, used);
@@ -238,7 +290,6 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
     const last = forms.at(-1);
     if (last) z.formAfter = {at: last.at, id: last.id};
     z.formsDone = forms.length < FORM_BATCH;
-    ctx.catalogs = await loadCatalogs(ctx.db, z.queue);
     return {bytes: new Uint8Array(0), rows: 0, state: {...z}, done: false};
   }
 

@@ -5,9 +5,9 @@
 --
 -- IntelForm sample data: six forms built from the built-in templates (four live, one closed,
 -- one draft), 44 responses over the last weeks, funnel counts (views and starts) and one
--- saved theme. Every address is @example.com. Contacts are not a table: they are the
--- responses' contact_* columns, which the responses_contact_fill trigger fills from the
--- answers (never set them here). Forms have no creator (created_by is nullable).
+-- saved theme. Every address is @example.com. Contacts are never inserted here: the
+-- responses_contact_fill trigger fills the responses' contact_* columns and the contacts table
+-- from the answers. Forms have no creator (created_by is nullable).
 -- Times are relative to now(), so the dashboard always has recent activity.
 -- The answers are what the submit route stores (checked by tests/intelform/seed.test.ts).
 BEGIN;
@@ -611,5 +611,17 @@ WHERE f."id" = s."id" AND (f."response_count" <> s.n OR f."last_response_at" IS 
 UPDATE "forms" f SET "starts_total" = e.n
 FROM (SELECT "form_id", sum("starts")::int AS n FROM "form_event_counts" GROUP BY "form_id") AS e
 WHERE f."id" = e."form_id" AND f."starts_total" <> e.n;
+
+-- The exact counters live in form_counts (responses come from the insert trigger); starts go into
+-- shard 0, minus any other shard's, so running this twice keeps the same total.
+INSERT INTO "form_counts" ("form_id", "shard")
+SELECT DISTINCT e."form_id", 0 FROM "form_event_counts" e
+WHERE EXISTS (SELECT 1 FROM "forms" f WHERE f."id" = e."form_id")
+ON CONFLICT DO NOTHING;
+UPDATE "form_counts" fc SET "starts" = e.n - (
+  SELECT coalesce(sum(o."starts"), 0) FROM "form_counts" o WHERE o."form_id" = fc."form_id" AND o."shard" <> 0
+)
+FROM (SELECT "form_id", sum("starts")::int AS n FROM "form_event_counts" GROUP BY "form_id") AS e
+WHERE fc."form_id" = e."form_id" AND fc."shard" = 0;
 
 COMMIT;

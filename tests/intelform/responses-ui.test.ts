@@ -1,7 +1,15 @@
 import {describe, expect, it} from 'vitest';
 
 import type {CatalogField} from '../../src/lib/intelform/api-responses';
-import {columnLabel, defaultColumns, moveColumn, resolveColumns, toggleColumn} from '../../src/portal/intelform/responses/columns';
+import {
+  columnLabel,
+  DEFAULT_VISIBLE_COLUMNS,
+  defaultColumns,
+  MAX_VISIBLE_COLUMNS,
+  moveColumn,
+  resolveColumns,
+  toggleColumn,
+} from '../../src/portal/intelform/responses/columns';
 import {niceMax, tickIndexes} from '../../src/portal/intelform/responses/charts';
 import {deviceLabel, formatDuration, formatPct, formatShare, plural} from '../../src/portal/intelform/responses/format';
 import {
@@ -60,7 +68,9 @@ describe('responses-ui: URL state', () => {
     const base = readTableState({});
     expect(isTableFiltered(base)).toBe(false);
     expect(isTableFiltered({...base, sort: 'duration', dir: 'asc'})).toBe(false);
-    expect(isTableFiltered({...base, q: 'a'})).toBe(true);
+    expect(isTableFiltered({...base, q: 'abc'})).toBe(true);
+    // Too short to search: not a filter (the API is never asked).
+    expect(isTableFiltered({...base, q: ' ab '})).toBe(false);
     expect(isTableFiltered({...base, filter: ['f_abcd:o_1']})).toBe(true);
     expect(isTableFiltered({...base, has: 'f_abcd'})).toBe(true);
     expect(isTableFiltered({...base, to: '2026-01-01'})).toBe(true);
@@ -71,13 +81,17 @@ describe('responses-ui: URL state', () => {
     expect(tableQueryString(readTableState({}))).toBe(`?tz=${tz}`);
     const t = readTableState({q: 'hi there', filter: ['f_abcd:o_1', 'f_abcd:o_2'], sort: 'duration', dir: 'asc'});
     expect(tableQueryString(t, {cursor: 'c1', page: 2})).toBe(`?q=hi+there&tz=${tz}&filter=f_abcd%3Ao_1&filter=f_abcd%3Ao_2&sort=duration&dir=asc&cursor=c1&page=2`);
+    expect(tableQueryString(readTableState({q: 'hi'}))).toBe(`?tz=${tz}`);
+    expect(tableQueryString(readTableState({}), {col: ['submitted_at', 'f_abcd']})).toBe(`?tz=${tz}&col=submitted_at&col=f_abcd`);
     expect(summaryQueryString({range: '7d', from: '2026-01-01', to: '2026-01-02'})).toBe(`?range=7d&tz=${tz}`);
     expect(summaryQueryString({range: 'custom', from: '2026-01-01', to: '2026-01-02'})).toBe(`?range=custom&from=2026-01-01&to=2026-01-02&tz=${tz}`);
   });
 
   it('exports the filters, or the selected rows only (always newest first)', () => {
-    const t = readTableState({q: 'x', sort: 'device', dir: 'asc'});
-    expect(exportQuery(t)).toEqual({q: 'x', tz: browserTz});
+    const t = readTableState({q: 'xyz', sort: 'device', dir: 'asc'});
+    expect(exportQuery(t)).toEqual({q: 'xyz', tz: browserTz});
+    // A search too short to run is left out, as the table leaves it out.
+    expect(exportQuery(readTableState({q: 'x'}))).toEqual({tz: browserTz});
     expect(exportQuery(t, ['a', 'b'])).toEqual({tz: browserTz, ids: ['a', 'b']});
   });
 
@@ -127,6 +141,22 @@ describe('responses-ui: columns', () => {
       {id: 'country', visible: false},
     ]);
     expect(resolveColumns(fields, null)).toEqual(defaultColumns(fields));
+  });
+
+  it('hides removed questions and opens a wide form on its first questions only', () => {
+    const wide = [field('f_gone', 'Old'), ...Array.from({length: 500}, (_, i) => field(`f_q${String(i).padStart(4, '0')}`))];
+    wide[0] = {...wide[0]!, deleted: true};
+    const cols = defaultColumns(wide);
+    expect(cols.find(c => c.id === 'f_gone')?.visible).toBe(false);
+    expect(cols.filter(c => c.visible)).toHaveLength(DEFAULT_VISIBLE_COLUMNS);
+    expect(cols.filter(c => c.visible).map(c => c.id).slice(0, 2)).toEqual(['submitted_at', 'f_q0000']);
+    expect(cols.find(c => c.id === 'duration')?.visible).toBe(true);
+    // Never more than MAX_VISIBLE_COLUMNS shown: a saved preference past it is cut, a toggle refused.
+    const all = resolveColumns(wide, cols.map(c => ({...c, visible: true})));
+    expect(all.filter(c => c.visible)).toHaveLength(MAX_VISIBLE_COLUMNS);
+    const hidden = all.find(c => !c.visible)!.id;
+    expect(toggleColumn(all, hidden, true).filter(c => c.visible)).toHaveLength(MAX_VISIBLE_COLUMNS);
+    expect(toggleColumn(all, 'submitted_at', false).filter(c => c.visible)).toHaveLength(MAX_VISIBLE_COLUMNS - 1);
   });
 
   it('keeps the saved order, drops gone columns and duplicates, inserts new fields at their form position', () => {
@@ -197,5 +227,23 @@ describe('responses-ui: format and charts', () => {
     expect(tickIndexes(0)).toEqual([]);
     expect(tickIndexes(3)).toEqual([0, 1, 2]);
     expect(tickIndexes(30)).toEqual([0, 7, 15, 22, 29]);
+  });
+});
+
+describe('which Responses view opens', () => {
+  it('follows the URL, then the fallback', async () => {
+    const {readView} = await import('../../src/portal/intelform/responses/state');
+    expect(readView({view: 'summary'}, 'table')).toBe('summary');
+    expect(readView({view: 'table'}, 'summary')).toBe('table');
+    expect(readView({}, 'table')).toBe('table');
+  });
+
+  it('opens a survey on Summary and a form of free answers on Table', async () => {
+    const {defaultView} = await import('../../src/portal/intelform/responses/state');
+    expect(defaultView([])).toBe('summary');
+    expect(defaultView(['name', 'email', 'long_text'])).toBe('table');
+    expect(defaultView(['email', 'section_break', 'signature', 'country'])).toBe('table');
+    expect(defaultView(['email', 'nps'])).toBe('summary');
+    expect(defaultView(['short_text', 'single_choice'])).toBe('summary');
   });
 });

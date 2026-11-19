@@ -1,4 +1,4 @@
-import {infiniteQueryOptions, queryOptions} from '@tanstack/react-query';
+import {keepPreviousData, queryOptions} from '@tanstack/react-query';
 
 import type {ActivityPage, ActivityPeople} from '../lib/activity';
 import type {AdminUser, AuditRow, PermissionRow, RoleRow} from '../lib/types';
@@ -57,14 +57,17 @@ export const firstAuditQuery = queryOptions({
   queryFn: () => read<AuditPage>(api.admin.audit.$get({query: {before: ''}})),
 });
 
-/** `/dashboard/users`: every account, newest first, filtered by exact email and status. */
-export const usersQuery = (filter: {email: string; status: string}) =>
-  infiniteQueryOptions({
-    queryKey: ['users', filter],
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({pageParam}) =>
-      read<UsersPage>(api.admin.users.$get({query: {before: pageParam ?? '', email: filter.email, status: filter.status}})),
-    getNextPageParam: last => (last.nextBefore ? String(last.nextBefore) : undefined),
+/**
+ * `/dashboard/users`: one page of accounts (25, newest first), filtered by exact email and
+ * status, starting after `before` (the previous page's `nextBefore`; '' for page 1). The
+ * screen keeps the `before` of every page it walked, so Previous is one request away.
+ */
+export const usersQuery = (filter: {email: string; status: string}, before = '') =>
+  queryOptions({
+    queryKey: ['users', filter, before],
+    queryFn: () => read<UsersPage>(api.admin.users.$get({query: {before, email: filter.email, status: filter.status}})),
+    placeholderData: keepPreviousData,
+    gcTime: 60_000,
   });
 
 /** The Activity screen's filters, as they sit in its URL (`?kind=forms&from=2026-11-01`). */

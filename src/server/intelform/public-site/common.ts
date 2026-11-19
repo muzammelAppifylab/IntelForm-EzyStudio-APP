@@ -30,8 +30,8 @@ export interface PublicFormsPage {
   indexing: boolean;
 }
 
-/** "3 open forms. Pick one to get started." (the /forms/ intro). */
+/** "3 open forms." (the /forms/ intro): a count, nothing more. */
 export function formsCountText(total: number): string {
-  if (total === 0) return 'Nothing is open right now. Check back soon.';
-  return `${total} open ${total === 1 ? 'form' : 'forms'}. Pick one to get started.`;
+  if (total === 0) return 'No forms are listed here right now.';
+  return `${total} open ${total === 1 ? 'form' : 'forms'}.`;
 }

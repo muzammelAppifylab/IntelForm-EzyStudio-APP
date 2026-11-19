@@ -54,11 +54,31 @@ export function SeriesChart({series, label}: {series: {day: string; count: numbe
       {series.length > 1 && <path className="responses-series-area" d={area} />}
       {series.length > 1 && <path className="responses-series-line" d={line} />}
       {(dots || series.length === 1) &&
-        series.map((s, i) => (
-          <circle key={s.day} className="responses-series-dot" cx={x(i)} cy={y(s.count)} r="3">
-            <title>{`${formatDay(s.day)}: ${formatNumber(s.count)}`}</title>
-          </circle>
-        ))}
+        series.map((s, i) => <circle key={s.day} className="responses-series-dot" cx={x(i)} cy={y(s.count)} r="3" />)}
+      {/* Hover: a full-height strip per day lights a guide line, the point and a label with the
+          day and its count (CSS :hover, so no state and no inline style). */}
+      {series.map((s, i) => {
+        const cx = x(i);
+        const cy = y(s.count);
+        const slot = series.length <= 1 ? innerW : innerW / (series.length - 1);
+        const text = `${formatDay(s.day)} · ${formatNumber(s.count)} ${s.count === 1 ? 'response' : 'responses'}`;
+        const tipW = text.length * 6.4 + 16;
+        const tipX = Math.min(Math.max(cx - tipW / 2, PAD.left), W - PAD.right - tipW);
+        const tipY = Math.max(cy - 34, 0);
+        const hitL = Math.max(cx - slot / 2, PAD.left);
+        const hitR = Math.min(cx + slot / 2, W - PAD.right);
+        return (
+          <g key={s.day} className="responses-series-hover" aria-hidden="true">
+            <rect className="responses-series-hit" x={hitL} y={PAD.top} width={hitR - hitL} height={innerH} />
+            <line className="responses-series-guide" x1={cx} x2={cx} y1={PAD.top} y2={PAD.top + innerH} />
+            <circle className="responses-series-dot responses-series-dot-on" cx={cx} cy={cy} r="4.5" />
+            <rect className="responses-series-tip" x={tipX} y={tipY} width={tipW} height="24" rx="6" />
+            <text className="responses-series-tip-text" x={tipX + tipW / 2} y={tipY + 12} dy="0.35em" textAnchor="middle">
+              {text}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }

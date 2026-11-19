@@ -1,4 +1,4 @@
-import {SUMMARY_RANGES, toQueryString, type SummaryRange} from '../../../lib/intelform/api-responses';
+import {searchTerm, SUMMARY_RANGES, toQueryString, type SummaryRange} from '../../../lib/intelform/api-responses';
 
 /**
  * The Responses tab's view state, all of it in the URL so every view can be linked (owner
@@ -57,8 +57,56 @@ function many(v: unknown): string[] {
   return list.map(one).filter((x): x is string => x !== undefined);
 }
 
-export function readView(search: Search): ResponsesView {
-  return one(search.view) === 'table' ? 'table' : 'summary';
+/** The view the URL names (`?view=table|summary`), else `fallback`. */
+export function readView(search: Search, fallback: ResponsesView = 'summary'): ResponsesView {
+  const v = one(search.view);
+  return v === 'table' || v === 'summary' ? v : fallback;
+}
+
+/**
+ * Question types whose Summary card says more than a list of answers (bars, averages, NPS).
+ * Country is left out: on a contact form it is one more detail about a person.
+ */
+const SUMMARY_TYPES: ReadonlySet<string> = new Set([
+  'single_choice',
+  'multiple_choice',
+  'dropdown',
+  'yes_no',
+  'picture_choice',
+  'rating',
+  'nps',
+  'number',
+]);
+
+/**
+ * The view a form opens on when the URL names none and this person hasn't picked one: Summary
+ * for a survey (any choice, rating, NPS or number question), Table for a form of free answers,
+ * contact details and signatures, where each response is read on its own.
+ */
+export function defaultView(types: readonly string[]): ResponsesView {
+  const asked = types.filter(t => t !== 'section_break');
+  if (!asked.length || asked.some(t => SUMMARY_TYPES.has(t))) return 'summary';
+  return 'table';
+}
+
+const VIEW_KEY = (formId: string) => `intelform:responses-view:${formId}`;
+
+/** The view this person last picked for this form, in this browser (null when none or blocked). */
+export function rememberedView(formId: string): ResponsesView | null {
+  try {
+    const v = localStorage.getItem(VIEW_KEY(formId));
+    return v === 'table' || v === 'summary' ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export function rememberView(formId: string, view: ResponsesView): void {
+  try {
+    localStorage.setItem(VIEW_KEY(formId), view);
+  } catch {
+    // Storage blocked: the form opens on its default next time.
+  }
 }
 
 export function readResponseId(search: Search): string | null {
@@ -96,9 +144,9 @@ export function applySearchPatch(prev: Search, patch: SearchPatch): Search {
   return next;
 }
 
-/** A table filter changes what is listed (the sort does not). */
+/** A table filter changes what is listed (the sort does not). A search too short to run is no filter. */
 export function isTableFiltered(t: TableState): boolean {
-  return !!(t.q || t.from || t.to || t.filter.length || t.has);
+  return !!(searchTerm(t.q) || t.from || t.to || t.filter.length || t.has);
 }
 
 /** The URL patch that clears every table filter. */
@@ -107,7 +155,7 @@ export const CLEAR_TABLE_FILTERS: SearchPatch = {q: null, tfrom: null, tto: null
 /** Query string for the API's filter schema (defaults left out). */
 export function tableQueryString(t: TableState, extra: Record<string, string | number | readonly string[] | undefined | null> = {}) {
   return toQueryString({
-    q: t.q || undefined,
+    q: searchTerm(t.q) || undefined,
     from: t.from,
     to: t.to,
     tz: browserTz,
@@ -137,7 +185,7 @@ export const formResponsesPath = (formId: string) => `${RESPONSES_API}/forms/${e
 export function exportQuery(t: TableState, ids: readonly string[] = []): Record<string, string | string[]> {
   const raw: Record<string, string | readonly string[] | undefined> = ids.length
     ? {tz: browserTz, ids}
-    : {q: t.q || undefined, from: t.from, to: t.to, tz: browserTz, filter: t.filter, has: t.has};
+    : {q: searchTerm(t.q) || undefined, from: t.from, to: t.to, tz: browserTz, filter: t.filter, has: t.has};
   const out: Record<string, string | string[]> = {};
   for (const [k, v] of Object.entries(raw)) {
     if (Array.isArray(v)) {

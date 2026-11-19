@@ -25,7 +25,8 @@ describe('npm run platform -- demo-login (docs/agent/store-apps.md)', () => {
     const entries = catalogueEntries(sources);
     const byCode = new Map(entries.map((e: {codename: string}) => [e.codename, e]));
     expect(byCode.get('site:user:read')).toMatchObject({title: 'See users', group: 'Users'});
-    expect(byCode.get('site:job:manage')).toMatchObject({title: 'Manage jobs', group: 'Jobs', roles: ['admin']});
+    // An app permission from src/server/permissions.ts (IntelForm removed the template's example `site:job:manage`).
+    expect(byCode.get('site:form:write')).toMatchObject({title: 'Create and edit forms', group: 'Forms', roles: ['admin', 'editor']});
     expect(byCode.has('*')).toBe(true);
   });
 

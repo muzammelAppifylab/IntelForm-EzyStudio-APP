@@ -35,7 +35,7 @@ export function QuestionCard({question, children, action}: {question: QuestionSu
           {question.medianTimeMs !== null && (
             <span className="responses-question-time">
               <Icon name="timer" size={14} />
-              Median time {formatDuration(question.medianTimeMs)}
+              Median time ≈ {formatDuration(question.medianTimeMs)}
             </span>
           )}
         </p>
@@ -45,13 +45,18 @@ export function QuestionCard({question, children, action}: {question: QuestionSu
   );
 }
 
-/** A horizontal bar 0–100 % of the row's width (SVG, so no inline style). */
+/**
+ * A horizontal bar, `value` out of `max`, as a share of the row's width. SVG in percent units
+ * (no viewBox), so the rounded ends stay round at any width and no inline style is needed (CSP).
+ */
 export function Bar({value, max, tone = 'default'}: {value: number; max: number; tone?: 'default' | 'other' | 'deleted'}) {
-  const width = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  const share = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
+  // A tiny share still shows as a dot, never as nothing.
+  const width = share > 0 ? Math.max(share, 1.5) : 0;
   return (
-    <svg className="responses-bar" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
-      <rect className="responses-bar-track" width="100" height="4" rx="2" />
-      {width > 0 && <rect className={`responses-bar-fill responses-bar-${tone}`} width={width} height="4" rx="2" />}
+    <svg className="responses-bar" width="100%" height="8" aria-hidden="true">
+      <rect className="responses-bar-track" width="100%" height="8" rx="4" />
+      {width > 0 && <rect className={`responses-bar-fill responses-bar-${tone}`} width={`${width}%`} height="8" rx="4" />}
     </svg>
   );
 }
@@ -70,7 +75,6 @@ export function ChoiceBars({
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? options : options.slice(0, limit);
-  const max = Math.max(1, ...options.map(o => o.pct));
   return (
     <div className="responses-choices">
       <ul>
@@ -88,7 +92,8 @@ export function ChoiceBars({
                 <span className="muted responses-num">{formatNumber(o.count)}</span>
                 <span className="responses-choice-pct">{formatShare(o.pct)}</span>
               </span>
-              <Bar value={o.pct} max={max} tone={o.deleted ? 'deleted' : o.other ? 'other' : 'default'} />
+              {/* Out of all answers (100 %), not the top option: equal shares look equal, and small. */}
+              <Bar value={o.pct} max={100} tone={o.deleted ? 'deleted' : o.other ? 'other' : 'default'} />
             </button>
           </li>
         ))}

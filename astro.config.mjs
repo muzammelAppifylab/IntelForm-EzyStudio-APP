@@ -68,7 +68,7 @@ export default defineConfig({
   // them on, any `Astro.session` call would fail at request time. Sign-in is
   // the site's own (src/platform/auth), on cookies.
   session: false,
-  redirects: {'/account': '/account/login/'},
+  redirects: {'/account': '/account/login/', '/about': '/'},
   // No Markdown code blocks here; Shiki's inline styles would break the CSP.
   markdown: {syntaxHighlight: false},
   security: {

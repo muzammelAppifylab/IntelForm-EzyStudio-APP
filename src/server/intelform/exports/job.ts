@@ -1,18 +1,23 @@
 import {DontRetry, JobRejected, sendJob} from '../../../platform/background';
 import type {PrismaClient} from '../../../platform/db';
 import type {ExportKind, ExportStatus} from '../../../lib/intelform/api-exports';
-import {buildPart, type BuildContext, type BuildState} from './builders';
+import {buildPart, MAX_EXPORT_BYTES, type BuildContext, type BuildState} from './builders';
 import {ExportError} from './errors';
 
-export {ExportError};
+export {ExportError, MAX_EXPORT_BYTES};
 
 /**
  * Exports run in the `intelform-exports` background job (docs/agent/background-jobs.md), never
  * in a request: a big CSV or ZIP is CPU and many queries, and a Worker request has neither the
- * CPU nor the time. One run builds bounded batches for up to RUN_BUDGET_MS, appends what it
- * built to the export as one more part (`intelform_export_parts`) and saves its progress in the
- * same statement, then sends the next run. A run that repeats (at-least-once) or retries starts
- * from the saved progress: a part is written exactly once (its seq is the parts count it saw).
+ * CPU nor the time. One run builds bounded batches for up to RUN_BUDGET_MS; each time what it
+ * built passes PART_BYTES it appends it to the export as one more part (`intelform_export_parts`)
+ * and saves its progress in the same statement, so a run fills its time budget (about 30 s, a
+ * few parts) and memory stays at about one part. Then it sends the next run. A run that repeats
+ * (at-least-once) or retries starts from the saved progress: a part is written exactly once (its
+ * seq is the parts count it saw).
+ *
+ * A refused send (the site's jobs-per-minute limit, the platform busy) never fails the export:
+ * it is marked `send_pending` and the every-minute job sends it again (`resendPendingExports`).
  * When the file is complete the export is `ready`; the dashboard downloads it
  * (GET /site-api/exports/:id/download streams the parts, no CPU work) and the hourly maintenance
  * sweeps exports a day old.
@@ -21,10 +26,13 @@ export {ExportError};
 export const EXPORTS_LIST = 'intelform-exports';
 /** Time one run builds for (a run has 60 s; the rest is the write and the next send). */
 const RUN_BUDGET_MS = 30_000;
-/** A part is written when the built bytes pass this (bounded memory per run). */
-const PART_BYTES = 768 * 1024;
-/** A file past this stops with a message (stays well inside a Worker's memory and the ZIP limit). */
-export const MAX_EXPORT_BYTES = 512 * 1024 * 1024;
+/** A part is written when the built bytes pass this (bounded memory: about one part per run). */
+export const PART_BYTES = 8 * 1024 * 1024;
+/** An export whose next run couldn't be queued for this long has stopped (it is marked failed). */
+export const PENDING_SEND_MINUTES = 120;
+/** Exports the every-minute job sends again per run (each send counts toward the jobs-per-minute limit). */
+const RESEND_PER_MINUTE = 3;
+const TOO_LARGE = 'This export is too large for one file. Narrow it with filters, or export fewer forms.';
 /** Exports are kept this long (hours) after they are started. */
 export const KEEP_HOURS = 24;
 /**
@@ -47,6 +55,7 @@ export interface ExportRow {
   rows: number;
   bytes: string | number | bigint;
   parts: number;
+  runs: number;
   file_name: string;
   content_type: string;
   error: string | null;
@@ -70,16 +79,57 @@ type Db = Pick<PrismaClient, '$queryRaw' | '$executeRaw'>;
 
 export async function loadExport(db: Db, id: string): Promise<ExportRow | null> {
   const rows = await db.$queryRaw<ExportRow[]>`
-    SELECT id::text AS id, user_id, kind, form_id::text AS form_id, params, status, state, rows, bytes, parts,
+    SELECT id::text AS id, user_id, kind, form_id::text AS form_id, params, status, state, rows, bytes, parts, runs,
       file_name, content_type, error, created_at, updated_at
     FROM intelform_exports WHERE id = ${id}::uuid
   `;
   return rows[0] ?? null;
 }
 
-/** Sends one run of an export. Throws JobRejected when the platform refuses it. */
+/** Sends run `step` of an export (0 the first). Throws JobRejected when the platform refuses it. */
 export async function sendExportRun(requestUrl: string, id: string, step: number): Promise<void> {
   await sendJob(requestUrl, EXPORTS_LIST, {exportId: id}, {key: `export-${id}-${step}`, label: `Export, part ${step + 1}`});
+}
+
+/**
+ * The next run wasn't queued: the every-minute job sends it (`resendPendingExports`). Also for
+ * the start route when its first send is refused (`runs` 0).
+ */
+export async function markSendPending(db: Db, id: string, runs: number): Promise<void> {
+  await db.$executeRaw`
+    UPDATE intelform_exports SET send_pending = true, updated_at = now()
+    WHERE id = ${id}::uuid AND status = 'running' AND runs = ${runs}::int
+  `;
+}
+
+/**
+ * The every-minute job: sends again the runs of exports whose send was refused (oldest first,
+ * RESEND_PER_MINUTE a minute; a refusal stops until next minute). The job key is the run's
+ * number, so a send that did reach the platform before is not run twice. Returns how many went.
+ */
+export async function resendPendingExports(db: Db, requestUrl: string, deps: {send?: typeof sendExportRun} = {}): Promise<number> {
+  const pending = await db.$queryRaw<{id: string; runs: number}[]>`
+    SELECT id::text AS id, runs FROM intelform_exports
+    WHERE status = 'running' AND send_pending
+    ORDER BY updated_at
+    LIMIT ${RESEND_PER_MINUTE}
+  `;
+  let sent = 0;
+  for (const p of pending) {
+    try {
+      await (deps.send ?? sendExportRun)(requestUrl, p.id, p.runs);
+    } catch (err) {
+      if (err instanceof JobRejected) break; // still busy: next minute
+      console.warn(`[intelform] export run not re-sent (${err instanceof Error ? err.name : 'error'})`);
+      continue;
+    }
+    sent++;
+    await db.$executeRaw`
+      UPDATE intelform_exports SET send_pending = false, updated_at = now()
+      WHERE id = ${p.id}::uuid AND runs = ${p.runs}::int AND send_pending
+    `;
+  }
+  return sent;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -102,7 +152,8 @@ export async function failStaleExports(db: Db, id?: string): Promise<number> {
     UPDATE intelform_exports SET status = 'failed', error = ${UNFINISHED}, state = '{}'::jsonb, updated_at = now()
     WHERE id IN (
       SELECT id FROM intelform_exports
-      WHERE status = 'running' AND updated_at < now() - make_interval(mins => ${STALE_MINUTES}::int)
+      WHERE status = 'running'
+        AND updated_at < now() - make_interval(mins => CASE WHEN send_pending THEN ${PENDING_SEND_MINUTES}::int ELSE ${STALE_MINUTES}::int END)
         AND (${only}::uuid IS NULL OR id = ${only}::uuid)
       LIMIT 500
     ) AND status = 'running'
@@ -146,85 +197,104 @@ async function runExport(
   // Gone (its form was deleted, swept) or already finished: nothing to do.
   if (!row || row.status !== 'running') return;
 
-  const ctx: BuildContext = {db: db as PrismaClient, kind: row.kind, formId: row.form_id, params: row.params};
+  let parts = Number(row.parts);
+  let written = Number(row.bytes);
+  const ctx: BuildContext = {db: db as PrismaClient, kind: row.kind, formId: row.form_id, params: row.params, written};
   let state: BuildState = row.state ?? {};
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  let rows = 0;
   let done = false;
-  try {
-    while (!done && size < PART_BYTES && now() - started < RUN_BUDGET_MS) {
-      const part = await buildPart(ctx, state);
-      if (part.bytes.length) {
-        chunks.push(part.bytes);
-        size += part.bytes.length;
+  for (;;) {
+    // Build one part: until it passes PART_BYTES, the run's time is up or the file is done.
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    let rows = 0;
+    try {
+      while (!done && size < PART_BYTES && now() - started < RUN_BUDGET_MS) {
+        ctx.written = written + size;
+        const part = await buildPart(ctx, state);
+        if (part.bytes.length) {
+          chunks.push(part.bytes);
+          size += part.bytes.length;
+        }
+        rows += part.rows;
+        state = part.state;
+        done = part.done;
+        if (written + size > MAX_EXPORT_BYTES) throw new ExportError(TOO_LARGE);
       }
-      rows += part.rows;
-      state = part.state;
-      done = part.done;
+    } catch (err) {
+      if (err instanceof ExportError) {
+        await fail(db, id, err.message);
+        return;
+      }
+      throw err; // tried again later, from the saved progress
     }
-  } catch (err) {
-    if (err instanceof ExportError) {
-      await fail(db, id, err.message);
-      return;
-    }
-    throw err; // tried again later, from the saved progress
+    const last = done || size < PART_BYTES || now() - started >= RUN_BUDGET_MS;
+    const saved = await savePart(db, id, {parts, chunks, size, rows, state: done ? {} : state, done, endRun: last});
+    if (!saved) return;
+    if (size > 0) parts++;
+    written += size;
+    if (last) break;
   }
+  if (done) return;
 
-  const total = Number(row.bytes) + size;
-  if (total > MAX_EXPORT_BYTES) {
-    await fail(db, id, 'This export is too large for one file. Narrow it with filters, or export fewer forms.');
-    return;
+  const step = Number(row.runs) + 1;
+  try {
+    await (deps.send ?? sendExportRun)(requestUrl, id, step);
+  } catch (err) {
+    // Refused (busy, the jobs-per-minute limit) or unreachable: never a failed export. The
+    // every-minute job sends it (resendPendingExports).
+    console.warn(`[intelform] next export run not queued (${err instanceof JobRejected ? err.code : err instanceof Error ? err.name : 'error'})`);
+    await markSendPending(db, id, step);
   }
-  const bytes = new Uint8Array(size);
+}
+
+/**
+ * ONE statement: the part (seq = the parts count this run saw) and the progress. A run that
+ * repeats finds the part there (ON CONFLICT) and the parts count moved: it changes nothing. An
+ * export that stopped meanwhile (failed: responses in it were deleted, or it went stale) gets no
+ * part. `endRun` counts the run (the next run's job key). False when nothing was saved.
+ */
+async function savePart(
+  db: Db,
+  id: string,
+  p: {parts: number; chunks: Uint8Array[]; size: number; rows: number; state: BuildState; done: boolean; endRun: boolean}
+): Promise<boolean> {
+  const bytes = new Uint8Array(p.size);
   let at = 0;
-  for (const c of chunks) {
+  for (const c of p.chunks) {
     bytes.set(c, at);
     at += c.length;
   }
-
-  // ONE statement: the part (seq = the parts count this run saw) and the progress. A run that
-  // repeats finds the part there (ON CONFLICT) and the parts count moved: it changes nothing.
-  // An export that stopped meanwhile (failed: responses in it were deleted, or it went stale)
-  // gets no part.
+  p.chunks.length = 0;
   const saved = await db.$queryRaw<{id: string}[]>`
     WITH p AS (
       INSERT INTO intelform_export_parts (export_id, seq, data)
-      SELECT ${id}::uuid, ${row.parts}::int, ${bytes}
-      WHERE ${size}::int > 0
-        AND EXISTS (SELECT 1 FROM intelform_exports WHERE id = ${id}::uuid AND status = 'running' AND parts = ${row.parts}::int)
+      SELECT ${id}::uuid, ${p.parts}::int, ${bytes}
+      WHERE ${p.size}::int > 0
+        AND EXISTS (SELECT 1 FROM intelform_exports WHERE id = ${id}::uuid AND status = 'running' AND parts = ${p.parts}::int)
       ON CONFLICT (export_id, seq) DO NOTHING
       RETURNING 1
     )
     UPDATE intelform_exports SET
-      state = ${JSON.stringify(done ? {} : state)}::jsonb,
-      rows = rows + ${rows}::int,
-      bytes = bytes + ${size}::bigint,
+      state = ${JSON.stringify(p.state)}::jsonb,
+      rows = rows + ${p.rows}::int,
+      bytes = bytes + ${p.size}::bigint,
       parts = parts + (SELECT count(*)::int FROM p),
-      status = ${done ? 'ready' : 'running'},
+      runs = runs + ${p.endRun ? 1 : 0}::int,
+      send_pending = false,
+      status = ${p.done ? 'ready' : 'running'},
       updated_at = now()
-    WHERE id = ${id}::uuid AND status = 'running' AND parts = ${row.parts}::int
-      AND (${size}::int = 0 OR EXISTS (SELECT 1 FROM p))
+    WHERE id = ${id}::uuid AND status = 'running' AND parts = ${p.parts}::int
+      AND (${p.size}::int = 0 OR EXISTS (SELECT 1 FROM p))
     RETURNING id::text AS id
   `;
-  if (!saved.length) {
-    // Stopped while this run built (a delete committed while this statement ran): no part of a
-    // stopped export stays behind.
-    await db.$executeRaw`
-      DELETE FROM intelform_export_parts p USING intelform_exports e
-      WHERE p.export_id = e.id AND e.id = ${id}::uuid AND e.status <> 'running'
-    `;
-    return;
-  }
-  if (done) return;
-
-  try {
-    await (deps.send ?? sendExportRun)(requestUrl, id, row.parts + 1);
-  } catch (err) {
-    // Refused (busy): this run is tried again later and carries on from what it saved.
-    if (err instanceof JobRejected) throw new Error(`The next part of the export wasn’t queued (${err.code}).`);
-    throw err;
-  }
+  if (saved.length) return true;
+  // Stopped while this run built (a delete committed while this statement ran): no part of a
+  // stopped export stays behind.
+  await db.$executeRaw`
+    DELETE FROM intelform_export_parts p USING intelform_exports e
+    WHERE p.export_id = e.id AND e.id = ${id}::uuid AND e.status <> 'running'
+  `;
+  return false;
 }
 
 /** Exports started more than KEEP_HOURS ago go (their parts with them). */

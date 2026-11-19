@@ -1,5 +1,6 @@
 import {Prisma, type PrismaClient} from '../../../generated/prisma/client';
 import {
+  CONTACTS_COUNT_CAP,
   CONTACTS_PAGE_SIZE,
   type ContactDetailResponse,
   type ContactFormRef,
@@ -13,14 +14,14 @@ import {
 import {cache} from '../../../platform/cache';
 import {CSV_BOM, csvRow} from '../responses/csv-text';
 import {
-  afterFragment,
+  cappedCountSql,
   CONTACT_COLUMNS,
+  cursorFor,
   decodeContactCursor,
   encodeContactCursor,
   filterFragment,
-  LAST_SEEN_TEXT,
-  orderFragment,
-  sortValue,
+  pageBeforeSql,
+  pageSql,
   type ContactCursor,
 } from './sql';
 
@@ -28,6 +29,9 @@ import {
  * Contacts: one row per `responses.contact_key` in the `contacts` table, which triggers on
  * `responses` keep in the same statement as every insert and delete (sql.ts). Lists page by
  * keyset in the chosen sort (one index each); the strip and filter choices are cached.
+ * A contact's forms come from `contacts.form_ids` (most recently answered first): the list and
+ * the CSV never read responses; the detail counts each form's responses, bounded, by the
+ * (contact_key, form_id, submitted_at DESC) index.
  */
 
 type Db = Pick<PrismaClient, '$queryRaw' | '$transaction'>;
@@ -50,35 +54,27 @@ interface DbContact {
   form_count: number;
 }
 
-interface DbContactForm {
-  key: string;
+interface DbFormRef {
   id: string;
   title: string;
   status: string;
-  responses: number;
 }
 
 type FormWithResponses = ContactFormRef & {responses: number};
 
-/** Each contact's forms with response counts, most recently answered first (by index, these keys only). */
-export async function formsByKey(db: Reader, keys: string[]): Promise<Map<string, FormWithResponses[]>> {
-  const out = new Map<string, FormWithResponses[]>();
-  if (!keys.length) return out;
-  const rows = await db.$queryRaw<DbContactForm[]>`
-    SELECT r.contact_key AS key, f.id::text AS id, f.title, f.status, count(*)::int AS responses
-    FROM responses r JOIN forms f ON f.id = r.form_id
-    WHERE r.contact_key = ANY(${keys}::text[])
-    GROUP BY r.contact_key, f.id
-    ORDER BY r.contact_key, max(r.submitted_at) DESC, f.id
-    LIMIT 10000
-  `;
-  for (const r of rows) {
-    const list = out.get(r.key) ?? [];
-    list.push({id: r.id, title: r.title, status: asStatus(r.status), responses: Number(r.responses)});
-    out.set(r.key, list);
-  }
-  return out;
-}
+/** The forms of a list row: its first 3 form ids (most recent first) with titles, as JSON. */
+const LIST_FORMS = Prisma.sql`(
+  SELECT coalesce(json_agg(json_build_object('id', f.id::text, 'title', f.title, 'status', f.status) ORDER BY u.o), '[]'::json)
+  FROM unnest(c.form_ids[1:3]) WITH ORDINALITY AS u(fid, o) JOIN forms f ON f.id = u.fid
+)`;
+
+const toRefs = (forms: DbFormRef[] | null): ContactFormRef[] =>
+  (forms ?? []).map(f => ({id: f.id, title: f.title, status: asStatus(f.status)}));
+
+/** Per form, responses are counted up to this many (the detail shows "1,000+"). */
+export const FORM_COUNT_CAP = 1000;
+/** At most this many of a contact's forms on the detail (formCount has the full number). */
+export const DETAIL_FORMS = 100;
 
 export function toRow(c: DbContact, forms: ContactFormRef[]): ContactRow {
   return {
@@ -100,86 +96,160 @@ export function toRow(c: DbContact, forms: ContactFormRef[]): ContactRow {
 /**
  * Site Cache (docs/agent/cache.md):
  *   report:contacts-overview   10 min   the strip and filter choices: workspace-wide, the same for
- *                                       every CONTACT_READ viewer; cleared when contacts are erased
- *                                       (a new response just shows within 10 minutes)
+ *                                       every CONTACT_READ viewer. clearContactsOverview() (contacts
+ *                                       erased, a form deleted) drops it; clearContactsOverview('soon')
+ *                                       (responses deleted, retention) lets one built under a minute
+ *                                       ago live one more minute, so a stream of deletes rebuilds it
+ *                                       at most about once a minute (a new response just shows
+ *                                       within 10 minutes).
  */
 export const OVERVIEW_KEY = 'report:contacts-overview';
 const OVERVIEW_TTL = 10 * 60;
+/** A rebuild younger than this survives a 'soon' clear (seconds; the cache's minimum TTL). */
+const OVERVIEW_MIN_AGE = 60;
 
-export async function clearContactsOverview(): Promise<void> {
+interface CachedOverview {
+  at: number;
+  data: ContactsOverviewResponse;
+}
+
+/**
+ * 'now': drop the cached overview. 'soon' (after responses were deleted): drop it, unless it was
+ * built under a minute ago; then it expires within a minute.
+ */
+export async function clearContactsOverview(when: 'now' | 'soon' = 'now', now = Date.now()): Promise<void> {
+  if (when === 'soon') {
+    const cached = await cache.get<CachedOverview>(OVERVIEW_KEY);
+    if (!cached) return;
+    if (typeof cached.at === 'number' && now - cached.at < OVERVIEW_MIN_AGE * 1000) {
+      await cache.set(OVERVIEW_KEY, cached, OVERVIEW_MIN_AGE);
+      return;
+    }
+  }
   await cache.del(OVERVIEW_KEY);
 }
 
-/** Workspace-wide numbers and filter choices, ignoring every filter. Cached; three reads on a miss, together. */
+/** Workspace-wide numbers and filter choices, ignoring every filter. Cached; ONE pass over contacts on a miss. */
 export async function contactsOverview(db: Reader): Promise<ContactsOverviewResponse> {
-  return cache.getOrSet(OVERVIEW_KEY, OVERVIEW_TTL, () => loadOverview(db));
+  const cached = await cache.getOrSet<CachedOverview>(OVERVIEW_KEY, OVERVIEW_TTL, async () => ({at: Date.now(), data: await loadOverview(db)}));
+  // A value cached before {at, data} (an older deploy) is rebuilt.
+  return cached.data ?? (await loadOverview(db));
 }
 
+interface OverviewRow {
+  /** 0 the totals, 1 a country, 2 a form. */
+  kind: number;
+  code: string | null;
+  id: string | null;
+  title: string | null;
+  status: string | null;
+  contacts: number;
+  new_week: number;
+  repeat: number;
+  with_phone: number;
+}
+
+/**
+ * The totals, the contacts per country and per form, in one scan of contacts (grouping sets over
+ * each contact's forms; the totals and countries count a contact once, on its first form).
+ */
 async function loadOverview(db: Reader): Promise<ContactsOverviewResponse> {
-  const [[s], countries, forms] = await Promise.all([
-    db.$queryRaw<{total: number; new_week: number; returning: number; with_phone: number}[]>`
-      SELECT count(*)::int AS total,
-        count(*) FILTER (WHERE first_seen >= now() - interval '7 days')::int AS new_week,
-        count(*) FILTER (WHERE n >= 2)::int AS returning,
-        count(*) FILTER (WHERE phone IS NOT NULL)::int AS with_phone
-      FROM contacts
-    `,
-    db.$queryRaw<{code: string; contacts: number}[]>`
-      SELECT country AS code, count(*)::int AS contacts
-      FROM contacts WHERE country IS NOT NULL
-      GROUP BY country
-      ORDER BY contacts DESC, code
-      LIMIT 300
-    `,
-    db.$queryRaw<{id: string; title: string; status: string; contacts: number}[]>`
-      SELECT f.id::text AS id, f.title, f.status, x.contacts
-      FROM (SELECT fid, count(*)::int AS contacts FROM contacts, unnest(form_ids) AS fid GROUP BY fid) x
-      JOIN forms f ON f.id = x.fid
-      ORDER BY x.contacts DESC, f.title, f.id
-      LIMIT 1000
-    `,
-  ]);
-  const total = Number(s?.total ?? 0);
+  const rows = await db.$queryRaw<OverviewRow[]>`
+    WITH g AS (
+      SELECT CASE WHEN GROUPING(c.country) = 0 THEN 1 WHEN GROUPING(u.fid) = 0 THEN 2 ELSE 0 END AS kind,
+        c.country AS code, u.fid,
+        CASE WHEN GROUPING(u.fid) = 0 THEN count(*) ELSE count(*) FILTER (WHERE coalesce(u.o, 1) = 1) END::int AS contacts,
+        count(*) FILTER (WHERE coalesce(u.o, 1) = 1 AND c.first_seen >= now() - interval '7 days')::int AS new_week,
+        count(*) FILTER (WHERE coalesce(u.o, 1) = 1 AND c.n >= 2)::int AS repeat,
+        count(*) FILTER (WHERE coalesce(u.o, 1) = 1 AND c.phone IS NOT NULL)::int AS with_phone
+      FROM contacts c LEFT JOIN LATERAL unnest(c.form_ids) WITH ORDINALITY AS u(fid, o) ON true
+      GROUP BY GROUPING SETS ((), (c.country), (u.fid))
+    ),
+    ranked AS (
+      SELECT g.*, f.title, f.status,
+        row_number() OVER (PARTITION BY g.kind ORDER BY g.contacts DESC, f.title, g.code, g.fid) AS pos
+      FROM g LEFT JOIN forms f ON g.kind = 2 AND f.id = g.fid
+      WHERE g.kind = 0 OR (g.kind = 1 AND g.code IS NOT NULL) OR (g.kind = 2 AND f.id IS NOT NULL)
+    )
+    SELECT kind, code, fid::text AS id, title, status, contacts, new_week, repeat, with_phone
+    FROM ranked
+    WHERE (kind = 1 AND pos <= 300) OR (kind = 2 AND pos <= 1000) OR kind = 0
+    ORDER BY kind, pos
+  `;
+  const s = rows.find(r => Number(r.kind) === 0);
+  const countries = rows.filter(r => Number(r.kind) === 1 && r.code);
+  const forms = rows.filter(r => Number(r.kind) === 2 && r.id);
+  const total = Number(s?.contacts ?? 0);
   const withPhone = Number(s?.with_phone ?? 0);
-  const formRefs = forms.map(f => ({id: f.id, title: f.title, status: asStatus(f.status), contacts: Number(f.contacts)}));
+  const formRefs = forms.map(f => ({id: f.id!, title: f.title ?? '', status: asStatus(f.status ?? ''), contacts: Number(f.contacts)}));
   return {
     strip: {
       total,
       newThisWeek: Number(s?.new_week ?? 0),
-      returning: Number(s?.returning ?? 0),
+      returning: Number(s?.repeat ?? 0),
       withPhonePct: total ? Math.round((withPhone / total) * 100) : 0,
       topForms: formRefs.slice(0, 3),
     },
-    facets: {forms: formRefs, countries: countries.map(c => ({code: c.code, contacts: Number(c.contacts)}))},
+    facets: {forms: formRefs, countries: countries.map(c => ({code: c.code!, contacts: Number(c.contacts)}))},
   };
 }
 
 // ------------------------------------------------------------------ List
 
+/** True when any filter narrows the list (search, segment, forms, countries, details, dates, counts). */
+export function contactsFiltered(q: ContactsListQuery): boolean {
+  return !!(
+    q.q ||
+    q.segment !== 'all' ||
+    q.form.length ||
+    q.country.length ||
+    q.has.length ||
+    q.from ||
+    q.to ||
+    q.min !== undefined ||
+    q.max !== undefined
+  );
+}
+
+type ListRow = DbContact & {sort_v: string | null; forms: DbFormRef[] | null};
+
 /**
- * One page of contacts (50) matching the filters, by keyset in the chosen sort: the page and
- * its contacts' forms, two reads. No total (no count per request): `nextCursor` says there is more.
+ * One page of contacts (25, 50 or 100) matching the filters, by keyset in the chosen sort: rows
+ * after `cursor`, before `before`, or the last `last` rows (read backwards, then flipped). Each
+ * row carries its latest 3 forms (from contacts.form_ids). The page and a total travel together:
+ * the total is counted up to CONTACTS_COUNT_CAP + 1 rows (never the whole table); unfiltered and
+ * past the cap it is the cached workspace total (the strip's), so "last page" still works.
  */
 export async function listContacts(db: Reader, q: ContactsListQuery, tz: string): Promise<ContactsListResponse> {
-  const cursor = decodeContactCursor(q.cursor);
+  const size = q.size ?? CONTACTS_PAGE_SIZE;
+  const after = cursorFor(q.sort, decodeContactCursor(q.cursor));
+  const before = after ? null : cursorFor(q.sort, decodeContactCursor(q.before));
+  const last = after || before || !q.last ? null : Math.min(q.last, size);
+  const backwards = !!before || last !== null;
+  const want = last ?? size;
   const where = filterFragment(q, tz);
-  const after = cursor ? afterFragment(q.sort, q.dir, cursor) : Prisma.sql`true`;
-  const rows = await db.$queryRaw<(DbContact & {sort_v: string | null; sort_t: string})[]>`
-    SELECT ${CONTACT_COLUMNS}, ${sortValue(q.sort)} AS sort_v, ${LAST_SEEN_TEXT} AS sort_t
-    FROM contacts c WHERE ${where} AND ${after}
-    ORDER BY ${orderFragment(q.sort, q.dir)}
-    LIMIT ${CONTACTS_PAGE_SIZE + 1}
-  `;
-  const page = rows.slice(0, CONTACTS_PAGE_SIZE);
-  const forms = await formsByKey(
-    db,
-    page.map(r => r.key)
-  );
-  const last = page.at(-1);
+  const columns = Prisma.sql`${CONTACT_COLUMNS}, ${LIST_FORMS} AS forms`;
+  const page = backwards ? pageBeforeSql(q.sort, q.dir, where, before, want + 1, columns) : pageSql(q.sort, q.dir, where, after, want + 1, columns);
+  const filtered = contactsFiltered(q);
+  const [rows, counted] = await Promise.all([
+    db.$queryRaw<ListRow[]>`${page}`,
+    db.$queryRaw<{n: number}[]>`${cappedCountSql(where, CONTACTS_COUNT_CAP)}`.then(r => Number(r[0]?.n ?? 0)),
+  ]);
+  const over = counted > CONTACTS_COUNT_CAP;
+  // Unfiltered and past the cap: the workspace total from the cached strip (one scan per 10 minutes).
+  const total = over && !filtered ? Math.max((await contactsOverview(db)).strip.total, counted) : Math.min(counted, CONTACTS_COUNT_CAP);
+  const more = rows.length > want;
+  const shown = backwards ? rows.slice(0, want).reverse() : rows.slice(0, want);
+  const cursorOf = (r: ListRow | undefined) => (r ? encodeContactCursor({v: r.sort_v, k: r.key}) : null);
   return {
-    contacts: page.map(r => toRow(r, forms.get(r.key) ?? [])),
-    pageSize: CONTACTS_PAGE_SIZE,
-    nextCursor: rows.length > CONTACTS_PAGE_SIZE && last ? encodeContactCursor({v: last.sort_v, t: last.sort_t, k: last.key}) : null,
+    contacts: shown.map(r => toRow(r, toRefs(r.forms))),
+    pageSize: size,
+    // Forwards: more rows past this page mean a next one. Backwards: the page we came from (none
+    // for the last page) is next, and more rows mean a previous one.
+    nextCursor: backwards ? (before ? cursorOf(shown.at(-1)) : null) : more ? cursorOf(shown.at(-1)) : null,
+    prevCursor: backwards ? (more ? cursorOf(shown[0]) : null) : after ? cursorOf(shown[0]) : null,
+    total,
+    totalCapped: over && filtered,
   };
 }
 
@@ -187,23 +257,48 @@ export async function listContacts(db: Reader, q: ContactsListQuery, tz: string)
 
 export const DETAIL_RESPONSES = 200;
 
+/**
+ * One contact, their forms (most recent first, each with its responses counted up to
+ * FORM_COUNT_CAP + 1) and their latest responses: per form the newest DETAIL_RESPONSES by index,
+ * then the newest of those. Every read is bounded by the contact's forms.
+ */
 export async function contactDetail(db: Reader, key: string): Promise<ContactDetailResponse | null> {
   const [contacts, forms, responses] = await Promise.all([
     db.$queryRaw<DbContact[]>`SELECT ${CONTACT_COLUMNS} FROM contacts c WHERE c.key = ${key}`,
-    formsByKey(db, [key]),
+    db.$queryRaw<(DbFormRef & {responses: number})[]>`
+      SELECT f.id::text AS id, f.title, f.status, x.responses
+      FROM contacts c
+      CROSS JOIN LATERAL unnest(c.form_ids[1:${DETAIL_FORMS}]) WITH ORDINALITY AS u(fid, o)
+      JOIN forms f ON f.id = u.fid
+      CROSS JOIN LATERAL (
+        SELECT count(*)::int AS responses FROM (
+          SELECT 1 FROM responses r WHERE r.contact_key = c.key AND r.form_id = u.fid LIMIT ${FORM_COUNT_CAP + 1}
+        ) z
+      ) x
+      WHERE c.key = ${key}
+      ORDER BY u.o
+    `,
     db.$queryRaw<
       {id: string; submitted_at: Date; duration_ms: number | null; device: string | null; country: string | null; form_id: string; title: string; status: string}[]
     >`
       SELECT r.id::text AS id, r.submitted_at, r.duration_ms, r.device, r.country, f.id::text AS form_id, f.title, f.status
-      FROM responses r JOIN forms f ON f.id = r.form_id
-      WHERE r.contact_key = ${key}
+      FROM contacts c
+      CROSS JOIN LATERAL unnest(c.form_ids[1:${DETAIL_FORMS}]) AS u(fid)
+      CROSS JOIN LATERAL (
+        SELECT r.id, r.submitted_at, r.duration_ms, r.device, r.country, r.form_id FROM responses r
+        WHERE r.contact_key = c.key AND r.form_id = u.fid
+        ORDER BY r.submitted_at DESC, r.id DESC
+        LIMIT ${DETAIL_RESPONSES}
+      ) r
+      JOIN forms f ON f.id = r.form_id
+      WHERE c.key = ${key}
       ORDER BY r.submitted_at DESC, r.id DESC
       LIMIT ${DETAIL_RESPONSES}
     `,
   ]);
   const contact = contacts[0];
   if (!contact) return null;
-  const list = forms.get(key) ?? [];
+  const list: FormWithResponses[] = forms.map(f => ({id: f.id, title: f.title, status: asStatus(f.status), responses: Number(f.responses)}));
   return {
     contact: toRow(contact, list),
     responses: responses.map(r => ({
@@ -221,49 +316,23 @@ export async function contactDetail(db: Reader, key: string): Promise<ContactDet
 // ------------------------------------------------------------------ Delete
 
 /**
- * Erases contacts: every response they sent, on every form, in one transaction (all or
- * nothing). forms.response_count / last_response_at stay right; the contacts rows and the
- * signature files' trash entries follow from the responses delete trigger. The caller sends
- * the file cleanup job and clears the cached strip.
+ * Erases contacts: every response they sent, on every form, in ONE statement (all or nothing).
+ * The responses delete trigger takes them off each form's counters (form_counts,
+ * form_response_hours), refreshes the contacts rows and puts signature files in the file trash;
+ * no form row is locked or written (forms.response_count / last_response_at are a copy the
+ * every-minute syncFormCounts refreshes). The caller sends the file cleanup job and clears the
+ * cached strip.
  */
 export async function deleteContacts(db: Db, keys: string[]): Promise<DeleteContactsResponse> {
   const unique = [...new Set(keys)];
-  return db.$transaction(async tx => {
-    const forms = await tx.$queryRaw<{form_id: string}[]>`
-      SELECT DISTINCT form_id::text AS form_id FROM responses WHERE contact_key = ANY(${unique}::text[]) LIMIT 10000
-    `;
-    if (!forms.length) return {contacts: 0, responses: 0};
-    // Lock every form involved in id order, so two deletes (or a delete and a submit) can't deadlock.
-    const locked = await tx.$queryRaw<{id: string}[]>`
-      SELECT id::text AS id FROM forms WHERE id = ANY(${forms.map(f => f.form_id)}::uuid[]) ORDER BY id FOR UPDATE
-    `;
-    // A form deleted meanwhile took its responses with it.
-    if (!locked.length) return {contacts: 0, responses: 0};
-    const lockedIds = locked.map(f => f.id);
-    const deleted = await tx.$queryRaw<{form_id: string; key: string}[]>`
-      DELETE FROM responses
-      WHERE contact_key = ANY(${unique}::text[]) AND form_id = ANY(${lockedIds}::uuid[])
-      RETURNING form_id::text AS form_id, contact_key AS key
-    `;
-    if (!deleted.length) return {contacts: 0, responses: 0};
-    const perForm = new Map<string, number>();
-    const found = new Set<string>();
-    for (const r of deleted) {
-      perForm.set(r.form_id, (perForm.get(r.form_id) ?? 0) + 1);
-      found.add(r.key);
-    }
-    const ids = [...perForm.keys()];
-    const counts = ids.map(id => perForm.get(id)!);
-    // Exact under the row locks (submits take them too); max() reads one index entry per form.
-    await tx.$executeRaw`
-      UPDATE forms f SET
-        response_count = GREATEST(0, f.response_count - d.n),
-        last_response_at = (SELECT max(r.submitted_at) FROM responses r WHERE r.form_id = f.id)
-      FROM unnest(${ids}::uuid[], ${counts}::int[]) AS d(id, n)
-      WHERE f.id = d.id
-    `;
-    return {contacts: found.size, responses: deleted.length};
-  });
+  const [row] = await db.$queryRaw<{contacts: number; responses: number}[]>`
+    WITH d AS (
+      DELETE FROM responses WHERE contact_key = ANY(${unique}::text[])
+      RETURNING contact_key
+    )
+    SELECT count(DISTINCT contact_key)::int AS contacts, count(*)::int AS responses FROM d
+  `;
+  return {contacts: Number(row?.contacts ?? 0), responses: Number(row?.responses ?? 0)};
 }
 
 // ------------------------------------------------------------------ CSV (the export job)
@@ -293,8 +362,9 @@ export function contactsCsvHeader(): string {
 
 /**
  * One batch of the contacts CSV after `cursor`, in the list's order (or just `q.key`), read by
- * keyset from the contacts table; every contact's form titles come from ONE joined query for
- * the batch. `tz` is already safe.
+ * keyset from the contacts table (one index range per batch: the whole export is O(n)); each
+ * contact's form titles come from its form_ids (most recent first), never from responses.
+ * `tz` is already safe.
  */
 export async function contactsCsvBatch(
   db: Reader,
@@ -303,37 +373,17 @@ export async function contactsCsvBatch(
   cursor: ContactCursor | null
 ): Promise<{text: string; rows: number; next: ContactCursor | null}> {
   const where = q.key.length ? Prisma.sql`c.key = ANY(${q.key}::text[])` : filterFragment(q, tz);
-  const after = cursor ? afterFragment(q.sort, q.dir, cursor) : Prisma.sql`true`;
-  const rows = await db.$queryRaw<(CsvDbRow & {key: string; sort_v: string | null; sort_t: string})[]>`
-    WITH page AS (
-      SELECT c.key, c.name, c.email, c.phone, c.country, c.n, c.first_seen, c.last_seen, ${sortValue(q.sort)} AS sort_v,
-        ${LAST_SEEN_TEXT} AS sort_t,
-        row_number() OVER (ORDER BY ${orderFragment(q.sort, q.dir)}) AS pos
-      FROM contacts c WHERE ${where} AND ${after}
-      ORDER BY ${orderFragment(q.sort, q.dir)}
-      LIMIT ${CSV_BATCH}
-    ),
-    titles AS (
-      SELECT x.key, string_agg(x.title, '; ' ORDER BY x.last DESC) AS forms
-      FROM (
-        SELECT r.contact_key AS key, f.title, max(r.submitted_at) AS last
-        FROM responses r JOIN forms f ON f.id = r.form_id
-        WHERE r.contact_key IN (SELECT key FROM page)
-        GROUP BY r.contact_key, f.id, f.title
-      ) x
-      GROUP BY x.key
-    )
-    SELECT p.key, p.sort_v, p.sort_t, p.name, p.email, p.phone, p.country, p.n, t.forms,
-      to_char(p.first_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS first_txt,
-      to_char(p.last_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS last_txt
-    FROM page p LEFT JOIN titles t ON t.key = p.key
-    ORDER BY p.pos
-  `;
+  const columns = Prisma.sql`c.key, c.name, c.email, c.phone, c.country, c.n,
+    (SELECT string_agg(f.title, '; ' ORDER BY u.o) FROM unnest(c.form_ids) WITH ORDINALITY AS u(fid, o) JOIN forms f ON f.id = u.fid) AS forms,
+    to_char(c.first_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS first_txt,
+    to_char(c.last_seen AT TIME ZONE ${tz}, 'YYYY-MM-DD HH24:MI:SS') AS last_txt`;
+  const page = pageSql(q.sort, q.dir, where, cursor, CSV_BATCH, columns);
+  const rows = await db.$queryRaw<(CsvDbRow & {key: string; sort_v: string | null})[]>`${page}`;
   const last = rows.at(-1);
   return {
     text: rows.map(csvLine).join(''),
     rows: rows.length,
-    next: rows.length === CSV_BATCH && last ? {v: last.sort_v, t: last.sort_t, k: last.key} : null,
+    next: rows.length === CSV_BATCH && last ? {v: last.sort_v, k: last.key} : null,
   };
 }
 

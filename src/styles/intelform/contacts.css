@@ -18,7 +18,14 @@
 .screen-contacts .contacts-stats {
   display: grid;
   gap: 1rem;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+/* The three small cards share the row under the big one, edge to edge (auto-fit left an
+   empty fourth track on wide screens). */
+@media (min-width: 600px) {
+  .screen-contacts .contacts-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 .screen-contacts .contacts-stats > :first-child {
   grid-column: 1 / -1;

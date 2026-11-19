@@ -1,6 +1,7 @@
 import {siteFetch} from '../../../platform/browser';
 import {putFile} from '../../../platform/files-browser';
 import type {FormPatchInput, FormPatchResponse} from '../../../lib/intelform/api-forms';
+import {checkImage, IMAGE_RULES, type ImagePurpose, type ImageRule} from '../../../server/intelform/uploads/rules';
 import {api, ApiRequestError, parseErrorBody} from '../lib/api';
 
 export interface SendOptions {
@@ -65,29 +66,18 @@ export function keepalivePatch(formId: string, body: FormPatchInput, revision: n
 
 // ------------------------------------------------------------------ uploads --
 
-export type UploadPurpose = 'logo' | 'image' | 'og';
+export type UploadPurpose = Exclude<ImagePurpose, 'favicon'>;
 
 /**
- * IntelForm's image limits, one place for the picker's help text and the browser check
- * (the uploads route checks the same again): 5 MB, JPG / PNG / WebP, SVG for logos too.
+ * IntelForm's image limits for the picker's help text and the browser check: the SAME rules the
+ * uploads route enforces (src/server/intelform/uploads/rules.ts, browser-safe), so the two never
+ * drift apart (files.md "Your own limits").
  */
-export const UPLOAD_RULES: Record<UploadPurpose, {types: readonly string[]; maxBytes: number; help: string}> = {
-  logo: {
-    types: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
-    maxBytes: 5 * 1024 * 1024,
-    help: 'PNG, JPG, WebP or SVG, up to 5 MB.',
-  },
-  image: {types: ['image/png', 'image/jpeg', 'image/webp'], maxBytes: 5 * 1024 * 1024, help: 'PNG, JPG or WebP, up to 5 MB.'},
-  og: {types: ['image/png', 'image/jpeg', 'image/webp'], maxBytes: 5 * 1024 * 1024, help: 'PNG, JPG or WebP, up to 5 MB.'},
-};
+export const UPLOAD_RULES: Record<UploadPurpose, ImageRule> = IMAGE_RULES;
 
 /** A quick browser-side check before an upload starts; null when the file is fine. */
 export function checkUpload(file: {type: string; size: number}, purpose: UploadPurpose): string | null {
-  const rule = UPLOAD_RULES[purpose];
-  if (!rule.types.includes(file.type)) return `That file type isn’t supported. ${rule.help}`;
-  if (file.size < 1) return 'That file is empty.';
-  if (file.size > rule.maxBytes) return `That file is too large. ${rule.help}`;
-  return null;
+  return checkImage(file, purpose);
 }
 
 /** POST /site-api/uploads answers this (step 1, files.md). */

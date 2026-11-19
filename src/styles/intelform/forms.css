@@ -251,12 +251,106 @@
   text-align: end;
 }
 
-.screen-forms .if-day-bars-svg {
+/* The plot: grid lines behind, one hoverable column per day on top (same 7 columns and gap as
+   the day labels, so each bar sits over its label). */
+.screen-forms .if-day-bars-area {
+  position: relative;
+  min-width: 0;
+  height: 12rem;
+}
+
+.screen-forms .if-day-bars-grid {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
-  height: 12rem;
-  min-height: 0;
-  overflow: hidden;
+  height: 100%;
+}
+
+.screen-forms .if-day-bars-cols {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.25rem;
+  height: 100%;
+}
+
+.screen-forms .if-day-col {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+
+.screen-forms .if-day-col:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.screen-forms .if-day-col-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.screen-forms .if-day-col .if-bar {
+  transition: fill 120ms ease;
+}
+
+.screen-forms .if-day-col:hover .if-bar {
+  fill: var(--chart-1);
+}
+
+.screen-forms .if-day-col:hover .if-bar-today {
+  fill: color-mix(in srgb, var(--highlight) 85%, var(--ink));
+}
+
+/* The hover label: the day and its count, above the column. */
+.screen-forms .if-day-tip {
+  position: absolute;
+  bottom: calc(100% + 0.375rem);
+  left: 50%;
+  z-index: 2;
+  translate: -50% 0;
+  padding: 0.3rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: var(--chamber);
+  color: var(--chamber-ink);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+/* The first and last columns keep their label inside the card. */
+.screen-forms .if-day-col:first-child .if-day-tip {
+  left: 0;
+  translate: 0 0;
+}
+
+.screen-forms .if-day-col:last-child .if-day-tip {
+  left: auto;
+  right: 0;
+  translate: 0 0;
+}
+
+.screen-forms .if-day-col:hover .if-day-tip {
+  opacity: 1;
+}
+
+/* The hover label takes the "Today so far" pill's line, so the pill steps aside meanwhile. */
+.screen-forms .if-day-bars:has(.if-day-col:hover) .if-day-bars-today {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-forms .if-day-col .if-bar,
+  .screen-forms .if-day-tip {
+    transition: none;
+  }
 }
 
 .screen-forms .if-grid-dash {
@@ -365,12 +459,6 @@
 
 .screen-forms .if-stale {
   opacity: 0.7;
-}
-
-.screen-forms .if-forms-shown {
-  margin: 0;
-  font-size: 0.8125rem;
-  text-align: center;
 }
 
 .screen-forms .if-forms-grid {

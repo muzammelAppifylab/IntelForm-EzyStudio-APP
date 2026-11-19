@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { IMAGE_RULES, type ImagePurpose } from '../../server/intelform/uploads/rules'
+
 /**
  * IntelForm's app settings (Settings screen, codename `site:intelform:settings`), stored in the
  * one `intelform_settings` row. Shared by the Settings UI and its Site API route.
@@ -16,17 +18,15 @@ export type DateFormat = (typeof DATE_FORMATS)[number]
 export const COLOR_MODES = ['light', 'dark', 'system'] as const
 export type ColorMode = (typeof COLOR_MODES)[number]
 
-/** What an upload is for. SVG is accepted only for logo and favicon. */
-export const UPLOAD_PURPOSES = ['logo', 'favicon', 'image', 'og'] as const
-export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number]
-export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+/** What an upload is for. Types and sizes: IMAGE_RULES (the uploads route's own limits). */
+export type UploadPurpose = ImagePurpose
 
 /** Image types an upload of each purpose may have (checked in the browser and again in the route). */
 export const UPLOAD_TYPES: Record<UploadPurpose, readonly string[]> = {
-  logo: ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'],
-  favicon: ['image/png', 'image/svg+xml'], // platform storage takes no .ico
-  image: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
-  og: ['image/png', 'image/jpeg', 'image/webp'],
+  logo: IMAGE_RULES.logo.types,
+  favicon: IMAGE_RULES.favicon.types,
+  image: IMAGE_RULES.image.types,
+  og: IMAGE_RULES.og.types,
 }
 
 /** Where a public file stored by the platform is served on this site (`publicFileUrl` in src/platform/files.ts). */

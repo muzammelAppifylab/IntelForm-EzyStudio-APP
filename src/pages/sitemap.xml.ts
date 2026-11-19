@@ -11,7 +11,7 @@ import {type PublicSitemap, sitemapPaths} from '../server/intelform/public-site/
  * that allow search engines (their Settings tab's "Hide from search engines" off), from
  * `GET /site-api/public-site/sitemap` (one bounded query).
  *
- * The public site's own pages (home, Forms, About, Privacy, Terms) are listed only while
+ * The public site's own pages (home, Forms, Privacy, Terms) are listed only while
  * Settings, Public site lets search engines index them, as their `noindex` says; Privacy and
  * Terms only once they have a text.
  *
@@ -23,7 +23,7 @@ export const prerender = false;
 
 const EXCLUDE = new Set(['/404/', '/500/', '/checkout/', '/thanks/']);
 const PRIVATE = /^\/(account|portal|site-api|dashboard)(\/|$)/;
-/** `./about.astro` → `/about/`, `./blog/index.astro` → `/blog/` (every page URL ends with `/`, like the canonical). */
+/** `./privacy.astro` → `/privacy/`, `./blog/index.astro` → `/blog/` (every page URL ends with `/`, like the canonical). */
 const pagePaths = Object.keys(import.meta.glob('./**/*.astro'))
   .filter(file => !file.includes('['))
   .map(file => `/${file.slice(2).replace(/\.astro$/, '').replace(/(^|\/)index$/, '')}/`.replace(/\/+/g, '/'))

@@ -106,4 +106,15 @@ export interface WebhookSendResult {
 
 export interface BuilderCapabilities {
   emailEnabled: boolean
+  /**
+   * The owner's own mail provider (owner secrets RESEND_API_KEY or POSTMARK_SERVER_TOKEN, plus
+   * EMAIL_FROM_ADDRESS): teammate emails and respondent confirmations need it.
+   */
+  mailProvider: boolean
+  /**
+   * File storage for this app: `ready`, `not_set_up` (no storage pack, Storage turned off, or no
+   * Site Key), or `unknown` (the platform didn't answer; nothing is shown). Signature questions
+   * and image uploads need it.
+   */
+  storage: 'ready' | 'not_set_up' | 'unknown'
 }

@@ -1,1 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#635bff"/><path d="M10 9h12v3h-8.5v2.6H21v3h-7.5V20H22v3H10z" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="IntelForm">
+  <title>IntelForm</title>
+  <rect width="120" height="120" rx="28" fill="#6c48ca"/>
+  <g fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round">
+    <path d="M28 36H64"/>
+    <path d="M28 60H92"/>
+    <path d="M62 86H88"/>
+  </g>
+  <path d="M90 22Q92.5 33.5 104 36Q92.5 38.5 90 50Q87.5 38.5 76 36Q87.5 33.5 90 22Z" fill="#d6ccff"/>
+  <rect x="25" y="73" width="26" height="26" rx="7" fill="#ffffff"/>
+  <path d="M31.5 86.5l5 5 8.5-10" fill="none" stroke="#6c48ca" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

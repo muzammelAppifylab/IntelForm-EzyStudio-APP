@@ -12,6 +12,12 @@ const dayShort = new Intl.DateTimeFormat('en-GB', {month: 'short', day: 'numeric
 export const formatNumber = (n: number) => numberFmt.format(n);
 export const plural = (n: number, one: string, many = `${one}s`) => `${formatNumber(n)} ${n === 1 ? one : many}`;
 
+/** The detail counts each form's responses up to this many (server: FORM_COUNT_CAP in contacts/query.ts). */
+export const FORM_COUNT_CAP = 1000;
+
+/** "12 responses", or "1,000+ responses" past the cap. */
+export const formResponses = (n: number) => (n > FORM_COUNT_CAP ? `${formatNumber(FORM_COUNT_CAP)}+ responses` : plural(n, 'response'));
+
 export const formatDate = (iso: string) => dateOnly.format(new Date(iso));
 
 /** "19 Oct" for a YYYY-MM-DD local day (no time-zone shift). */

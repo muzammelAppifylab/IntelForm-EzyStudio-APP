@@ -1,6 +1,6 @@
 import {z} from 'zod';
 
-import {FORM_SORTS, FORM_STATUSES, type FormSort, type FormStatus} from '../../../lib/intelform/api-forms';
+import {FORM_SORTS, FORM_STATUSES, FORMS_PAGE_SIZE, FORMS_PAGE_SIZES, type FormSort, type FormStatus} from '../../../lib/intelform/api-forms';
 import {blankDefinition, formDefinition, sanitizeDefinition, type FormDefinition} from '../../../lib/intelform/form/definition';
 import {defaultFormSettings, formSettings, type FormSettings, type FormSettingsPatch} from '../../../lib/intelform/form/settings';
 import {defaultTheme, formTheme, type FormTheme} from '../../../lib/intelform/form/theme';
@@ -209,17 +209,28 @@ export const completionRate = (responses: number, starts: number): number | null
 // ---------------------------------------------------------------------------
 
 /** Forms per page: fills whole rows of the 2- and 3-column grid. */
-export const PAGE_SIZE = 24;
+export const PAGE_SIZE = FORMS_PAGE_SIZE;
 
 /**
- * GET /site-api/forms. `cursor` is the previous page's `nextCursor` (keyset: no offset). `page`
- * is accepted for old links and ignored: the page number travels inside the cursor.
+ * GET /site-api/forms. Keyset paging, never an offset: `cursor` (the previous page's
+ * `nextCursor`) for the next page, `before` (the next page's `prevCursor`) for the previous
+ * one, or `last` = how many rows the last page holds. `page` is the page number the portal
+ * counted (echoed back); `size` one of FORMS_PAGE_SIZES. Anything odd falls back to a default.
  */
 export const listQuery = z.object({
   q: z.string().trim().max(200).optional().catch(undefined),
   status: z.enum([...FORM_STATUSES, 'all']).default('all').catch('all'),
   sort: z.enum(FORM_SORTS).default('updated').catch('updated'),
   cursor: z.string().max(600).optional().catch(undefined),
+  before: z.string().max(600).optional().catch(undefined),
+  last: z.coerce.number().int().min(1).max(100).optional().catch(undefined),
+  page: z.coerce.number().int().min(1).max(100_000).optional().catch(undefined),
+  size: z.coerce
+    .number()
+    .int()
+    .refine(n => (FORMS_PAGE_SIZES as readonly number[]).includes(n))
+    .default(FORMS_PAGE_SIZE)
+    .catch(FORMS_PAGE_SIZE),
 });
 export type ListQuery = z.infer<typeof listQuery>;
 

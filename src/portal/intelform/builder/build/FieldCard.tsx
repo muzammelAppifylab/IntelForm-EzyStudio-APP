@@ -7,7 +7,7 @@ import type {LogicIssue} from '../../../../lib/intelform/form/logic';
 import {Icon, IconButton, Menu, Switch, Tooltip} from '../../../ui';
 import {cn} from '../../lib/utils';
 import {describeRule} from '../describe';
-import {fieldName} from '../ops';
+import {fieldName, hasStarterLabel} from '../ops';
 import {applyDescription, DESCRIPTION_LIMITS, descriptionValue} from '../description';
 import {PipedText, RichPipedText} from '../pipe/PipedText';
 import {PipeInput} from '../pipe/PipeInput';
@@ -137,6 +137,8 @@ export const FieldCard = memo(function FieldCard({field, index, number, count, s
                 value={field.label}
                 beforeIndex={index}
                 autoFocus={focusTarget === 'label' || autoFocus}
+                // Only an untouched starter title: a remount must never select (and so let one key wipe) typed text.
+                selectOnFocus={autoFocus && focusTarget !== 'label' && hasStarterLabel(field)}
                 className="if-question-text"
                 onChange={label => s().updateField(field.id, f => void (f.label = label.slice(0, 500)), `label:${field.id}`, 'Edit label')}
               />

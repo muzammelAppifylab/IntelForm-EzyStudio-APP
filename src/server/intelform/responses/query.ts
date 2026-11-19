@@ -121,6 +121,68 @@ export function whereFragment(cat: FormCatalog, q: ResponsesFilterQuery, tz: str
   return and(parts);
 }
 
+// ------------------------------------------------------------------ Scan window
+
+/**
+ * "Has an answer" (`answers ? f`) and search (`search_text ILIKE`) have no per-form index (no GIN
+ * on responses: every submit would pay for it), so on a big form a filter few rows match would
+ * read the whole form for one page and its count. They look at the newest SEARCH_WINDOW
+ * responses only, read through the (form_id, submitted_at DESC, id DESC) index.
+ */
+export const SEARCH_WINDOW = 100_000;
+/**
+ * Sorting by an answer computes the key from the answers jsonb of every row it sorts: on a form
+ * with more responses than this it sorts the newest ANSWER_SORT_WINDOW only (the table says so).
+ */
+export const ANSWER_SORT_WINDOW = 50_000;
+/** Shortest search term: a trigram needs three characters, and shorter ones match nearly every row. */
+export const MIN_SEARCH_LENGTH = 3;
+
+export interface ScanWindow {
+  /** Only the newest `size` responses of the form were searched or sorted. */
+  size: number;
+  reason: 'search' | 'sort';
+}
+
+/** True for a column whose sort key comes from the answers (not submitted_at or a metadata column). */
+export function isAnswerSort(cat: FormCatalog, column: string): boolean {
+  return cat.byId.has(column) && !(column in META_SORT) && column !== 'submitted_at';
+}
+
+/**
+ * The window this query reads within, or null when the whole form is cheap enough: the form
+ * holds more responses than the window (the exact form total, form_counts) and a has / search
+ * filter or an answer sort is on. The smaller window wins.
+ */
+export function scanWindow(cat: FormCatalog, q: Pick<ResponsesFilterQuery, 'q' | 'has' | 'sort'>): ScanWindow | null {
+  const total = cat.form.responseCount;
+  let w: ScanWindow | null = null;
+  if ((q.q || q.has) && total > SEARCH_WINDOW) w = {size: SEARCH_WINDOW, reason: 'search'};
+  if (isAnswerSort(cat, q.sort) && total > ANSWER_SORT_WINDOW) w = {size: ANSWER_SORT_WINDOW, reason: 'sort'};
+  return w;
+}
+
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Rows at or after the form's `size`-th newest response, as a row comparison the
+ * (form_id, submitted_at DESC, id DESC) index takes as its range. The boundary is one
+ * index-only walk of `size` entries (an uncorrelated sub-select: run once per statement).
+ * No boundary (rows deleted meanwhile): every row.
+ */
+export function windowFragment(formId: string, size: number): Sql {
+  return sql`(submitted_at, id) >= (SELECT coalesce(b.s, '-infinity'::timestamptz), coalesce(b.i, ${NIL_UUID}::uuid)
+    FROM (SELECT 1) one LEFT JOIN (SELECT submitted_at AS s, id AS i FROM responses
+      WHERE form_id = ${formId}::uuid ORDER BY submitted_at DESC, id DESC OFFSET ${size - 1} LIMIT 1) b ON true)`;
+}
+
+/** The table's and the drawer's WHERE: the filters, within the scan window when one applies. */
+export function tableWhere(cat: FormCatalog, q: ResponsesFilterQuery, tz: string): {where: Sql; window: ScanWindow | null} {
+  const window = scanWindow(cat, q);
+  const where = whereFragment(cat, q, tz);
+  return {where: window ? sql`${where} AND ${windowFragment(cat.form.id, window.size)}` : where, window};
+}
+
 // ------------------------------------------------------------------ Sorting
 
 /** The SQL type of a sort key, so a keyset cursor (sent as text) is cast back exactly. */
@@ -214,18 +276,26 @@ export interface SortSpec {
   tie: 'asc' | 'desc';
   /** submitted_at is NOT NULL: plain ORDER BY so the (form_id, submitted_at DESC, id DESC) index serves it. */
   notNull: boolean;
+  /**
+   * A nullable column with its own (form_id, column, id) index (duration, device, browser,
+   * country): paged in two parts, answered rows then unanswered ones, each an index walk.
+   */
+  indexed: boolean;
 }
 
 export function sortSpec(cat: FormCatalog, column: string, dir: 'asc' | 'desc'): SortSpec {
   const {expr, type} = sortExpression(cat, column);
-  const notNull = column === 'submitted_at' || (!cat.byId.has(column) && !(column in META_SORT));
-  // Ascending by submitted_at walks the same index backwards, so its tie-breaker flips too.
+  const indexed = column in META_SORT;
+  const notNull = column === 'submitted_at' || (!cat.byId.has(column) && !indexed);
+  // Index-served sorts run the tie-breaker the same way as the key, so one index walk (forwards
+  // or backwards) gives the whole order. Answer sorts keep id DESC.
   return {
     expr,
     type,
     dir,
-    tie: notNull && dir === 'asc' ? 'asc' : 'desc',
+    tie: (notNull || indexed) && dir === 'asc' ? 'asc' : 'desc',
     notNull,
+    indexed,
   };
 }
 
@@ -258,10 +328,13 @@ export function keysetFragments(s: SortSpec): {after: Sql; before: Sql} {
   const e = s.expr;
   const k = sql`cur.k`;
   if (s.notNull) {
-    return {
-      after: sql`(${eAfter(e, k)} OR (${e} = cur.k AND ${idAfter}))`,
-      before: sql`(${eBefore(e, k)} OR (${e} = cur.k AND ${idBefore}))`,
-    };
+    // A row comparison, not "a < k OR (a = k AND id < kid)": Postgres uses it as an index
+    // condition, so "load more" and the drawer's prev / next start AT the cursor instead of
+    // walking the form from its first row (index: form_id, submitted_at DESC, id DESC).
+    // Valid because a not-null key's tie-breaker always runs the same way as the key.
+    const row = sql`(${e}, id)`;
+    const at = sql`(cur.k, cur.kid)`;
+    return {after: sql`${eAfter(row, at)}`, before: sql`${eBefore(row, at)}`};
   }
   return {
     after: sql`(CASE WHEN cur.k IS NULL THEN ${e} IS NULL AND ${idAfter}
@@ -269,6 +342,70 @@ export function keysetFragments(s: SortSpec): {after: Sql; before: Sql} {
     before: sql`(CASE WHEN cur.k IS NULL THEN ${e} IS NOT NULL OR ${idBefore}
       ELSE ${eBefore(e, k)} OR (${e} = cur.k AND ${idBefore}) END)`,
   };
+}
+
+// ------------------------------------------------------------------ Page queries
+
+/** Where a page starts: the top, after / before a cursor, or the end (read backwards). */
+export type PageFrom = {kind: 'first'} | {kind: 'after'; cur: Cursor} | {kind: 'before'; cur: Cursor} | {kind: 'last'};
+
+/**
+ * One page of rows (`take` of them) in the sort order, or in reverse order for `before` and
+ * `last` (the caller flips them). `cols` is the select list; `where` the filters.
+ *
+ * - submitted_at: one row comparison against the cursor, served by its index.
+ * - duration / device / browser / country (nullable, indexed): answered rows then unanswered
+ *   ones (NULLS LAST both ways), two LIMITed index walks joined by UNION ALL. A cursor's key
+ *   is known here, so only the part(s) still ahead of it run, each with a row comparison.
+ * - an answer: the CASE / OR keyset (no index fits a jsonb expression; bounded by the window).
+ */
+export function pageQuery(s: SortSpec, where: Sql, cols: Sql, from: PageFrom, take: number): Sql {
+  const backwards = from.kind === 'before' || from.kind === 'last';
+  const cur = from.kind === 'after' || from.kind === 'before' ? from.cur : null;
+  if (!s.indexed) {
+    const order = backwards ? reverseOrderFragment(s) : orderFragment(s);
+    if (!cur) return sql`SELECT ${cols} FROM responses WHERE ${where} ORDER BY ${order} LIMIT ${take}`;
+    const k = keysetFragments(s);
+    return sql`WITH ${cursorCte(cur, s.type)} SELECT ${cols} FROM responses, cur
+      WHERE ${where} AND ${backwards ? k.before : k.after} ORDER BY ${order} LIMIT ${take}`;
+  }
+  // Reading direction: the sort's own, or flipped when reading backwards.
+  const dir = backwards ? flip(s.dir) : s.dir;
+  const tie = backwards ? flip(s.tie) : s.tie;
+  const cmp = dir === 'desc' ? sql`<` : sql`>`;
+  const e = s.expr;
+  const answered = (afterCur: boolean) =>
+    afterCur
+      ? sql`SELECT 0 AS ph, ${e} AS sk, ${cols} FROM responses, cur WHERE ${where} AND ${e} IS NOT NULL
+          AND (${e}, id) ${cmp} (cur.k, cur.kid) ORDER BY ${e} ${D(dir)}, id ${D(tie)} LIMIT ${take}`
+      : sql`SELECT 0 AS ph, ${e} AS sk, ${cols} FROM responses WHERE ${where} AND ${e} IS NOT NULL
+          ORDER BY ${e} ${D(dir)}, id ${D(tie)} LIMIT ${take}`;
+  // All keys here are NULL, so ordering by the key too changes nothing but matches the
+  // (form_id, column, id) index exactly: the planner walks it instead of the primary key.
+  const unanswered = (afterCur: boolean) =>
+    afterCur
+      ? sql`SELECT 1 AS ph, ${e} AS sk, ${cols} FROM responses, cur WHERE ${where} AND ${e} IS NULL
+          AND id ${tie === 'desc' ? sql`<` : sql`>`} cur.kid ORDER BY ${e} ${D(dir)}, id ${D(tie)} LIMIT ${take}`
+      : sql`SELECT 1 AS ph, ${e} AS sk, ${cols} FROM responses WHERE ${where} AND ${e} IS NULL
+          ORDER BY ${e} ${D(dir)}, id ${D(tie)} LIMIT ${take}`;
+  // Forwards: answered (from the cursor) then unanswered. Backwards: unanswered then answered.
+  let parts: Sql[];
+  if (!backwards) {
+    if (!cur) parts = [answered(false), unanswered(false)];
+    else if (cur.k !== null) parts = [answered(true), unanswered(false)];
+    else parts = [unanswered(true)];
+  } else {
+    if (!cur) parts = [unanswered(false), answered(false)];
+    else if (cur.k !== null) parts = [answered(true)];
+    else parts = [unanswered(true), answered(false)];
+  }
+  const head = cur ? sql`WITH ${cursorCte(cur, s.type)} ` : sql``;
+  // Phase order: answered (0) first forwards, unanswered (1) first backwards.
+  const phase = backwards ? sql`ph DESC` : sql`ph ASC`;
+  return sql`${head}SELECT * FROM (${Prisma.join(
+    parts.map(p => sql`(${p})`),
+    ' UNION ALL '
+  )}) page ORDER BY ${phase}, sk ${D(dir)}, id ${D(tie)} LIMIT ${take}`;
 }
 
 // ------------------------------------------------------------------ Keyset cursor

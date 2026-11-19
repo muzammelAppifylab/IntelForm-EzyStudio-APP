@@ -15,9 +15,10 @@ template's own UI kit (`src/portal/ui/`), dressed in IntelForm's "paper & ink" l
   preview, and publish (each publish kept as a version).
 - **Sharing**: a public page per form (`/f/<slug>`; a renamed slug keeps redirecting), embedding
   (inline or popup, `public/embed.js`), a QR code, password protection, close dates and response
-  limits, Cloudflare Turnstile plus a honeypot, minimum fill time and rate limits against spam.
+  limits, and against spam a honeypot, a minimum fill time and rate limits (per address and
+  browser; confirmation emails are capped per form and per recipient).
 - **Responses**: a table with filters, column choices and a detail drawer, a summary with a chart
-  per question, CSV and ZIP export (uploaded files and signatures included) as a background job,
+  per question, CSV export (and a ZIP of every form's CSVs; signatures as links) as a background job,
   and deletion.
 - **Contacts**: everyone who answered, rolled up by email address, with filters, a drawer, CSV
   export and erasure.
@@ -25,8 +26,8 @@ template's own UI kit (`src/portal/ui/`), dressed in IntelForm's "paper & ink" l
   teammates and a confirmation to the respondent (these need a mail provider, see
   [Owner secrets](#owner-secrets)), signed webhooks with retries, a thank-you screen or a redirect.
 - **Templates and themes**: built-in starter templates, your own forms saved as templates, reusable themes.
-- **Public site**: a home page and `/forms/` listing the forms marked "Show on the homepage", an
-  about page, Privacy and Terms (their texts are set in Settings), sitemap and RSS.
+- **Public site**: a home page and `/forms/` listing the forms marked "Show on the homepage",
+  Privacy and Terms (their texts are set in Settings), sitemap and RSS.
 - **Accounts, team and roles** are the template's: sign-up, sign-in, two-step sign-in, users, roles
   and the activity log. IntelForm adds the roles **Editor** and **Viewer** (a migration) and these
   permissions:
@@ -73,8 +74,8 @@ their close date, trims logs, marks exports whose job stopped as failed).
 
 ## What an owner usually changes
 
-- **The public site's words**: `src/content/site.ts` (navigation, home sections, `/forms/` and
-  about copy). Without a Publish: the site's name and logo (the platform), which forms are listed
+- **The public site's words**: `src/content/site.ts` (navigation, home sections, and `/forms/`
+  copy). Without a Publish: the site's name and logo (the platform), which forms are listed
   (each form's Share tab, "Show on the homepage"), and the contact email, search and sharing,
   Privacy and Terms (dashboard › Settings › Public site).
 - **The look**: the colour, type and radius tokens at the top of `src/styles/base.css`; per form,
@@ -92,8 +93,6 @@ Secrets are never in a file or in the database: the site's owner adds them on th
 
 | Secret | What it turns on |
 | --- | --- |
-| `TURNSTILE_SITE_KEY` | Cloudflare Turnstile on public forms: the widget's (public) site key |
-| `TURNSTILE_SECRET_KEY` | the widget's secret key. Both are needed: create a widget in the Cloudflare dashboard under Turnstile, for this site's domain. Settings › Spam protection shows whether each is set and has **Test keys**. Without them forms still have a honeypot, a minimum fill time and rate limits; each form can also turn Turnstile off in its settings. |
 | `RESEND_API_KEY` or `POSTMARK_SERVER_TOKEN` | a mail provider for emails with the form's own text: teammate notifications and the respondent's confirmation |
 | `EMAIL_FROM_ADDRESS` | the sender of those emails, on a domain verified with that provider |
 
@@ -200,7 +199,7 @@ ignores it): never commit it. Restart `npm run dev` after changing it.
 | `SITE_OWNER_ID` | leave empty | the platform's opaque id for the account's owner. |
 | `DB_PORT` | optional | the port `docker-compose.yml` publishes when 5432 is taken ([Troubleshooting](#troubleshooting)). The site never reads it. |
 | `TEST_DATABASE_URL` | optional | a throwaway database for the integration tests ([Tests](#tests)). |
-| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, `RESEND_API_KEY`, … | optional | on your computer, [owner secrets](#owner-secrets) are read from `.env` under the same names. Use Cloudflare's Turnstile test keys here, never a live site's keys. |
+| `RESEND_API_KEY`, `POSTMARK_SERVER_TOKEN`, `EMAIL_FROM_ADDRESS` | optional | on your computer, [owner secrets](#owner-secrets) are read from `.env` under the same names. Use a test account's keys here, never a live site's. |
 
 ### The database
 
@@ -322,10 +321,10 @@ prisma/                  schema.prisma, migrations/, seed.sql (sample forms, res
 tests/                   unit tests; tests/intelform/ = IntelForm; tests/integration/ = the Site API on a real Postgres
 public/                  files served as they are (_headers: security headers, embed.js: the form embed)
 src/
-  content/site.ts        navigation, home sections, /forms/ and about copy
+  content/site.ts        navigation, home sections and /forms/ copy
   content/blog/          blog posts (Markdown)
   assets/                images optimised at build
-  pages/                 pages: index, forms/, f/[slug] (a public form), about, privacy, terms, blog/,
+  pages/                 pages: index, forms/, f/[slug] (a public form), privacy, terms, blog/,
                          account/, dashboard/, site-api/, sitemap, RSS
   portal/                the dashboard (React): routes.tsx, screens/, intelform/ (builder, responses,
                          contacts, settings, queries), ui/ (the UI kit)
@@ -518,13 +517,15 @@ then deploys. If a migration fails, the previous version keeps serving.
 ### Write a post
 
 Add a Markdown file to `src/content/blog/` (`my-post.md` → `/blog/my-post/`) with a `title`,
-`description` and `publishedAt` at the top (see `how-to-add-a-post.md` there), then Publish.
+`description` and `publishedAt` at the top (optional: `author`, `cover` and `coverAlt`, `tags`,
+`updatedAt`, `draft: true`; `src/content.config.ts` lists them), then Publish. The blog starts
+empty and shows "No posts published yet." until the first post.
 
 ### What this site controls
 
 | Address | Served by |
 | --- | --- |
-| `/`, `/forms/`, `/about/`, `/privacy/`, `/terms/`, `/blog/` | this site |
+| `/`, `/forms/`, `/privacy/`, `/terms/`, `/blog/` | this site |
 | `/f/<slug>` | this site (a public form; `?embed=1` or `?embed=popup` inside `embed.js`) |
 | `/sitemap.xml`, `/robots.txt`, `/rss.xml` | this site (search engines, feed readers) |
 | `/account/login`, `/account/register`, `/account/forgot`, … | this site (sign-in) |

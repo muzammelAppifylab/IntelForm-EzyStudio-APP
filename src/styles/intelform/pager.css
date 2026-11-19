@@ -1,0 +1,130 @@
+/*
+ * The dashboard's one pager and the line under a paged list ("Showing 1–50 of 3,551"):
+ * responses, contacts, forms and users (src/portal/intelform/lib/Pager.tsx).
+ */
+.app-page .list-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  padding-block: 0.25rem;
+}
+.app-page .list-count {
+  margin: 0;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.app-page .list-count strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* the pager: rows per page, then first / prev / numbers / next / last */
+.app-page .list-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+}
+.app-page .list-pager-size {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.app-page .list-pager-size select {
+  min-height: 36px;
+  padding: 0.35rem 2rem 0.35rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.app-page .list-pager-size select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.app-page .list-pager-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.app-page .list-pager-numbers {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.app-page .list-pager-page {
+  display: inline-grid;
+  place-items: center;
+  min-width: 36px;
+  height: 36px;
+  padding-inline: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+.app-page button.list-pager-page {
+  cursor: pointer;
+}
+.app-page button.list-pager-page:hover:not(:disabled) {
+  background: var(--hover);
+}
+.app-page button.list-pager-page:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+.app-page button.list-pager-page:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.app-page .list-pager-page[aria-current='page'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.app-page .list-pager-gap {
+  min-width: 1.25rem;
+  color: var(--muted);
+  text-align: center;
+}
+.app-page .list-pager-compact {
+  display: none;
+  padding-inline: 0.5rem;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .app-page .list-foot,
+  .app-page .list-pager {
+    justify-content: center;
+  }
+  .app-page .list-pager-numbers {
+    display: none;
+  }
+  .app-page .list-pager-compact {
+    display: inline;
+  }
+}
+
+
+/* the old page, dimmed, while the next one loads */
+.app-page .list-stale {
+  opacity: 0.7;
+  transition: opacity 150ms ease-out;
+}

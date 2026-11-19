@@ -6,7 +6,7 @@ import {Card, ErrorNote, LoadingBlock, StatCard} from '../../ui';
 import {responsesSummaryQuery} from '../queries/responses';
 import {CARD_BY_KIND, type SummaryCardProps} from './cards';
 import {Funnel, SeriesChart} from './charts';
-import {formatDay, formatDuration, formatNumber, formatPct, plural} from './format';
+import {formatDateTime, formatDay, formatDuration, formatNumber, formatPct, plural} from './format';
 import {RangePicker} from './RangePicker';
 import type {SummaryState} from './state';
 
@@ -21,7 +21,11 @@ export interface SummaryViewProps {
   empty: ReactNode;
 }
 
-/** Responses → Summary (legacy SummaryView.tsx): totals, responses per day, the funnel, one card per question. */
+/**
+ * Responses → Summary (legacy SummaryView.tsx): totals, responses per day, the funnel, one card per
+ * question. Days are in the app's time zone (Settings → General) for everyone; medians of times
+ * are approximate (≈); `asOf` says when the newest responses aren't counted yet.
+ */
 export function SummaryView({formId, state, onRange, onFilter, onViewAll, onOpenResponse, empty}: SummaryViewProps) {
   const {data, error, isPlaceholderData} = useQuery(responsesSummaryQuery(formId, state));
 
@@ -39,6 +43,11 @@ export function SummaryView({formId, state, onRange, onFilter, onViewAll, onOpen
         </p>
         <RangePicker range={state.range} from={state.from} to={state.to} onChange={onRange} />
       </div>
+      {data.asOf && (
+        <p className="muted" role="status">
+          Counted up to {formatDateTime(data.asOf)}. Newer responses are still being added up and will show in a few minutes.
+        </p>
+      )}
 
       <div className="responses-stats">
         <StatCard label="Views" value={formatNumber(t.views)} description="Form page loads" />
@@ -52,7 +61,7 @@ export function SummaryView({formId, state, onRange, onFilter, onViewAll, onOpen
         <StatCard
           label="Avg. completion time"
           value={formatDuration(t.avgMs)}
-          description={t.medianMs !== null ? `Median ${formatDuration(t.medianMs)}` : 'No timings yet'}
+          description={t.medianMs !== null ? `Median ≈ ${formatDuration(t.medianMs)}` : 'No timings yet'}
         />
       </div>
 

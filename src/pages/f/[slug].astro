@@ -55,9 +55,14 @@ if (state.kind === 'limited') Astro.response.headers.set('Retry-After', String(s
 const meta = pageMeta(state, opts);
 if (meta.noindex) Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
-// Any site may embed a form; signature uploads only where the form needs them.
-allowFraming(Astro.csp);
-if (state.kind === 'form') await allowFileUploads(Astro.csp, Astro.url);
+// Any site may embed a form; signature uploads only where the form needs them: a live form with a
+// signature question, or a locked one (its questions arrive after the password). Every other view
+// skips the platform storage call (it is not cached while storage is off).
+allowFraming(Astro.csp, Astro.response.headers);
+const needsUploads =
+  state.kind === 'form' &&
+  (!('definition' in state.payload) || state.payload.definition.fields.some(f => f.type === 'signature'));
+if (needsUploads) await allowFileUploads(Astro.csp, Astro.url);
 
 const style = await themeStyle(meta.theme);
 Astro.csp?.insertStyleHash(style.hash);

@@ -32,7 +32,6 @@ export function AppSettings() {
     <div className="app-page screen-app-settings">
       <PageHeader
         title="Settings"
-        description="App name and branding, the public site, notification defaults and data retention."
       />
       {allowed ? (
         <SettingsTabs />

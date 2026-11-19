@@ -1,7 +1,15 @@
-import {useInfiniteQuery, useQuery} from '@tanstack/react-query';
-import {useEffect, useMemo, useState, type ReactNode} from 'react';
+import {useQuery} from '@tanstack/react-query';
+import {useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 
-import type {CatalogField, ResponseRow} from '../../../lib/intelform/api-responses';
+import {
+  MIN_SEARCH_LENGTH,
+  RESPONSES_PAGE_SIZE,
+  RESPONSES_PAGE_SIZES,
+  type CatalogField,
+  type ResponseRow,
+  searchTerm,
+  type ResponsesScanWindow,
+} from '../../../lib/intelform/api-responses';
 import {
   Button,
   Checkbox,
@@ -10,7 +18,6 @@ import {
   ErrorNote,
   Icon,
   IconButton,
-  LoadMore,
   LoadingBlock,
   SearchInput,
   useToast,
@@ -18,7 +25,7 @@ import {
 } from '../../ui';
 import {useCan} from '../lib/can';
 import {errorMessage} from '../lib/api';
-import {responsePrefsQuery, responsesListQuery, useSaveResponsePrefs} from '../queries/responses';
+import {FIRST_PAGE, responseFieldsQuery, responsePrefsQuery, responsesListQuery, useSaveResponsePrefs, type PageNav} from '../queries/responses';
 import {columnLabel, resolveColumns} from './columns';
 import {useConfirmDelete} from './ConfirmDelete';
 import {countryLabel, deviceLabel, formatDateTime, formatDuration, formatNumber} from './format';
@@ -26,6 +33,19 @@ import {CalendarRange} from './RangePicker';
 import {CLEAR_TABLE_FILTERS, exportQuery, isTableFiltered, sortPatch, type SearchPatch, type TableState} from './state';
 import {useExport} from '../lib/exports';
 import {ColumnsMenu, FilterMenu} from './TableMenus';
+import {Pager, type PageTarget} from '../lib/Pager';
+
+const SIZE_KEY = 'intelform:responses-page-size';
+
+/** Rows per page this person last picked, in this browser. */
+function rememberedSize(): number {
+  try {
+    const n = Number(localStorage.getItem(SIZE_KEY));
+    return (RESPONSES_PAGE_SIZES as readonly number[]).includes(n) ? n : RESPONSES_PAGE_SIZE;
+  } catch {
+    return RESPONSES_PAGE_SIZE;
+  }
+}
 
 export interface TableViewProps {
   formId: string;
@@ -39,12 +59,28 @@ export interface TableViewProps {
 
 /**
  * Responses → Table (legacy TableView.tsx): search, date range, choice filters, sortable and
- * configurable columns, selection with export / delete, keyset "Load more". Selection is kept
- * while more rows load and cleared when the filters change.
+ * configurable columns, selection with export / delete, numbered keyset pages with a rows-per-page
+ * choice. Selection is kept across pages and cleared when the filters change.
  */
 export function TableView({formId, state, update, openResponse, activeResponseId, empty}: TableViewProps) {
-  const list = useInfiniteQuery(responsesListQuery(formId, state));
+  const [size, setSize] = useState(rememberedSize);
+  const [nav, setNav] = useState<PageNav>(FIRST_PAGE);
+  const [via, setVia] = useState<PageTarget | null>(null);
+  const topRef = useRef<HTMLDivElement>(null);
   const prefs = useQuery(responsePrefsQuery(formId));
+  // The columns come first: they decide which answers a page sends (a wide form sends only the visible ones).
+  const catalog = useQuery(responseFieldsQuery(formId));
+  const fields = catalog.data;
+  const fieldMap = useMemo(() => new Map((fields ?? []).map(f => [f.id, f])), [fields]);
+  const columns = useMemo(() => resolveColumns(fields ?? [], prefs.data?.columns ?? null), [fields, prefs.data?.columns]);
+  // "View all" (?has=) always shows that question's column.
+  const visible = columns.filter(c => c.visible || c.id === state.has);
+  const colKey = visible.map(c => c.id).join(',');
+  // A plain array: React Query keys compare by value, and the React Compiler memoizes this.
+  // No visible column (old saved prefs): ask for the submitted time, never an empty id.
+  const colIds = colKey ? colKey.split(',') : ['submitted_at'];
+  const ready = !!fields && !prefs.isPending;
+  const list = useQuery(responsesListQuery(formId, state, size, colIds, nav, ready));
   const toast = useToast();
   const savePrefs = useSaveResponsePrefs(formId, err => toast.danger(`Columns weren’t saved. ${errorMessage(err)}`));
   const askDelete = useConfirmDelete(formId);
@@ -65,27 +101,34 @@ export function TableView({formId, state, update, openResponse, activeResponseId
   }, [search, state.q, update]);
 
   // New filters or sort: a new list, so a new selection.
-  const filterKey = JSON.stringify(state);
+  // (A search too short to run changes nothing.)
+  const filterKey = JSON.stringify({...state, q: searchTerm(state.q)});
   const [selectionKey, setSelectionKey] = useState(filterKey);
   if (filterKey !== selectionKey) {
     setSelectionKey(filterKey);
     setSelected(new Set());
+    setNav(FIRST_PAGE);
   }
 
-  const first = list.data?.pages[0];
-  const rows = useMemo(() => list.data?.pages.flatMap(p => p.rows), [list.data]);
-  const fields = first?.fields;
-  const fieldMap = useMemo(() => new Map((fields ?? []).map(f => [f.id, f])), [fields]);
-  const columns = useMemo(() => resolveColumns(fields ?? [], prefs.data?.columns ?? null), [fields, prefs.data?.columns]);
-  const exporter = useExport();
-  // "View all" (?has=) always shows that question's column.
-  const visible = columns.filter(c => c.visible || c.id === state.has);
+  const first = list.data;
+  const rows = first?.rows;
+  const settled = !!first && !list.isPlaceholderData;
 
-  if (list.error && !first) return <ErrorNote error={list.error} title="Responses didn’t load" />;
-  if (!first || !rows) return <LoadingBlock rows={6} />;
+  // A page that came back empty or out of step (responses deleted meanwhile): back to page 1.
+  useEffect(() => {
+    if (!settled || !first || nav.page === 1) return;
+    if (first.rows.length === 0 || (nav.before && !first.prevCursor)) setNav(FIRST_PAGE);
+  }, [settled, first, nav]);
+  const exporter = useExport();
+
+  const loadError = list.error ?? catalog.error;
+  if (loadError && !first) return <ErrorNote error={loadError} title="Responses didn’t load" />;
+  if (!first || !rows || !fields) return <LoadingBlock rows={6} />;
   if (first.formTotal === 0) return <>{empty}</>;
 
   const filtered = isTableFiltered(state);
+  const trimmed = search.trim();
+  const searchTooShort = trimmed.length > 0 && trimmed.length < MIN_SEARCH_LENGTH;
   const allShown = rows.length > 0 && rows.every(r => selected.has(r.id));
   const select = (ids: string[], on: boolean) =>
     setSelected(s => {
@@ -148,11 +191,49 @@ export function TableView({formId, state, update, openResponse, activeResponseId
 
   const ids = [...selected];
 
+  const page = nav.page;
+  const lastPage = first.totalCapped ? null : Math.max(1, Math.ceil(first.total / size));
+  const pending = list.isPlaceholderData ? via : null;
+  const go = (to: PageTarget) => {
+    let next: PageNav;
+    if (to === 'first' || (to === 'prev' && (page <= 2 || !first.prevCursor))) next = FIRST_PAGE;
+    else if (to === 'prev') next = {page: page - 1, before: first.prevCursor!};
+    else if (to === 'next') {
+      if (!first.nextCursor) return;
+      next = {page: page + 1, cursor: first.nextCursor};
+    } else {
+      if (lastPage === null) return;
+      next = lastPage === 1 ? FIRST_PAGE : {page: lastPage, last: first.total - (lastPage - 1) * size};
+    }
+    setVia(to);
+    setNav(next);
+    // Back to the top of the table when the pager was clicked below it.
+    const top = topRef.current;
+    if (top && top.getBoundingClientRect().top < 0) top.scrollIntoView({block: 'start'});
+  };
+  const changeSize = (n: number) => {
+    setSize(n);
+    setNav(FIRST_PAGE);
+    try {
+      localStorage.setItem(SIZE_KEY, String(n));
+    } catch {
+      // Storage blocked: the default size next time.
+    }
+  };
+  const fromRow = rows.length ? (page - 1) * size + 1 : 0;
+  const toRow = (page - 1) * size + rows.length;
+
   return (
-    <div className="responses-table" aria-busy={list.isPlaceholderData || undefined}>
+    <div className="responses-table" ref={topRef} aria-busy={list.isPlaceholderData || undefined}>
       <div className="toolbar">
         <div className="toolbar-group">
-          <SearchInput label="Search answers" placeholder="Search answers" value={search} onChange={e => setSearch(e.target.value)} />
+          <SearchInput
+            label="Search answers"
+            placeholder="Search answers"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            aria-describedby={searchTooShort ? 'responses-search-hint' : undefined}
+          />
           <CalendarRange
             label="Any date"
             from={state.from}
@@ -161,14 +242,14 @@ export function TableView({formId, state, update, openResponse, activeResponseId
             onApply={(from, to) => update({tfrom: from, tto: to})}
             onClear={() => update({tfrom: null, tto: null})}
           />
-          <FilterMenu fields={first.fields} active={state.filter} onChange={filter => update({filter})} />
+          <FilterMenu fields={fields} active={state.filter} onChange={filter => update({filter})} />
         </div>
         <div className="toolbar-group">
           <ColumnsMenu
             columns={columns}
             labelOf={id => columnLabel(id, fieldMap)}
             onChange={cols => savePrefs.mutate(cols)}
-            onReset={() => savePrefs.mutate(resolveColumns(first.fields, null))}
+            onReset={() => savePrefs.mutate(resolveColumns(fields, null))}
           />
           <Button
             variant="secondary"
@@ -181,6 +262,12 @@ export function TableView({formId, state, update, openResponse, activeResponseId
           </Button>
         </div>
       </div>
+
+      {searchTooShort && (
+        <p id="responses-search-hint" className="muted responses-search-hint" role="status">
+          Type at least {MIN_SEARCH_LENGTH} characters to search.
+        </p>
+      )}
 
       <ActiveFilters state={state} fields={fieldMap} update={update} />
 
@@ -236,15 +323,50 @@ export function TableView({formId, state, update, openResponse, activeResponseId
         }
       />
 
-      <div className="responses-table-foot">
-        <p className="muted responses-count">
-          {rows.length < first.total ? `Showing ${formatNumber(rows.length)} of ` : ''}
-          {formatNumber(first.total)} {first.total === 1 ? 'response' : 'responses'}
+      <div className="list-foot">
+        <p className="muted list-count" aria-live="polite">
+          {first.total > rows.length || page > 1 ? (
+            <>
+              Showing <strong>{formatNumber(fromRow)}–{formatNumber(toRow)}</strong> of{' '}
+            </>
+          ) : null}
+          {formatNumber(first.total)}
+          {first.totalCapped ? '+' : ''} {first.total === 1 && !first.totalCapped ? 'response' : 'responses'}
+          {first.window?.reason === 'search' && ` in the latest ${formatNumber(first.window.size)}`}
           {filtered && first.total !== first.formTotal && ` (filtered from ${formatNumber(first.formTotal)})`}
+          {first.window && <WindowNote window={first.window} />}
         </p>
-        <LoadMore query={list} />
+        {(first.formTotal > RESPONSES_PAGE_SIZES[0] || page > 1) && (
+          <Pager
+            page={page}
+            lastPage={lastPage}
+            lastPageCapped={first.totalCapped}
+            hasPrev={page > 1}
+            hasNext={!!first.nextCursor}
+            size={size}
+            pending={pending}
+            onGo={go}
+            onSize={changeSize}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Why only part of a big form was searched or sorted: a has / search filter looks at the newest
+ * 100,000 responses, an answer sort orders the newest 50,000 (src/server/intelform/responses/query.ts).
+ */
+function WindowNote({window: w}: {window: ResponsesScanWindow}) {
+  const n = formatNumber(w.size);
+  return (
+    <span className="responses-window-note">
+      {' · '}
+      {w.reason === 'search'
+        ? `Searches look at the latest ${n} responses. Pick dates to look further back.`
+        : `Sorted within the latest ${n} responses. Sort by Submitted, Completion time, Device, Browser or Country for every response.`}
+    </span>
   );
 }
 
@@ -282,7 +404,7 @@ function Cell({row, id, field}: {row: ResponseRow; id: string; field?: CatalogFi
   const url = field?.type === 'signature' ? row.urls?.[id] : undefined;
   if (url) {
     return (
-      <a href={url} target="_blank" rel="noreferrer" className="responses-link">
+      <a href={url} target="_blank" rel="noopener noreferrer" className="responses-link">
         View signature
       </a>
     );

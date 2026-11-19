@@ -14,6 +14,9 @@ import type { FieldType } from './form/field-types'
  */
 
 export const RESPONSES_PAGE_SIZE = 50
+/** Rows per page the table offers (`?size=`). */
+export const RESPONSES_PAGE_SIZES = [25, 50, 100] as const
+export type ResponsesPageSize = (typeof RESPONSES_PAGE_SIZES)[number]
 
 /** Non-field table columns. Field columns use the field id. */
 export const META_COLUMNS = ['submitted_at', 'duration', 'device', 'browser', 'country'] as const
@@ -44,6 +47,23 @@ const isoDay = z
   .refine(isRealDay, 'Pick a real date')
 const columnId = z.string().regex(/^(submitted_at|duration|device|browser|country|f_[a-z0-9]{4,12})$/)
 
+/** Shortest search term (`?q=`): shorter ones match nearly every response and no index helps. */
+export const MIN_SEARCH_LENGTH = 3
+/** Most columns one table page asks cells for (`?col=`). */
+export const MAX_TABLE_COLUMNS = 100
+
+/** The search box's text as the API takes it: trimmed, and empty when too short to search. */
+export function searchTerm(q: string | undefined): string {
+  const t = (q ?? '').trim()
+  return t.length >= MIN_SEARCH_LENGTH ? t : ''
+}
+
+const searchQ = z
+  .string()
+  .trim()
+  .max(200, 'Search for 200 characters or fewer.')
+  .refine(v => v.length === 0 || v.length >= MIN_SEARCH_LENGTH, `Type at least ${MIN_SEARCH_LENGTH} characters to search.`)
+
 /** "f_abc123:o_x9y8z7": a choice field and one of its values (option id, true / false, country code). */
 export const responseFilter = z.string().regex(/^f_[a-z0-9]{4,12}:[A-Za-z0-9_]{1,40}$/)
 
@@ -52,7 +72,8 @@ export const responseFilter = z.string().regex(/^f_[a-z0-9]{4,12}:[A-Za-z0-9_]{1
  * Query string: ?q=&from=&to=&tz=&filter=f_x:o_y&filter=…&has=f_x&sort=&dir=&page=
  */
 export const responsesFilterQuery = z.object({
-  q: z.string().trim().max(200).optional(),
+  /** Search: at least MIN_SEARCH_LENGTH characters. */
+  q: searchQ.optional(),
   /** Local dates in `tz`, inclusive. */
   from: isoDay.optional(),
   to: isoDay.optional(),
@@ -71,11 +92,28 @@ export const responsesListQuery = responsesFilterQuery.extend({
   page: z.coerce.number().int().min(1).max(100_000).default(1),
   /** The previous page's `nextCursor`. */
   cursor: z.string().max(1000).optional(),
+  /** The next page's `prevCursor`: the rows just before it. */
+  before: z.string().max(1000).optional(),
+  /** The last page, holding this many rows (1..size). */
+  last: z.coerce.number().int().min(1).max(100).optional(),
+  /** Rows per page: one of RESPONSES_PAGE_SIZES. */
+  size: z.coerce
+    .number()
+    .int()
+    .refine(n => (RESPONSES_PAGE_SIZES as readonly number[]).includes(n), 'Pick 25, 50 or 100 rows per page.')
+    .default(RESPONSES_PAGE_SIZE),
+  /**
+   * The visible columns (repeated `col`): cells only for these fields. Absent: every field.
+   * Send a meta column alone (`col=submitted_at`) for no answer cells.
+   */
+  col: z.array(columnId).max(MAX_TABLE_COLUMNS, `Show at most ${MAX_TABLE_COLUMNS} columns.`).default([]),
 })
 export type ResponsesListQuery = z.infer<typeof responsesListQuery>
 
 /** CSV export: the filters, or just the selected rows. */
 export const responsesCsvQuery = responsesFilterQuery.extend({
+  /** Any length: an export is a background job read a bounded step at a time (and jobs already queued keep working). */
+  q: z.string().trim().max(200).optional(),
   ids: z.array(z.uuid()).max(1000).default([]),
 })
 export type ResponsesCsvQuery = z.infer<typeof responsesCsvQuery>
@@ -101,6 +139,7 @@ export const summaryQuery = z
     range: z.enum(SUMMARY_RANGES).default('30d'),
     from: isoDay.optional(),
     to: isoDay.optional(),
+    /** Ignored: summary days are in the app's time zone (Settings → General). Kept so older links still parse. */
     tz: z.string().max(64).optional(),
   })
   .refine((v) => v.range !== 'custom' || (v.from && v.to && v.from <= v.to), {
@@ -148,8 +187,18 @@ export interface ResponseRow {
   urls?: Record<string, string>
 }
 
+/**
+ * Set when has / search or an answer sort looked only at the newest `size` responses of a big
+ * form (no index can bound them otherwise): the table says so next to the count.
+ */
+export interface ResponsesScanWindow {
+  size: number
+  reason: 'search' | 'sort'
+}
+
 export interface ResponsesListResponse {
-  fields: CatalogField[]
+  /** Every answer column (the catalog). Only on a page read from either end (no cursor / before): keep it. */
+  fields?: CatalogField[]
   rows: ResponseRow[]
   /** Matching the filters. */
   total: number
@@ -159,8 +208,12 @@ export interface ResponsesListResponse {
   pageSize: number
   /** Pass as `cursor` for the next page; null on the last one. */
   nextCursor: string | null
-  /** A filtered total stops at 10,000: show "10,000+". */
+  /** Pass as `before` for the previous page; null on the first one. */
+  prevCursor: string | null
+  /** A filtered total stops at 1,000: show "1,000+". */
   totalCapped: boolean
+  /** Rows were searched or sorted within the newest `size` responses only; null = the whole form. */
+  window: ResponsesScanWindow | null
 }
 
 export interface DrawerAnswer {
@@ -239,7 +292,7 @@ export interface QuestionSummary {
   deleted: boolean
   /** Responses in range that answered this question. */
   answered: number
-  /** Median time spent on this question (ms), from per-question timings. */
+  /** Median time spent on this question (ms), from per-question timings. Approximate (within about 10%). */
   medianTimeMs: number | null
   data: QuestionData
 }
@@ -253,6 +306,7 @@ export interface SummaryResponse {
     /** responses ÷ starts, capped at 1; null without starts. */
     completionRate: number | null
     avgMs: number | null
+    /** Approximate (within about 5%). */
     medianMs: number | null
   }
   /** Responses per local day, every day in range. */
@@ -260,6 +314,12 @@ export interface SummaryResponse {
   questions: QuestionSummary[]
   /** All responses of the form, ignoring the range. */
   formTotal: number
+  /**
+   * Null when every response in range is counted. Otherwise responses submitted after this
+   * moment (ISO) are still being added up (a burst, or a big form's first summary) and are not
+   * in these numbers yet.
+   */
+  asOf: string | null
 }
 
 /** Builds the query string for the filter schemas above (arrays as repeated keys). */

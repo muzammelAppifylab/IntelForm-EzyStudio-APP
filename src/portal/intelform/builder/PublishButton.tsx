@@ -33,6 +33,12 @@ export class PublishBlocked extends Error {
 export function publishProblems(def: FormDefinition, settings?: {onePerEmail: boolean; onePerEmailFieldId: string | null}): PublishProblem[] {
   const out: PublishProblem[] = [];
   if (def.fields.filter(f => f.type !== 'section_break').length === 0) out.push({message: 'Add at least one question before you publish.'});
+  // A question with no title shows respondents "Untitled question" (and screen readers nothing useful).
+  def.fields.forEach(f => {
+    if (f.type !== 'section_break' && !f.label.trim()) {
+      out.push({message: `${fieldName(def, f)} has no title. Add one so people know what to answer.`, fieldId: f.id});
+    }
+  });
   for (const issue of lintLogic(def)) out.push({message: issue.message, fieldId: issue.fieldId});
   if (settings) for (const issue of lintOnePerEmail(def, settings)) out.push({message: issue.message, fieldId: issue.fieldId});
   return out;

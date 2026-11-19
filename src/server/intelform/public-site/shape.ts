@@ -160,7 +160,7 @@ export function sitemapForms(rows: {slug: string; published_at: Date | string}[]
 }
 
 /** The public site's pages that follow Settings, Public site, "Let search engines index the site". */
-export const SITE_PAGES: ReadonlySet<string> = new Set(['/', '/forms/', '/about/', '/privacy/', '/terms/']);
+export const SITE_PAGES: ReadonlySet<string> = new Set(['/', '/forms/', '/privacy/', '/terms/']);
 
 /**
  * What /sitemap.xml lists besides posts: the site's pages (the public site's own only while it may

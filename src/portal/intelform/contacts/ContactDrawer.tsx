@@ -7,7 +7,7 @@ import {ago, when} from '../../shared';
 import {Avatar, Button, Drawer, ErrorNote, Icon, LoadingBlock, StatCard} from '../../ui';
 import {contactDetailQuery} from '../queries/contacts';
 import {CopyButton, FormStatus} from './bits';
-import {contactTitle, countryLabel, deviceLabel, formatDate, formatDuration, formatNumber, formatPhone, plural} from './format';
+import {contactTitle, countryLabel, deviceLabel, formatDate, formatDuration, formatNumber, formatPhone, formResponses} from './format';
 
 /** One contact: details, the forms they answered and their responses, newest first. */
 export function ContactDrawer({
@@ -102,7 +102,7 @@ export function ContactDrawer({
                     {f.title}
                   </Link>
                   <FormStatus status={f.status} />
-                  <span className="contacts-forms-count">{plural(f.responses, 'response')}</span>
+                  <span className="contacts-forms-count">{formResponses(f.responses)}</span>
                 </li>
               ))}
             </ul>

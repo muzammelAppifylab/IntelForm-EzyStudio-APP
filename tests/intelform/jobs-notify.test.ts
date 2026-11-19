@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { blankDefinition, newField, type FormDefinition } from '../../src/lib/intelform/form/definition'
 import { defaultFormSettings } from '../../src/lib/intelform/form/settings'
-import { DontRetry, JobRejected } from '../../src/platform/background'
+import { DontRetry } from '../../src/platform/background'
 import { generateWebhookSecret } from '../../src/server/intelform/webhooks/sign'
 import {
   answersAsText,
@@ -10,15 +10,17 @@ import {
   MailError,
   mailProvider,
   normalizeMessage,
-  NOTIFY_LIST,
-  queueResponseJobs,
+  NOTIFY_EMAILS_PER_HOUR,
+  NotifyDeferred,
+  notifyRun,
   readNotifySettings,
+  sendOwnerDigests,
   responseNeedsJobs,
   responsePath,
   runResponseNotify,
   runWebhookDelivery,
   stripLinks,
-  WEBHOOK_LIST,
+  webhookBreaker,
   withoutLinks,
   type MailMessage,
   type MailProvider,
@@ -112,34 +114,12 @@ describe('mail messages', () => {
   })
 })
 
-// ---------------------------------------------------------------------------
-// Sending the job
-// ---------------------------------------------------------------------------
-
-describe('queueResponseJobs', () => {
-  const R = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
-
-  it('sends one keyed job when something is on, none otherwise', async () => {
-    const send = vi.fn(async () => ({ id: 'j', list: NOTIFY_LIST, runAt: '', deduplicated: false, local: true }))
+describe('responseNeedsJobs', () => {
+  it('is true only when something is on', () => {
     expect(responseNeedsJobs(defaultFormSettings())).toBe(false)
-    expect(await queueResponseJobs('https://x.test/', { formId: 'f', formTitle: 'T', responseId: R, settings: defaultFormSettings() }, send)).toBe(false)
-    expect(send).not.toHaveBeenCalled()
-    const on = { ...defaultFormSettings(), notifyOnResponse: true }
-    expect(await queueResponseJobs('https://x.test/', { formId: 'f', formTitle: 'Contact', responseId: R, settings: on }, send)).toBe(true)
-    expect(send).toHaveBeenCalledWith('https://x.test/', NOTIFY_LIST, { responseId: R }, { key: `notify-${R}`, label: 'New response · Contact' })
+    expect(responseNeedsJobs({ ...defaultFormSettings(), notifyOnResponse: true })).toBe(true)
     expect(responseNeedsJobs({ webhook: { enabled: true, url: 'https://h.example/x', headers: [] } })).toBe(true)
     expect(responseNeedsJobs({ confirmationEmail: true, confirmationEmailFieldId: 'f_x' })).toBe(true)
-  })
-
-  it('never throws when the platform refuses', async () => {
-    const send = vi.fn(async () => {
-      throw new JobRejected('limit', 'E_JOBS_RATE_LIMITED', 429)
-    })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const on = { ...defaultFormSettings(), notifyOnResponse: true }
-    expect(await queueResponseJobs('https://x.test/', { formId: 'f', formTitle: 'T', responseId: R, settings: on }, send as never)).toBe(false)
-    expect(warn.mock.calls[0][0]).not.toContain('@')
-    warn.mockRestore()
   })
 })
 
@@ -169,28 +149,39 @@ interface User {
   status?: string
 }
 
-function world(settings: Record<string, unknown>, opts: { users?: User[]; answers?: Record<string, unknown>; gone?: boolean } = {}) {
+function world(settings: Record<string, unknown>, opts: { users?: User[]; answers?: Record<string, unknown>; gone?: boolean; ids?: string[] } = {}) {
   const markers = new Set<string>()
   const windows = new Map<string, number>()
+  /** intelform_notify_hours, per form (the test's hour). */
+  const hours = new Map<string, { notified: number; digest_pending: number; digest_sent: number; confirmed: number; confirm_capped: number }>()
   const deliveries: unknown[][] = []
   const users = opts.users ?? []
+  const ids = opts.ids ?? [RID]
+  const formSettings = { ...defaultFormSettings(), ...settings }
+  const hour = (f: string) => {
+    let h = hours.get(f)
+    if (!h) hours.set(f, (h = { notified: 0, digest_pending: 0, digest_sent: 0, confirmed: 0, confirm_capped: 0 }))
+    return h
+  }
   const db = {
     response: {
-      findUnique: vi.fn(async () =>
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         opts.gone
-          ? null
-          : {
-              id: RID,
-              formId: FORM,
-              answers: opts.answers ?? { f_email1: 'ada@example.com', f_text01: 'See evil.com/x' },
-              submittedAt: new Date('2026-03-01T10:00:00Z'),
-              formVersion: { version: 2, definition: DEF },
-              form: { title: 'Contact us', settings: { ...defaultFormSettings(), ...settings } },
-            },
+          ? []
+          : where.id.in
+              .filter((id) => ids.includes(id))
+              .map((id) => ({
+                id,
+                formId: FORM,
+                answers: opts.answers ?? { f_email1: 'ada@example.com', f_text01: 'See evil.com/x' },
+                submittedAt: new Date('2026-03-01T10:00:00Z'),
+                formVersion: { version: 2, definition: DEF },
+                form: { title: 'Contact us', settings: formSettings, webhookSecret: generateWebhookSecret() },
+              })),
       ),
     },
     form: {
-      findUnique: vi.fn(async () => ({ settings: { ...defaultFormSettings(), ...settings }, webhookSecret: generateWebhookSecret() })),
+      findUnique: vi.fn(async () => ({ settings: formSettings, webhookSecret: generateWebhookSecret() })),
       updateMany: vi.fn(async () => ({ count: 1 })),
     },
     intelformSettings: { findUnique: vi.fn(async () => ({ appName: 'IntelForm', emailFromName: null, emailReplyTo: 'help@acme.test' })) },
@@ -206,9 +197,14 @@ function world(settings: Record<string, unknown>, opts: { users?: User[]; answer
           })),
       ),
     },
-    intelformRateLimit: { findFirst: vi.fn(async ({ where }: { where: { key: string } }) => (markers.has(where.key) ? { key: where.key } : null)) },
-    webhookDelivery: { findFirst: vi.fn(async () => null) },
-    $executeRaw: vi.fn(async (_s: TemplateStringsArray, ...values: unknown[]) => {
+    $executeRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
+      const text = s.join('?')
+      if (text.includes('digest_pending = t.digest_pending + 1')) {
+        // addToDigest: the hour's digest count and the step's marker.
+        hour(String(values[0])).digest_pending++
+        markers.add(String(values[1]))
+        return 1
+      }
       // markAllDone sends the keys as one array value; markDone as the first value.
       const list = values.find(Array.isArray) as unknown[] | undefined
       if (list) for (const k of list) markers.add(String(k))
@@ -217,8 +213,23 @@ function world(settings: Record<string, unknown>, opts: { users?: User[]; answer
     }),
     $queryRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
       const text = s.join('?')
-      if (text.includes('SELECT DISTINCT key FROM intelform_rate_limits')) {
+      if (text.includes('FROM intelform_done_markers WHERE key = ANY')) {
         return (values[0] as string[]).filter((k) => markers.has(k)).map((key) => ({ key }))
+      }
+      // Webhooks already delivered: none in this stand-in (a success returns 'delivered' itself).
+      if (text.includes('FROM webhook_deliveries')) return []
+      if (text.includes('INSERT INTO intelform_notify_hours')) {
+        // countResponse: [form, n, n, NL, c, c, CL, ...]; the keys are the `job:` strings, in order.
+        const [form, n, , NL, c, , CL] = values as [string, number, number, number, number, number, number]
+        const h = hour(form)
+        h.notified += n
+        if (n && h.notified > NL) h.digest_pending++
+        h.confirmed += c
+        if (c && h.confirmed > CL) h.confirm_capped++
+        const [digestKey, countedKey, cappedKey, confirmCounted] = values.filter((v) => typeof v === 'string' && v.startsWith('job:')) as string[]
+        if (n) markers.add(h.notified > NL ? digestKey! : countedKey!)
+        if (c) markers.add(h.confirmed > CL ? cappedKey! : confirmCounted!)
+        return [{ notified: h.notified, confirmed: h.confirmed, confirm_capped: h.confirm_capped }]
       }
       if (text.includes('intelform_rate_limits')) {
         const key = String(values[0])
@@ -229,7 +240,7 @@ function world(settings: Record<string, unknown>, opts: { users?: User[]; answer
       return [{ id: `d${deliveries.length}` }]
     }),
   }
-  return { db: db as never, markers, windows, deliveries, raw: db }
+  return { db: db as never, markers, windows, hours, deliveries, raw: db }
 }
 
 function fakeMail(fail?: MailError): MailProvider & { sent: MailMessage[] } {
@@ -321,7 +332,7 @@ describe('runResponseNotify', () => {
     const bad = world(s, { answers: { f_email1: 'a@x.com, b@y.com' } })
     expect((await runResponseNotify(bad.db, { responseId: RID }, { relay: relayOk(), mail: fakeMail() })).confirmation).toBe('invalid')
     const capped = world(s)
-    capped.windows.set(`confirm:${FORM}`, CONFIRM_EMAIL_LIMIT)
+    capped.hours.set(FORM, { notified: 0, digest_pending: 0, digest_sent: 0, confirmed: CONFIRM_EMAIL_LIMIT, confirm_capped: 0 })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const mail = fakeMail()
     expect((await runResponseNotify(capped.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('capped')
@@ -343,7 +354,7 @@ describe('runResponseNotify', () => {
     expect(mail.sent).toHaveLength(1)
   })
 
-  it('delivers the webhook inline, and hands a retryable failure to the webhook list', async () => {
+  it('delivers the webhook inline, and throws a retryable failure without sending any job', async () => {
     const hook = { webhook: { enabled: true, url: 'https://hooks.example.com/in', headers: [] } }
     const ok = world(hook)
     const fetchOk = vi.fn(async () => new Response('ok', { status: 200 }))
@@ -352,11 +363,35 @@ describe('runResponseNotify', () => {
     expect(body).toMatchObject({ type: 'response.created', form_id: FORM, response_id: RID, form_version: 2 })
 
     const down = world(hook)
-    const send = vi.fn(async () => ({ id: 'j', list: WEBHOOK_LIST, runAt: '', deduplicated: false, local: false }))
     const fetch503 = vi.fn(async () => new Response('busy', { status: 503 }))
-    const out = await runResponseNotify(down.db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: fetch503 as never, send: send as never })
-    expect(out.webhook).toBe('retry-queued')
-    expect(send).toHaveBeenCalledWith(expect.any(String), WEBHOOK_LIST, { responseId: RID }, expect.objectContaining({ delay: 60, key: `webhook-${RID}` }))
+    await expect(runResponseNotify(down.db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: fetch503 as never })).rejects.toThrow(
+      /answered 503.*Trying again later/,
+    )
+    // Not marked done: the next run tries the webhook again, and then it's delivered once.
+    expect([...down.markers].some((k) => k.startsWith('job:webhook:'))).toBe(false)
+    expect((await runResponseNotify(down.db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: fetchOk as never })).webhook).toBe('delivered')
+
+    // A 4xx is final: marked done, never retried.
+    const gone = world(hook)
+    const out = await runResponseNotify(gone.db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: (async () => new Response('', { status: 410 })) as never })
+    expect(out.webhook).toBe('failed')
+  })
+
+  it('skips an endpoint that keeps failing for the rest of a drain run', async () => {
+    const hook = { webhook: { enabled: true, url: 'https://hooks.example.com/in', headers: [] } }
+    const breaker = webhookBreaker(2)
+    const fetch503 = vi.fn(async () => new Response('busy', { status: 503 }))
+    for (let i = 0; i < 2; i++) {
+      await expect(runResponseNotify(world(hook).db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: fetch503 as never, webhookBreaker: breaker })).rejects.toThrow()
+    }
+    expect(fetch503).toHaveBeenCalledTimes(2)
+    await expect(runResponseNotify(world(hook).db, { responseId: RID }, { relay: relayOk(), mail: null, fetchImpl: fetch503 as never, webhookBreaker: breaker })).rejects.toThrow(
+      /keeps failing/,
+    )
+    expect(fetch503).toHaveBeenCalledTimes(2)
+    expect(breaker.isOpen('another-form')).toBe(false)
+    breaker.record(FORM, true)
+    expect(breaker.isOpen(FORM)).toBe(false)
   })
 })
 
@@ -381,5 +416,205 @@ describe('runWebhookDelivery', () => {
 describe('answersAsText', () => {
   it('lists answered fields with labels', () => {
     expect(answersAsText(DEF, { f_email1: 'a@x.com' }, null)).toBe('Your email\na@x.com')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Speed: steps at once, one run's shared reads; email limits: digest and caps
+// ---------------------------------------------------------------------------
+
+describe('runResponseNotify at volume', () => {
+  const rid = (n: number) => `11111111-2222-4333-8444-${String(n).padStart(12, '0')}`
+  const all = { notifyOnResponse: true, confirmationEmail: true, confirmationEmailFieldId: 'f_email1', webhook: { enabled: true, url: 'https://hooks.example.com/in', headers: [] } }
+
+  it('runs the notification, the confirmation and the webhook at the same time', async () => {
+    const w = world(all)
+    const started: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const relay = vi.fn(async () => {
+      started.push('relay')
+      await gate
+      return 'sent' as const
+    })
+    const mail: MailProvider = {
+      name: 'resend',
+      from: 'f@acme.test',
+      async send() {
+        started.push('mail')
+        await gate
+      },
+    }
+    const fetchImpl = vi.fn(async () => {
+      started.push('webhook')
+      await gate
+      return new Response('ok', { status: 200 })
+    })
+    const p = runResponseNotify(w.db, { responseId: RID }, { relay, mail, fetchImpl: fetchImpl as never, origin: null })
+    // Every outside call is in flight before any of them answers.
+    await vi.waitFor(() => expect(started.sort()).toEqual(['mail', 'relay', 'webhook']))
+    release()
+    expect(await p).toMatchObject({ notified: 'owner', confirmation: 'sent', webhook: 'delivered' })
+  })
+
+  it('reads settings, teammates, responses and markers once per run, not per response', async () => {
+    const users: User[] = [{ id: 2, email: 'ed@acme.test', platformOwnerId: null, codenames: ['site:response:read'] }]
+    const ids = [1, 2, 3, 4, 5].map(rid)
+    const w = world({ ...all, notifyRecipients: [2] }, { users, ids })
+    const mail = fakeMail()
+    const run = notifyRun(w.db, { relay: vi.fn(async () => 'sent' as const), mail, origin: null, fetchImpl: (async () => new Response('', { status: 200 })) as never })
+    await run.preload(ids)
+    for (const id of ids) await runResponseNotify(w.db, { responseId: id }, { run })
+    expect(w.raw.response.findMany).toHaveBeenCalledTimes(1)
+    expect(w.raw.user.findMany).toHaveBeenCalledTimes(1)
+    expect(w.raw.intelformSettings.findUnique).toHaveBeenCalledTimes(1)
+    expect(w.raw.form.findUnique).not.toHaveBeenCalled() // the webhook used the run's form row
+    const markerReads = w.raw.$queryRaw.mock.calls.filter((c) => (c[0] as TemplateStringsArray).join('?').includes('FROM intelform_done_markers'))
+    expect(markerReads).toHaveLength(1)
+    expect(mail.sent.map((m) => m.to).sort()).toEqual([...Array(5).fill('ada@example.com'), ...Array(5).fill('ed@acme.test')].sort())
+  })
+
+  it('emails the first ones of the hour one by one and counts the rest for the digest, never twice', async () => {
+    const ids = Array.from({ length: NOTIFY_EMAILS_PER_HOUR + 3 }, (_, i) => rid(i + 1))
+    const w = world({ notifyOnResponse: true }, { ids })
+    const relay = vi.fn(async () => 'sent' as const)
+    const outs = []
+    for (const id of ids) outs.push(await runResponseNotify(w.db, { responseId: id }, { relay, mail: null, origin: null }))
+    expect(relay).toHaveBeenCalledTimes(NOTIFY_EMAILS_PER_HOUR)
+    expect(outs.filter((o) => o.notified === 'digest')).toHaveLength(3)
+    expect(w.hours.get(FORM)).toMatchObject({ notified: NOTIFY_EMAILS_PER_HOUR + 3, digest_pending: 3 })
+    // A retry of a digested response is not counted again, and still sends nothing.
+    expect((await runResponseNotify(w.db, { responseId: ids.at(-1)! }, { relay, mail: null, origin: null })).notified).toBe('digest')
+    expect(w.hours.get(FORM)!.digest_pending).toBe(3)
+    expect(relay).toHaveBeenCalledTimes(NOTIFY_EMAILS_PER_HOUR)
+  })
+
+  it('puts an owner email the platform refused for its limit (429) in the digest, not lost', async () => {
+    const w = world({ notifyOnResponse: true })
+    const relay = vi.fn(async () => 'limited' as const)
+    expect((await runResponseNotify(w.db, { responseId: RID }, { relay, mail: null, origin: null })).notified).toBe('digest')
+    expect(w.hours.get(FORM)!.digest_pending).toBe(1)
+    expect(w.markers.has(`job:notify:${RID}:owner`)).toBe(true)
+  })
+
+  it('counts confirmations held back by the cap, and logs once per form per hour', async () => {
+    const ids = [1, 2, 3].map(rid)
+    const w = world({ confirmationEmail: true, confirmationEmailFieldId: 'f_email1' }, { ids })
+    w.hours.set(FORM, { notified: 0, digest_pending: 0, digest_sent: 0, confirmed: CONFIRM_EMAIL_LIMIT - 1, confirm_capped: 0 })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mail = fakeMail()
+    const outs = []
+    for (const id of ids) outs.push((await runResponseNotify(w.db, { responseId: id }, { relay: vi.fn(), mail, origin: null })).confirmation)
+    expect(outs).toEqual(['sent', 'capped', 'capped'])
+    expect(w.hours.get(FORM)!.confirm_capped).toBe(2)
+    const capLogs = warn.mock.calls.filter((c) => String(c[0]).includes('hourly limit'))
+    expect(capLogs).toHaveLength(1)
+    expect(String(capLogs[0]![0])).not.toContain('@')
+    // A capped response run again stays capped (not counted twice, not sent).
+    expect((await runResponseNotify(w.db, { responseId: ids[2]! }, { relay: vi.fn(), mail, origin: null })).confirmation).toBe('capped')
+    expect(w.hours.get(FORM)!.confirm_capped).toBe(2)
+    expect(mail.sent).toHaveLength(1)
+    warn.mockRestore()
+  })
+
+  it('holds a response back without an attempt when only the webhook breaker stopped it', async () => {
+    const hook = { webhook: { enabled: true, url: 'https://hooks.example.com/in', headers: [] } }
+    const breaker = webhookBreaker(1)
+    breaker.start(FORM)
+    breaker.record(FORM, false)
+    await expect(runResponseNotify(world(hook).db, { responseId: RID }, { relay: vi.fn(), mail: null, webhookBreaker: breaker })).rejects.toBeInstanceOf(NotifyDeferred)
+  })
+
+  it('lets one call through at a time to an endpoint that has failed', () => {
+    const b = webhookBreaker(3)
+    b.start(FORM)
+    b.record(FORM, false)
+    expect(b.isOpen(FORM)).toBe(false)
+    b.start(FORM) // a probe in flight: the others wait for its answer
+    expect(b.isOpen(FORM)).toBe(true)
+    b.record(FORM, true)
+    expect(b.isOpen(FORM)).toBe(false)
+  })
+})
+
+describe('sendOwnerDigests', () => {
+  const H1 = new Date('2026-03-01T10:00:00Z')
+  const F2 = '88888888-2222-4333-8444-555555555555'
+
+  function digestDb(rows: { form_id: string; digest_pending: number; digest_sent: number; settings: Record<string, unknown> }[], users: User[] = []) {
+    const updates: unknown[][] = []
+    const markers = new Set<string>()
+    const db = {
+      intelformSettings: { findUnique: vi.fn(async () => ({ appName: 'IntelForm', emailFromName: null, emailReplyTo: null })) },
+      user: {
+        findMany: vi.fn(async ({ where }: { where: { id: { in: number[] } } }) =>
+          users
+            .filter((u) => where.id.in.includes(u.id))
+            .map((u) => ({ id: u.id, email: u.email, platformOwnerId: u.platformOwnerId, roles: [{ role: { permissions: u.codenames.map((codename) => ({ permission: { codename } })) } }] })),
+        ),
+      },
+      $queryRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
+        const text = s.join('?')
+        if (text.includes('FROM intelform_notify_hours h JOIN forms f')) {
+          return rows.map((r) => ({ ...r, hour: H1, title: `Form ${r.form_id.slice(0, 2)}`, settings: { ...defaultFormSettings(), ...r.settings } }))
+        }
+        if (text.includes('FROM intelform_done_markers')) return (values[0] as string[]).filter((k) => markers.has(k)).map((key) => ({ key }))
+        throw new Error(`unexpected query: ${text}`)
+      }),
+      $executeRaw: vi.fn(async (s: TemplateStringsArray, ...values: unknown[]) => {
+        const text = s.join('?')
+        if (text.includes('UPDATE intelform_notify_hours')) updates.push(values)
+        else if (text.includes('INSERT INTO intelform_done_markers')) for (const k of values.find(Array.isArray) as string[]) markers.add(k)
+        return 1
+      }),
+    }
+    return { db: db as never, updates, markers }
+  }
+
+  it('sends the owner ONE email for every busy form, then marks them sent', async () => {
+    const d = digestDb([
+      { form_id: FORM, digest_pending: 40, digest_sent: 0, settings: { notifyOnResponse: true } },
+      { form_id: F2, digest_pending: 5, digest_sent: 2, settings: { notifyOnResponse: true } },
+    ])
+    const relay = vi.fn(async (_p: string) => 'sent' as const)
+    expect(await sendOwnerDigests(d.db, 'https://x.test/', { budgetMs: 10_000, relay, mail: null })).toEqual({ sent: 1 })
+    expect(relay).toHaveBeenCalledTimes(1)
+    expect(relay).toHaveBeenCalledWith('/dashboard/forms/')
+    expect(d.updates).toHaveLength(1)
+    expect(d.updates[0]![0]).toEqual([FORM, F2])
+    expect(d.updates[0]![2]).toEqual([40, 5])
+  })
+
+  it('keeps the digest pending when the platform refuses it for its limit', async () => {
+    const d = digestDb([{ form_id: FORM, digest_pending: 3, digest_sent: 0, settings: { notifyOnResponse: true } }])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const relay = vi.fn(async () => 'limited' as const)
+    expect(await sendOwnerDigests(d.db, 'https://x.test/', { budgetMs: 10_000, relay, mail: null })).toEqual({ sent: 0 })
+    expect(relay).toHaveBeenCalledWith(`/dashboard/forms/${FORM}/responses`)
+    expect(d.updates).toHaveLength(0)
+    warn.mockRestore()
+  })
+
+  it('emails each chosen teammate one digest per form with the count, once', async () => {
+    const users: User[] = [{ id: 2, email: 'ed@acme.test', platformOwnerId: null, codenames: ['site:response:read'] }]
+    const d = digestDb([{ form_id: FORM, digest_pending: 12, digest_sent: 0, settings: { notifyOnResponse: true, notifyRecipients: [2] } }], users)
+    const mail = fakeMail()
+    const relay = vi.fn(async () => 'sent' as const)
+    expect(await sendOwnerDigests(d.db, 'https://x.test/', { budgetMs: 10_000, relay, mail })).toEqual({ sent: 1 })
+    expect(relay).not.toHaveBeenCalled()
+    expect(mail.sent).toHaveLength(1)
+    expect(mail.sent[0]).toMatchObject({ to: 'ed@acme.test', subject: '12 new responses: Form 99' })
+    expect(d.updates).toHaveLength(1)
+    // Run again before the mark landed (a crash): the marker keeps it from going twice.
+    await sendOwnerDigests(d.db, 'https://x.test/', { budgetMs: 10_000, relay, mail })
+    expect(mail.sent).toHaveLength(1)
+  })
+
+  it('closes the count without sending when notifications were turned off', async () => {
+    const d = digestDb([{ form_id: FORM, digest_pending: 3, digest_sent: 0, settings: { notifyOnResponse: false } }])
+    const relay = vi.fn(async () => 'sent' as const)
+    expect(await sendOwnerDigests(d.db, 'https://x.test/', { budgetMs: 10_000, relay, mail: null })).toEqual({ sent: 0 })
+    expect(relay).not.toHaveBeenCalled()
+    expect(d.updates).toHaveLength(1)
   })
 })

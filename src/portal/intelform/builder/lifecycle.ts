@@ -13,12 +13,52 @@ function newTabId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+const TAB_KEY = (formId: string) => `intelform:presence-tab:${formId}`
+const TAB_ID = /^[A-Za-z0-9_-]{8,64}$/
+/** This document's tab id per form: leaving the builder and coming back in the app keeps it. */
+const claimed = new Map<string, string>()
+
+/**
+ * One presence id per browser TAB, not per page load. A reload (or a hard reload) would
+ * otherwise come back with a new id while the old page's row is still "live" for up to 45 s (its
+ * keepalive DELETE is often lost on reload, or lands after the new page's first poll), and the
+ * banner would say "You, in another tab" with no other tab open.
+ *
+ * The id is handed from the old page to the new one through sessionStorage (per tab, survives a
+ * reload): written on pagehide, TAKEN (read and removed) on load. Because it is removed while the
+ * page is open, a duplicated tab (which copies sessionStorage) does not get it and stays a
+ * separate tab, as it should. Exported for tests.
+ */
+export function claimTabId(formId: string): string {
+  const known = claimed.get(formId)
+  if (known) return known
+  let id: string | null = null
+  try {
+    id = sessionStorage.getItem(TAB_KEY(formId))
+    sessionStorage.removeItem(TAB_KEY(formId))
+  } catch {
+    // Storage blocked: a fresh id; the stale row ages out in 45 s as before.
+  }
+  if (!id || !TAB_ID.test(id)) id = newTabId()
+  claimed.set(formId, id)
+  return id
+}
+
+/** The page is going away (reload, navigation, close): leave the id for a reload of this tab. */
+export function handOverTabId(formId: string, tabId: string): void {
+  try {
+    sessionStorage.setItem(TAB_KEY(formId), tabId)
+  } catch {
+    // Storage blocked: nothing to hand over.
+  }
+}
+
 /**
  * Presence: POST every 20 s while the tab is visible, DELETE (keepalive) on pagehide. The
  * answer also carries the form's revision, which is how a newer save by someone else is noticed.
  */
 export function usePresence(store: BuilderStore, formId: string, meId: string | number) {
-  const [tabId] = useState(newTabId)
+  const [tabId] = useState(() => claimTabId(formId))
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null
@@ -54,18 +94,34 @@ export function usePresence(store: BuilderStore, formId: string, meId: string | 
         timer = null
       }
     }
+    const onPageHide = () => {
+      handOverTabId(formId, tabId)
+      leave()
+    }
+    const onPageShow = (e: PageTransitionEvent) => {
+      // Back from the back/forward cache: this page is open again, so it owns the id again.
+      if (e.persisted) {
+        try {
+          sessionStorage.removeItem(TAB_KEY(formId))
+        } catch {
+          // ignore
+        }
+      }
+    }
     const leave = () => {
       void siteFetch(`${url}/${tabId}`, { method: 'DELETE', keepalive: true, credentials: 'same-origin' }).catch(() => {})
     }
 
     start()
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('pagehide', leave)
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('pageshow', onPageShow)
     return () => {
       stopped = true
       if (timer) clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('pagehide', leave)
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('pageshow', onPageShow)
       leave()
     }
   }, [store, formId, meId, tabId])

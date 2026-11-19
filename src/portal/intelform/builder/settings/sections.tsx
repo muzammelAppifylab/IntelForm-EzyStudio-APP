@@ -1,6 +1,7 @@
-import {useQuery} from '@tanstack/react-query';
+import {queryOptions, useQuery} from '@tanstack/react-query';
 import {useMemo, useState} from 'react';
 
+import {BUILDER_API} from '../../../../lib/intelform/api-builder';
 import type {FormStatusResponse} from '../../../../lib/intelform/api-forms';
 import {formSettingsPatch, STEP_SOUNDS, type StepSound} from '../../../../lib/intelform/form/settings';
 import {playStepSound} from '../../../../respondent/sound';
@@ -250,6 +251,7 @@ function PasswordSetting() {
       </div>
       {editing && (
         <form
+          noValidate
           className="if-inline-form"
           onSubmit={e => {
             e.preventDefault();
@@ -260,7 +262,7 @@ function PasswordSetting() {
             <Button type="submit" pending={busy} pendingLabel="Saving…">
               Save password
             </Button>
-            <Button variant="ghost" onClick={() => (setEditing(false), setValue(''), setError(null))}>
+            <Button variant="ghost" disabled={busy} onClick={() => (setEditing(false), setValue(''), setError(null))}>
               Cancel
             </Button>
           </div>
@@ -382,8 +384,29 @@ export function SoundsSection() {
 
 // ----------------------------------------------------------------- notifications --
 
+/** GET /site-api/builder/forms/:id/notify-stats (FORM_READ): what the hourly email limits held back. */
+interface NotifyStats {
+  /** Confirmations the hourly cap held back in the last 24 hours. */
+  cappedConfirmations: number;
+  /** Responses whose notification came in an hourly summary instead, last 24 hours. */
+  digested: number;
+  confirmLimit: number;
+  notifyLimit: number;
+}
+
+const notifyStatsQuery = (formId: string) =>
+  queryOptions({
+    queryKey: ['intelform', 'builder', 'notify-stats', formId],
+    queryFn: () => api<NotifyStats>(`${BUILDER_API}/forms/${encodeURIComponent(formId)}/notify-stats`),
+    staleTime: 60_000,
+    retry: false,
+  });
+
 export function NotificationsSection() {
   const settings = useBuilder(s => s.settings);
+  const formId = useBuilder(s => s.meta.id);
+  const stats = useQuery({...notifyStatsQuery(formId), enabled: settings.notifyOnResponse || settings.confirmationEmail});
+  const capped = stats.data?.cappedConfirmations ?? 0;
   const readOnly = useBuilder(s => s.readOnly);
   const fieldCount = useBuilder(s => s.doc.draft.fields.length);
   const {save, errors} = useSettingsSave();
@@ -393,15 +416,27 @@ export function NotificationsSection() {
   const subject = useDraftText(settings.confirmationSubject, v => void save({confirmationSubject: v}));
   const body = useDraftText(settings.confirmationBody, v => void save({confirmationBody: v}), 900);
   const emailOff = caps.data ? !caps.data.emailEnabled : false;
+  // Teammates (other than the owner) and confirmations go through the owner's own mail provider.
+  const noProvider = caps.data ? !caps.data.mailProvider : false;
   const members = team.data?.members ?? [];
   const owner = members.find(m => m.owner);
   const selected = new Set(settings.notifyRecipients);
+  // The Email question a confirmation goes to was deleted (or never chosen): nothing would be sent.
+  const confirmFieldMissing =
+    settings.confirmationEmail && !emailFields.some(f => f.value === settings.confirmationEmailFieldId);
 
   return (
     <SettingsCard id="notifications" title="Notifications" description="Emails sent when someone responds.">
       {emailOff && (
         <Notice tone="warning">
           Email isn’t set up on this site yet, so these emails won’t be sent. Your choices here are kept and used once it is.
+        </Notice>
+      )}
+      {!emailOff && noProvider && (settings.confirmationEmail || settings.notifyRecipients.length > 0) && (
+        <Notice tone="warning">
+          Confirmations and emails to teammates need a mail provider. Add the owner secrets RESEND_API_KEY (or
+          POSTMARK_SERVER_TOKEN) and EMAIL_FROM_ADDRESS; until then confirmations aren’t sent and teammate emails go to the
+          site owner instead.
         </Notice>
       )}
       <div className="if-group">
@@ -416,6 +451,10 @@ export function NotificationsSection() {
           <fieldset className="if-fieldset">
             <legend>Who gets it</legend>
             <Hint>With nobody ticked, it goes to the site owner{owner ? ` (${owner.name})` : ''}.</Hint>
+            <Hint>
+              In a busy hour, the first {stats.data?.notifyLimit ?? 10} responses are emailed one by one; the rest come in one
+              summary email after the hour.
+            </Hint>
             {team.isPending && <Hint>Loading the team…</Hint>}
             {team.isError && <Notice tone="warning">The team list couldn’t load: {errorMessage(team.error)}</Notice>}
             {members.map(m => (
@@ -446,6 +485,20 @@ export function NotificationsSection() {
         />
         {settings.confirmationEmail && (
           <>
+            {capped > 0 && (
+              <Notice tone="warning">
+                {capped.toLocaleString()} confirmation{capped === 1 ? '' : 's'} weren’t sent in the last 24 h because of the
+                hourly limit ({(stats.data?.confirmLimit ?? 0).toLocaleString()} a form an hour, so a form can’t be used to send
+                bulk email).
+              </Notice>
+            )}
+            {confirmFieldMissing && (
+              <Notice tone="warning">
+                {emailFields.length
+                  ? 'The Email question this confirmation used is gone. Pick another one below, or no confirmation is sent.'
+                  : 'This form has no Email question any more, so no confirmation is sent. Add one, or turn this off.'}
+              </Notice>
+            )}
             <SelectRow
               label="Send to the address in"
               value={settings.confirmationEmailFieldId}

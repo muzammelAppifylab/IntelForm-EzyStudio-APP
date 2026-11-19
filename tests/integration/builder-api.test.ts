@@ -111,12 +111,13 @@ describe.skipIf(!DATABASE_URL)('builder API (integration, real Postgres)', () =>
     expect(replies.map(r => r.json.version)).toEqual(Array(10).fill(2));
     expect(await db.formVersion.count({where: {formId}})).toBe(2);
 
-    const submit = await new Browser(app).post('/site-api/public/forms/first-form/responses', {
-      formVersionId: v1Id,
-      answers: {f_name0001: 'Ada'},
-      renderToken: token,
-      startedAt: Date.now() - 4000,
-    });
+    // Respondent writes carry the page's render token in a header (no CSRF cookie: embeds).
+    const submit = await new Browser(app).request(
+      'POST',
+      '/site-api/public/forms/first-form/responses',
+      {formVersionId: v1Id, answers: {f_name0001: 'Ada'}, renderToken: token, startedAt: Date.now() - 4000},
+      {'x-intelform-render': token}
+    );
     expect(submit.status).toBe(200);
   });
 

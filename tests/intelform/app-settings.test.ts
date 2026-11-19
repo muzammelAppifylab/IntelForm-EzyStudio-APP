@@ -173,6 +173,6 @@ describe('app settings: helpers', () => {
     expect(storedPath('/uploads/logo.png', origin)).toBeNull();
     expect(checkImage({type: 'image/svg+xml', size: 10}, 'logo')).toBeNull();
     expect(checkImage({type: 'image/svg+xml', size: 10}, 'og')).not.toBeNull();
-    expect(checkImage({type: 'image/png', size: 6 * 1024 * 1024}, 'favicon')).toBe('Choose an image under 5 MB.');
+    expect(checkImage({type: 'image/png', size: 6 * 1024 * 1024}, 'favicon')).toMatch(/too large/);
   });
 });

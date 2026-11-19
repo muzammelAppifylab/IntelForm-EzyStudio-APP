@@ -4,11 +4,10 @@ import {validator} from 'hono/validator';
 import {contactsCsvQuery} from '../../lib/intelform/api-contacts';
 import {startExportInput, type ExportKind, type ExportStatus} from '../../lib/intelform/api-exports';
 import {responsesCsvQuery} from '../../lib/intelform/api-responses';
-import {JobRejected} from '../../platform/background';
 import {permissionScope, problem, requireAuth, withDb, withViewer} from '../../platform/guards';
 import {CSV_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
 import {contactsCsvFilename} from '../intelform/contacts/query';
-import {failStaleExports, loadExport, sendExportRun, STALE_MINUTES, statusOf} from '../intelform/exports/job';
+import {failStaleExports, loadExport, markSendPending, sendExportRun, STALE_MINUTES, statusOf} from '../intelform/exports/job';
 import {csvFilename} from '../intelform/responses/csv';
 import {contentDisposition} from '../intelform/responses/csv-text';
 import {safeTz, todayIn} from '../intelform/responses/query';
@@ -25,7 +24,7 @@ import {PERMISSIONS} from '../permissions';
  *   GET  /:id/download     the finished file (its stored parts, streamed in order)
  *
  * Permissions per kind, checked when it starts AND on every read: `responses`
- * site:response:read, `contacts` site:contact:read, `all` site:intelform:settings. 10 exports
+ * site:response:read, `contacts` site:contact:read, `all` site:intelform:settings plus both of those. 10 exports
  * per person per 10 minutes.
  */
 
@@ -40,7 +39,16 @@ const PERMISSION: Record<ExportKind, string> = {
   all: PERMISSIONS.APP_SETTINGS,
 };
 
-const mayExport = async (c: Context, kind: ExportKind) => (await permissionScope(c, PERMISSION[kind])) === 'all';
+// `all` holds every response and contact: app settings alone are not enough to read them.
+const mayExport = async (c: Context, kind: ExportKind) => {
+  if ((await permissionScope(c, PERMISSION[kind])) !== 'all') return false;
+  if (kind !== 'all') return true;
+  const [responses, contacts] = await Promise.all([
+    permissionScope(c, PERMISSIONS.RESPONSE_READ),
+    permissionScope(c, PERMISSIONS.CONTACT_READ),
+  ]);
+  return responses === 'all' && contacts === 'all';
+};
 
 const body = validator('json', (value, c) => {
   const parsed = startExportInput.safeParse(value);
@@ -103,11 +111,9 @@ export const exportsRoutes = new Hono()
     `;
     try {
       await sendExportRun(c.req.url, row!.id, 0);
-    } catch (err) {
-      const message = 'Exports are busy right now. Try again in a minute.';
-      await db.$executeRaw`UPDATE intelform_exports SET status = 'failed', error = ${message} WHERE id = ${row!.id}::uuid`;
-      if (err instanceof JobRejected) return c.json(problem('busy', message), 503);
-      throw err;
+    } catch {
+      // Busy (the jobs limit) or unreachable: the every-minute job sends it (resendPendingExports).
+      await markSendPending(db, row!.id, 0);
     }
     await logActivity(c, 'export_started', formId ? ['form', formId] : undefined, {kind: input.kind});
     // Locally the job has already run (sendJob runs it in this process): answer what it did.

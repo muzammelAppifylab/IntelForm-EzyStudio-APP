@@ -7,6 +7,7 @@ import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {app} from '../../src/server/app';
 import {ipKeyFor} from '../../src/server/intelform/respondent/crypto';
 import {renderToken} from '../../src/server/intelform/respondent/tokens';
+import {syncFormCounts} from '../../src/server/intelform/forms/counts';
 import {UNLOCK_ATTACK_IP_FAILURES, UNLOCK_FORM_FAILURE_LIMIT, UNLOCK_IP_FAILURE_LIMIT} from '../../src/server/routes/public-forms';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
@@ -43,6 +44,14 @@ async function makeForm(settings: Record<string, unknown> = {}, status = 'live')
   return {id: form.id, slug, versionId: v.id};
 }
 
+/**
+ * A respondent write as the browser sends it: with the page's render token in its header (the
+ * routes sit before csrf for embedded forms and check that token: src/server/routes/public-forms.ts).
+ */
+async function rpost(b: Browser, form: {id: string; slug: string}, op: 'responses' | 'events' | 'unlock', body: unknown) {
+  return b.request('POST', `/site-api/public/forms/${form.slug}/${op}`, body, {'x-intelform-render': await renderToken(SECRET, form.id)});
+}
+
 const good = {f_name: {first: 'Ada', last: 'Lovelace'}, f_email: 'ada@example.com'};
 async function submitBody(form: {id: string; versionId: string}, extra: Record<string, unknown> = {}) {
   return {formVersionId: form.versionId, answers: good, renderToken: await renderToken(SECRET, form.id, Date.now() - 5000), startedAt: Date.now() - 4000, ...extra};
@@ -74,29 +83,33 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
   it('saves a response, keeps the count, fills contacts by trigger', async () => {
     const form = await makeForm();
     const visitor = new Browser(app);
-    const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form));
+    const res = await rpost(visitor, form, 'responses', await submitBody(form));
     expect(res.status).toBe(200);
     expect(res.json).toEqual({ok: true});
     const rows = await db.response.findMany({where: {formId: form.id}, select: {answers: true, ipHash: true, contactEmail: true, searchText: true}});
     expect(rows).toHaveLength(1);
     expect(rows[0]!.ipHash).toMatch(/^[0-9a-f]{64}$/);
     expect(rows[0]!.contactEmail).toBe('ada@example.com');
+    // forms.response_count is the copy the every-minute sync refreshes from form_counts.
+    await syncFormCounts(db);
     expect((await db.form.findUniqueOrThrow({where: {id: form.id}, select: {responseCount: true}})).responseCount).toBe(1);
   });
 
-  it('refuses without the CSRF token (same-origin writes only)', async () => {
+  it('refuses a write without the render-token header (it stands in for the CSRF token)', async () => {
     const form = await makeForm();
     const res = await new Browser(app).request('POST', `/site-api/public/forms/${form.slug}/responses`, await submitBody(form), {'x-csrf-token': ''});
     expect(res.status).toBe(403);
+    expect(res.json.error).toBe('page_invalid');
   });
 
   it('closes at the cap, exactly, under parallel submits', async () => {
     const form = await makeForm({responseCap: 3});
     const results = await Promise.all(
-      Array.from({length: 6}, async (_, i) => new Browser(app, `203.0.113.${20 + i}`).post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form)))
+      Array.from({length: 6}, async (_, i) => rpost(new Browser(app, `203.0.113.${20 + i}`), form, 'responses', await submitBody(form)))
     );
     expect(results.filter(r => r.status === 200)).toHaveLength(3);
     expect(results.filter(r => r.status === 403)).toHaveLength(3);
+    await syncFormCounts(db);
     const after = await db.form.findUniqueOrThrow({where: {id: form.id}, select: {status: true, responseCount: true}});
     expect(after).toEqual({status: 'closed', responseCount: 3});
   });
@@ -104,18 +117,20 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
   it('one response per email, also in a race', async () => {
     const form = await makeForm({onePerEmail: true, onePerEmailFieldId: 'f_email'});
     const results = await Promise.all(
-      [0, 1, 2].map(async i => new Browser(app, `203.0.113.${40 + i}`).post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form)))
+      [0, 1, 2].map(async i => rpost(new Browser(app, `203.0.113.${40 + i}`), form, 'responses', await submitBody(form)))
     );
     expect(results.filter(r => r.status === 200)).toHaveLength(1);
     expect(results.filter(r => r.status === 422).every(r => (r.json.fields as Record<string, unknown>).f_email)).toBe(true);
     expect(await db.response.count({where: {formId: form.id}})).toBe(1);
   });
 
-  it('rate limits submits per caller and form', async () => {
+  it('rate limits submits per browser and form (the per-address ceiling is far higher: submit-burst.test.ts)', async () => {
     const form = await makeForm();
     const visitor = new Browser(app, '203.0.113.60');
     const statuses: number[] = [];
-    for (let i = 0; i < 11; i++) statuses.push((await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form))).status);
+    for (let i = 0; i < 11; i++) {
+      statuses.push((await rpost(visitor, form, 'responses', await submitBody(form, {browserToken: 'one-browser'}))).status);
+    }
     expect(statuses.slice(0, 10).every(s => s === 200)).toBe(true);
     expect(statuses[10]).toBe(429);
   });
@@ -125,24 +140,28 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     const visitor = new Browser(app);
     const session = '6f1c1d2e-1111-4222-8333-444455556666';
     for (const type of ['view', 'view', 'start']) {
-      expect((await visitor.post(`/site-api/public/forms/${form.slug}/events`, {type, session})).status).toBe(204);
+      expect((await rpost(visitor, form, 'events', {type, session})).status).toBe(204);
     }
-    const counts = await db.formEventCount.findMany({where: {formId: form.id}, select: {views: true, starts: true}});
-    expect(counts).toEqual([{views: 1, starts: 1}]);
+    // Each event lands in one random shard of the 15-minute bucket: readers sum the shards.
+    const counts = await db.formEventCount.findMany({where: {formId: form.id}, select: {bucket: true, views: true, starts: true}});
+    expect(new Set(counts.map(c => c.bucket.getTime())).size).toBe(1);
+    expect(counts.reduce((n, c) => ({views: n.views + c.views, starts: n.starts + c.starts}), {views: 0, starts: 0})).toEqual({views: 1, starts: 1});
+    const starts = await db.formCount.aggregate({where: {formId: form.id}, _sum: {starts: true}});
+    expect(starts._sum.starts).toBe(1);
   });
 
   it('a password-protected form unlocks with the right password only', async () => {
     const form = await makeForm({passwordHash: await hashPassword('open sesame')});
     const visitor = new Browser(app);
     expect((await visitor.get(`/site-api/public/forms/${form.slug}`)).json.status).toBe('locked');
-    const wrong = await visitor.post(`/site-api/public/forms/${form.slug}/unlock`, {password: 'nope'});
+    const wrong = await rpost(visitor, form, 'unlock', {password: 'nope'});
     expect(wrong.status).toBe(422);
-    expect((await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form))).status).toBe(401);
-    const right = await visitor.post(`/site-api/public/forms/${form.slug}/unlock`, {password: 'open sesame'});
+    expect((await rpost(visitor, form, 'responses', await submitBody(form))).status).toBe(401);
+    const right = await rpost(visitor, form, 'unlock', {password: 'open sesame'});
     expect(right.status).toBe(200);
     const token = String(right.json.token);
     expect((right.json.form as {status: string}).status).toBe('live');
-    const res = await visitor.post(`/site-api/public/forms/${form.slug}/responses`, await submitBody(form, {unlockToken: token}));
+    const res = await rpost(visitor, form, 'responses', await submitBody(form, {unlockToken: token}));
     expect(res.status).toBe(200);
   });
 
@@ -153,7 +172,7 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     const leftInHour = 3600_000 - (Date.now() % 3600_000);
     if (leftInHour < 90_000) await new Promise(r => setTimeout(r, leftInHour + 1000));
     const form = await makeForm({passwordHash: await hashPassword('open sesame')});
-    const unlock = (ip: string, password: string) => new Browser(app, ip).post(`/site-api/public/forms/${form.slug}/unlock`, {password});
+    const unlock = (ip: string, password: string) => rpost(new Browser(app, ip), form, 'unlock', {password});
 
     const attack = await Promise.all(
       Array.from({length: 10}, async (_, i) => {
@@ -184,7 +203,7 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     const leftInHour = 3600_000 - (Date.now() % 3600_000);
     if (leftInHour < 60_000) await new Promise(r => setTimeout(r, leftInHour + 1000));
     const form = await makeForm({passwordHash: await hashPassword('open sesame')});
-    const unlock = (ip: string, password: string) => new Browser(app, ip).post(`/site-api/public/forms/${form.slug}/unlock`, {password});
+    const unlock = (ip: string, password: string) => rpost(new Browser(app, ip), form, 'unlock', {password});
     const seed = async (key: string, count: number) => {
       await db.$executeRaw`
         INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)

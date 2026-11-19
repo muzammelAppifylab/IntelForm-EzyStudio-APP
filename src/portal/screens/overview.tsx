@@ -15,7 +15,7 @@ import {
   type RecentResponsesResponse,
   recentResponsesQuery,
 } from '../intelform/queries/forms';
-import {ago, useMe, useSite, when} from '../shared';
+import {ago, useMe, when} from '../shared';
 import {Avatar, Button, buttonClass, Card, EmptyState, ErrorNote, Icon, PageHeader, Skeleton} from '../ui';
 
 /** Forms shown under "Recent forms" (the first page of the list, newest edit first). */
@@ -28,7 +28,6 @@ const RECENT_FORMS = 5;
  */
 export function Overview() {
   const me = useMe();
-  const site = useSite();
   const {viewForms, editForms, viewResponses, viewContacts} = useAbilities();
   const [creating, setCreating] = useState(false);
   const firstName = me.data?.viewer?.name?.split(/\s+/)[0];
@@ -41,7 +40,6 @@ export function Overview() {
     <div className="app-page screen-overview">
       <PageHeader
         title={firstName ? `Welcome back, ${firstName}` : 'Welcome back'}
-        description={`Your forms and their responses on ${site.data?.site?.name ?? 'your site'}.`}
         actions={
           <>
             {viewForms && (

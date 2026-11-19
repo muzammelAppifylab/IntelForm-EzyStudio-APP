@@ -16,6 +16,7 @@ import {contactsRoutes} from './routes/contacts';
 import {exportsRoutes} from './routes/exports';
 import {formsRoutes} from './routes/forms';
 import {publicFormsRoutes} from './routes/public-forms';
+import {publicSignatureRoutes} from './routes/public-signatures';
 import {publicSiteRoutes} from './routes/public-site';
 import {responsesRoutes} from './routes/responses';
 import {siteRoutes} from './routes/site';
@@ -52,6 +53,7 @@ const isDraftAutosave = (method: string, path: string) => method === 'PATCH' && 
  *   *    /themes/...    form design themes                       routes/themes.ts
  *   *    /responses/... responses, summaries, export             routes/responses.ts
  *   *    /public/forms/... the respondent side (anonymous)       routes/public-forms.ts
+ *   POST /uploads/signature a respondent's signature (anonymous) routes/public-signatures.ts
  *   *    /contacts/...  contacts from responses                  routes/contacts.ts
  *   *    /uploads/...   form images and answer files             routes/uploads.ts
  *   *    /app-settings  IntelForm's app-wide settings            routes/app-settings.ts
@@ -64,7 +66,7 @@ const isDraftAutosave = (method: string, path: string) => method === 'PATCH' && 
  * JSON `{error, message}`. `sameOrigin` + `csrf` refuse every cross-site or
  * token-less write; keep them, with `previewCookies` before them (a webhook
  * that must accept a cross-site write gets its own app, mounted before them,
- * with its own authentication).
+ * with its own authentication: /checkout, and the respondent routes, which take a render token).
  */
 export const app = new Hono()
   .basePath('/site-api')
@@ -74,6 +76,16 @@ export const app = new Hono()
   // The Buy button posts here as a plain form too (no JavaScript): BEFORE `csrf`, with its own
   // `formCsrf` (the token, or a same-origin form post). Keep it here (docs/agent/payments.md).
   .route('/checkout', checkoutRoutes)
+  // The RESPONDENT side, also BEFORE `csrf`: a form embedded on another website (public/embed.js,
+  // a cross-site iframe of /f/<slug>) never gets the CSRF cookie there, so it could not submit.
+  // These routes are anonymous: they read no cookie and no viewer, and every write must carry
+  // the page's signed render token for that form (`x-intelform-render`, routes/public-forms.ts
+  // RENDER_HEADER). `sameOrigin` above still refuses another site's page. Only these two paths:
+  // every signed-in route (the editors' uploads included) stays behind `csrf`.
+  .use('/public/forms/*', defaultBodyLimit)
+  .use('/uploads/signature', defaultBodyLimit)
+  .route('/public/forms', publicFormsRoutes)
+  .route('/uploads', publicSignatureRoutes)
   .use(csrf)
   // No route here takes a big body; uploads never pass through the Worker. The one exception is
   // the form builder's autosave (PATCH /forms/:id), which carries the whole draft: 512 KB there.
@@ -112,9 +124,6 @@ export const app = new Hono()
   .route('/templates', templatesRoutes)
   .route('/themes', themesRoutes)
   .route('/responses', responsesRoutes)
-  // Respondents are anonymous but SAME-ORIGIN (the form at /f/<slug> and its embed are pages
-  // of this site), so they stay behind sameOrigin + csrf like every write (siteFetch sends the token).
-  .route('/public/forms', publicFormsRoutes)
   .route('/contacts', contactsRoutes)
   .route('/exports', exportsRoutes)
   .route('/uploads', uploadsRoutes)

@@ -1,29 +1,14 @@
 import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
-import {createUpload, fileUrl} from '../../platform/files';
-import {config} from '../../platform/config';
+import {fileUrl} from '../../platform/files';
 import {permissionScope, problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {completeImageUpload, startImageUpload} from '../intelform/uploads/images';
-import {callerKey, hitRateLimit, waitText} from '../intelform/uploads/rate-limit';
-import {
-  checkImage,
-  checkSignature,
-  IMAGE_RATE,
-  isFileId,
-  isImagePurpose,
-  SIGNATURE_NAME,
-  SIGNATURE_RATE,
-  SIGNATURE_TOKEN_TTL_SECONDS,
-  SIGNATURE_TYPE,
-  type ImagePurpose,
-} from '../intelform/uploads/rules';
+import {hitRateLimit, waitText} from '../intelform/uploads/rate-limit';
+import {checkImage, IMAGE_RATE, isFileId, isImagePurpose, type ImagePurpose} from '../intelform/uploads/rules';
 import {storedSignatureFileId} from '../intelform/uploads/signatures';
 import {guarded} from '../intelform/uploads/storage';
-import {signUploadToken} from '../intelform/uploads/token';
 import {PERMISSIONS} from '../permissions';
-import {SYSTEM_LABELS} from '../../lib/intelform/form/labels';
-import {checkUnlockToken, readRenderToken} from '../intelform/respondent/tokens';
 
 /**
  * `/site-api/uploads/*`: IntelForm's files, through the platform's storage (docs/agent/files.md).
@@ -33,12 +18,9 @@ import {checkUnlockToken, readRenderToken} from '../intelform/respondent/tokens'
  *   POST /                      editors: start an IMAGE upload {name, contentType, size, purpose}
  *                               → 201 {fileId, upload}                      (public file)
  *   POST /:fileId/complete      editors: confirm it, check the bytes → {url, contentType, size}
- *   POST /signature             ANONYMOUS, rate limited: start a respondent's SIGNATURE upload
- *                               {formId, fieldId, contentType, size, renderToken, unlockToken?}
- *                               → 201 {fileId, upload, token}. Needs the page's render token and,
- *                               for a password-protected form, its unlock token (as the submit).
- *                               (private file, pending until the submit route claims it:
- *                               src/server/intelform/uploads/signatures.ts)
+ *   POST /signature             ANONYMOUS: a respondent's signature upload. NOT here: in
+ *                               public-signatures.ts, mounted before `csrf` (embedded forms);
+ *                               everything in THIS file stays behind `csrf`.
  *   GET  /signatures/:responseId/:fieldId
  *                               RESPONSE_READ: 302 to a 5-minute link of that signature
  *
@@ -50,8 +32,6 @@ import {checkUnlockToken, readRenderToken} from '../intelform/respondent/tokens'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FIELD_ID = /^[A-Za-z0-9_-]{1,64}$/;
-/** A respondent mid-way through when the owner republished may still sign the version they see. */
-const PREVIOUS_VERSION_GRACE_MS = 24 * 60 * 60 * 1000;
 
 const tooMany = (retryAfter: number) => problem('rate_limited', `Too many uploads. Wait ${waitText(retryAfter)} and try again.`);
 
@@ -83,22 +63,6 @@ const fileIdParam = validator('param', (value, c) => {
   return {fileId};
 });
 
-const signatureBody = validator('json', (value, c) => {
-  const v = (value ?? {}) as Record<string, unknown>;
-  const formId = typeof v.formId === 'string' ? v.formId : '';
-  const fieldId = typeof v.fieldId === 'string' ? v.fieldId : '';
-  const contentType = typeof v.contentType === 'string' ? v.contentType : '';
-  const size = typeof v.size === 'number' ? v.size : 0;
-  const renderToken = typeof v.renderToken === 'string' && v.renderToken.length <= 200 ? v.renderToken : '';
-  const unlockToken = typeof v.unlockToken === 'string' && v.unlockToken.length <= 400 ? v.unlockToken : null;
-  if (!UUID.test(formId) || !FIELD_ID.test(fieldId)) {
-    return c.json(problem('not_found', 'This form is no longer available.'), 404);
-  }
-  const invalid = checkSignature({type: contentType, size});
-  if (invalid) return c.json({...problem('invalid_input', invalid), fields: {[fieldId]: [invalid]}}, 422);
-  return {formId, fieldId, contentType, size, renderToken, unlockToken};
-});
-
 const signatureParam = validator('param', (value, c) => {
   const {responseId, fieldId} = value as {responseId?: string; fieldId?: string};
   if (!responseId || !UUID.test(responseId) || !fieldId || !FIELD_ID.test(fieldId)) {
@@ -106,14 +70,6 @@ const signatureParam = validator('param', (value, c) => {
   }
   return {responseId, fieldId};
 });
-
-const hasSignatureField = (definition: unknown, fieldId: string) => {
-  const fields = (definition as {fields?: unknown} | null)?.fields;
-  return (
-    Array.isArray(fields) &&
-    fields.some(f => !!f && typeof f === 'object' && (f as {id?: unknown}).id === fieldId && (f as {type?: unknown}).type === 'signature')
-  );
-};
 
 export const uploadsRoutes = new Hono()
   // 1. Images: ask for an upload URL (editors).
@@ -145,76 +101,6 @@ export const uploadsRoutes = new Hono()
       return c.json({...problem(done.code, done.message), fields: {file: [done.message]}}, status);
     }
     return c.json({url: done.data.url, contentType: done.data.contentType, size: done.data.size});
-  })
-
-  // Signatures: a respondent's upload URL (anonymous; sameOrigin + csrf still apply).
-  .post('/signature', signatureBody, withDb, async c => {
-    const input = c.req.valid('json');
-    const secret = config.jwtSecret;
-    if (!secret) return c.json(problem('not_configured', 'Signatures can’t be saved on this site yet.'), 503);
-
-    const db = c.var.db;
-    const caller = await callerKey(secret, c.req.header('cf-connecting-ip'));
-    const perForm = await hitRateLimit(
-      db,
-      `upload:sig:${caller}:${input.formId}`,
-      SIGNATURE_RATE.perForm.limit,
-      SIGNATURE_RATE.perForm.windowSeconds
-    );
-    const perCaller = perForm.ok
-      ? await hitRateLimit(db, `upload:sig:${caller}`, SIGNATURE_RATE.perCaller.limit, SIGNATURE_RATE.perCaller.windowSeconds)
-      : perForm;
-    if (!perCaller.ok) {
-      c.header('Retry-After', String(perCaller.retryAfter));
-      return c.json(tooMany(perCaller.retryAfter), 429);
-    }
-
-    // Only a live form's signature field, in the version the respondent may be looking at.
-    const form = await db.form.findUnique({
-      where: {id: input.formId},
-      select: {
-        status: true,
-        settings: true,
-        publishedVersion: {select: {definition: true}},
-        versions: {
-          where: {publishedAt: {gt: new Date(Date.now() - PREVIOUS_VERSION_GRACE_MS)}},
-          select: {definition: true},
-        },
-      },
-    });
-    if (!form || form.status !== 'live' || !form.publishedVersion) {
-      return c.json(problem('not_found', 'This form is no longer available.'), 404);
-    }
-    // The same gates as the submit: a page this site rendered for this form, and the password.
-    const rendered = input.renderToken ? await readRenderToken(secret, input.renderToken, input.formId) : null;
-    if (rendered === null) return c.json(problem('not_found', 'This form is no longer available.'), 404);
-    if (rendered === 'expired') return c.json(problem('page_expired', SYSTEM_LABELS.pageExpired), 409);
-    const passwordHash = (form.settings as {passwordHash?: unknown} | null)?.passwordHash;
-    if (typeof passwordHash === 'string' && passwordHash && !(await checkUnlockToken(secret, input.unlockToken, input.formId, passwordHash))) {
-      return c.json(problem('locked', 'Enter the form password again, then submit.'), 401);
-    }
-    const definitions = [form.publishedVersion.definition, ...form.versions.map(v => v.definition)];
-    if (!definitions.some(d => hasSignatureField(d, input.fieldId))) {
-      return c.json(problem('not_found', 'This question is no longer on the form. Reload the page.'), 404);
-    }
-
-    const grant = await guarded(() =>
-      // Private (personal data): shown only through GET /signatures/:responseId/:fieldId below.
-      createUpload(c.req.url, {name: SIGNATURE_NAME, contentType: SIGNATURE_TYPE, size: input.size, visibility: 'private'})
-    );
-    if (!grant.ok) {
-      // The owner's storage problem is not the respondent's: one plain message.
-      return c.json(problem('storage_failed', 'Your signature couldn’t be saved. Try again in a moment.'), grant.status === 503 ? 503 : 502);
-    }
-    const fileId = grant.data.file.id;
-    const token = await signUploadToken(secret, {
-      fileId,
-      formId: input.formId,
-      fieldId: input.fieldId,
-      exp: Math.floor(Date.now() / 1000) + SIGNATURE_TOKEN_TTL_SECONDS,
-    });
-    c.header('Cache-Control', 'no-store');
-    return c.json({fileId, upload: grant.data.upload, token}, 201);
   })
 
   // Signatures: view one (dashboard). Checks access on every view; links last 5 minutes.

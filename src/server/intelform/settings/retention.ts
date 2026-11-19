@@ -1,10 +1,12 @@
 /**
  * Data retention (Settings → Data): responses older than `retentionDays` are deleted. Off by
- * default (null = keep forever). Run once a day by the `intelform-retention` background job
- * (src/server/background.ts + background.json), not on a request.
+ * default (null = keep forever). Run every hour (at :30) by the `intelform-retention` background
+ * job (src/server/background.ts + background.json), then a minute at a time while more are past
+ * the period, never on a request.
  *
- * The batches themselves are `applyRetention` in src/server/background.ts (one statement per
- * batch that also keeps forms.response_count in step).
+ * The batches themselves are `applyRetention` in src/server/background.ts (one DELETE per
+ * batch; the responses delete trigger takes the rows off form_counts and form_response_hours, and
+ * the every-minute syncFormCounts refreshes the copy on forms, last_response_at included).
  */
 
 /** The moment before which responses go, or null when retention is off. */

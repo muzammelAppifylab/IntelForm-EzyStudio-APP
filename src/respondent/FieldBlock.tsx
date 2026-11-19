@@ -63,7 +63,9 @@ export function FieldBlock({field, engine, ttc, preview, large = false, number, 
       data-step-heading
       className={cx(
         'rf-heading',
-        group ? cx('rf-inline', large && 'rf-question-xl') : large ? 'rf-question-xl' : 'rf-question',
+        // A group's heading sits inside its <legend>: give it the same type as every other
+        // question title, or it falls back to the page's own (much larger) h2 style.
+        group ? cx('rf-inline', large ? 'rf-question-xl' : 'rf-question') : large ? 'rf-question-xl' : 'rf-question',
         field.hideLabel && 'rf-sr-only'
       )}
     >

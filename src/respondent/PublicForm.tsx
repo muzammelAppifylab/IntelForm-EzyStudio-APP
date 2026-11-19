@@ -5,6 +5,7 @@ import {SYSTEM_LABELS} from '../lib/intelform/form/labels';
 import {defaultTheme} from '../lib/intelform/form/theme-core';
 import {
   fetchForm,
+  FillId,
   newUuid,
   PublicApiError,
   rememberBrowserToken,
@@ -106,7 +107,7 @@ export function PublicForm({slug: initialSlug, initial, search}: {slug: string; 
             center={center}
             onUnlock={async password => {
               try {
-                const r = await unlockForm(slug, password);
+                const r = await unlockForm(slug, password, await lockedRenderToken(slug, data));
                 unlock.current = r.token;
                 setData(r.form);
                 return null;
@@ -137,6 +138,22 @@ export function PublicForm({slug: initialSlug, initial, search}: {slug: string; 
   );
 }
 
+/**
+ * The render token the unlock POST carries. GET /site-api/public/forms/:slug gives a locked form
+ * one; a locked form inlined in the page may not have it, so it is fetched once then.
+ */
+const fetchedLockTokens = new Map<string, string>();
+async function lockedRenderToken(slug: string, locked: PublicFormResponse): Promise<string> {
+  const own = (locked as {renderToken?: unknown}).renderToken;
+  if (typeof own === 'string' && own) return own;
+  const known = fetchedLockTokens.get(slug);
+  if (known) return known;
+  const fresh = (await fetchForm(slug)) as {renderToken?: unknown};
+  const token = typeof fresh.renderToken === 'string' ? fresh.renderToken : '';
+  if (token) fetchedLockTokens.set(slug, token);
+  return token;
+}
+
 function LiveForm({
   form,
   slug,
@@ -157,14 +174,18 @@ function LiveForm({
   const labels = SYSTEM_LABELS;
   const renderToken = form.renderToken;
   const [already] = useState(() => (form.settings.onePerBrowser ? storedBrowserToken(form.id) : null));
+  // Sent on every submit (not only with one response per browser): it keys the per-browser rate
+  // limit, so people sharing one network address don't share one limit.
   const browserToken = useMemo(() => storedBrowserToken(form.id) ?? newUuid(), [form.id]);
+  // One id per fill, the same on every retry: a submit whose answer was lost is saved once.
+  const [fillId] = useState(() => new FillId());
   const [closed, setClosed] = useState<string | null>(null);
   const shellMode = opts.embed === 'inline' ? 'embed' : 'page';
   const center = form.theme.alignment === 'center';
 
   useEffect(() => {
-    sendEvent(slug, 'view', sessionToken(form.id));
-  }, [slug, form.id]);
+    sendEvent(slug, 'view', sessionToken(form.id), renderToken);
+  }, [slug, form.id, renderToken]);
 
   if (already || closed) {
     return (
@@ -197,7 +218,9 @@ function LiveForm({
         hp: hp || undefined,
         unlockToken: unlockToken.current ?? undefined,
         browserToken,
+        submissionId: fillId.get(),
       });
+      fillId.done();
       if (form.settings.onePerBrowser) rememberBrowserToken(form.id, browserToken);
       return {ok: true, redirectUrl: r.redirectUrl};
     } catch (err) {
@@ -220,7 +243,7 @@ function LiveForm({
       hideTitle={opts.hideTitle}
       transparent={opts.transparent}
       manageDocumentTitle
-      onStart={() => sendEvent(slug, 'start', sessionToken(form.id))}
+      onStart={() => sendEvent(slug, 'start', sessionToken(form.id), renderToken)}
       onSubmit={onSubmit}
       initialAnswers={initialAnswers}
       footer={<Honeypot />}

@@ -1,10 +1,11 @@
 import * as z from 'zod'
-import { isRealDay } from './api-responses'
+import { isRealDay, RESPONSES_PAGE_SIZE, RESPONSES_PAGE_SIZES } from './api-responses'
 
 /**
  * Contacts: people who answered any form, grouped by email (or phone when a response has no email).
  * The `contacts` table holds one row per contact, kept by triggers on responses.
- *   GET  /site-api/contacts                list page (search, advanced filters, sort, 50 per page, keyset `cursor`)
+ *   GET  /site-api/contacts                list page (search, advanced filters, sort, 25/50/100 per page,
+ *                                          keyset `cursor` / `before` / `last`, a capped total)
  *   GET  /site-api/contacts/overview       the strip and filter choices (cached, workspace-wide)
  *   GET  /site-api/contacts/detail?key=    one contact and their latest responses, newest first
  *   POST /site-api/exports {kind: 'contacts', query}   the CSV, built by a background job (api-exports.ts)
@@ -12,7 +13,11 @@ import { isRealDay } from './api-responses'
  * Reading needs site:contact:read; erasing site:contact:write AND site:response:delete.
  */
 
-export const CONTACTS_PAGE_SIZE = 50
+/** Rows per page, and the choices (`?size=`): the same as the responses table, so both pagers match. */
+export const CONTACTS_PAGE_SIZE = RESPONSES_PAGE_SIZE
+export const CONTACTS_PAGE_SIZES = RESPONSES_PAGE_SIZES
+/** A filtered total is counted up to this many contacts, never more: past it the list says "1,000+". */
+export const CONTACTS_COUNT_CAP = 1000
 
 /** A contact's key: "e:<lowercase email>" or "p:<E.164 phone>". */
 export const contactKey = z.string().regex(/^(e:[^\s]{3,254}|p:\+[0-9]{6,16})$/, 'Unknown contact')
@@ -76,8 +81,20 @@ export const contactsFilterQuery = z
 export type ContactsFilterQuery = z.infer<typeof contactsFilterQuery>
 
 export const contactsListQuery = contactsFilterQuery.and(
-  /** The previous page's `nextCursor` (keyset: the last row's sort value and key). */
-  z.object({ cursor: z.string().max(800).optional() }),
+  z.object({
+    /** The previous page's `nextCursor` (keyset: the last row's sort value and key). */
+    cursor: z.string().max(1200).optional(),
+    /** The next page's `prevCursor`: the rows just before it. Ignored with `cursor`. */
+    before: z.string().max(1200).optional(),
+    /** The last page, holding this many rows (1..size). Ignored with `cursor` or `before`. */
+    last: z.coerce.number().int().min(1).max(100).optional(),
+    /** Rows per page: one of CONTACTS_PAGE_SIZES. */
+    size: z.coerce
+      .number()
+      .int()
+      .refine((n) => (CONTACTS_PAGE_SIZES as readonly number[]).includes(n), 'Pick 25, 50 or 100 rows per page.')
+      .default(CONTACTS_PAGE_SIZE),
+  }),
 )
 export type ContactsListQuery = z.infer<typeof contactsListQuery>
 
@@ -132,8 +149,14 @@ export interface ContactsStrip {
 export interface ContactsListResponse {
   contacts: ContactRow[]
   pageSize: number
-  /** Pass as `cursor` for the next page; null on the last one. No total: there is no count per request. */
+  /** Pass as `cursor` for the next page; null on the last one. */
   nextCursor: string | null
+  /** Pass as `before` for the previous page; null on the first one. */
+  prevCursor: string | null
+  /** Contacts matching the filters, counted up to CONTACTS_COUNT_CAP when filtered. */
+  total: number
+  /** The filtered count stopped at CONTACTS_COUNT_CAP (show "1,000+"). */
+  totalCapped: boolean
 }
 
 /** GET /api/contacts/overview: whole workspace, ignoring filters, so it isn't refetched per page. */

@@ -7,18 +7,32 @@
  * design/theme-edit.ts `useCssVars` sets through the CSSOM.
  */
 
+/* Both columns fill the builder's tab area to its bottom edge and scroll on their own
+   (a viewport calc left them short of it, or past it, depending on the window's height). */
+.if-builder-main:has(> .screen-design) {
+  overflow: hidden;
+}
+
+.screen-design {
+  height: 100%;
+  /* .app-page is a grid with auto rows: pin its one row to the tab's height, or the columns
+     grow to their content and nothing scrolls. */
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .screen-design .if-design-layout {
   display: grid;
   grid-template-columns: 22.5rem minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: 1rem;
-  align-items: start;
+  height: 100%;
 }
 
 /* Settings column: scrolls on its own next to the preview. */
 .screen-design .if-design-panel {
-  max-height: calc(100dvh - 12rem);
-  min-height: 24rem;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--card);
@@ -247,8 +261,7 @@
 .screen-design .if-design-preview {
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - 12rem);
-  min-height: 24rem;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -298,12 +311,19 @@
 }
 
 @media (max-width: 960px) {
-  .screen-design .if-design-layout {
-    grid-template-columns: minmax(0, 1fr);
+  .if-builder-main:has(> .screen-design) {
+    overflow-y: auto;
   }
 
-  .screen-design .if-design-panel {
-    max-height: none;
+  .screen-design,
+  .screen-design .if-design-layout {
+    height: auto;
+    grid-template-rows: auto;
+  }
+
+  .screen-design .if-design-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
   }
 
   .screen-design .if-design-preview {

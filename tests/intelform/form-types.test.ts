@@ -262,3 +262,25 @@ describe('time choices', () => {
     expect(to24(3, 'PM')).toBe(15);
   });
 });
+
+describe('new questions get a starter title', () => {
+  it('every type starts with a non-empty, editable title', async () => {
+    const {FIELD_TYPES} = await import('../../src/lib/intelform/form/field-types');
+    for (const t of FIELD_TYPES) expect(createField(t).label.trim(), t).not.toBe('');
+    expect(createField('email').label).toBe('What’s your email?');
+    expect(createField('nps').label).toBe('How likely are you to recommend us to a friend?');
+  });
+});
+
+describe('starter titles follow the type until edited', () => {
+  it('swaps an unedited starter title on a type change, keeps an edited one', async () => {
+    const {changeType} = await import('../../src/portal/intelform/builder/ops');
+    const email = createField('email');
+    const def = {layout: 'all_at_once', startScreen: {enabled: false, title: '', button: 'Start'}, fields: [email], endScreen: {title: 'Thanks!', message: ''}} as never;
+    changeType(def, email.id, 'phone');
+    expect((def as {fields: {label: string}[]}).fields[0]!.label).toBe('What’s your phone number?');
+    (def as {fields: {label: string}[]}).fields[0]!.label = 'Best number to call?';
+    changeType(def, email.id, 'short_text');
+    expect((def as {fields: {label: string}[]}).fields[0]!.label).toBe('Best number to call?');
+  });
+});

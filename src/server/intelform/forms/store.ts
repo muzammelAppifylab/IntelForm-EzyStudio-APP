@@ -14,6 +14,8 @@ import {clientSettings, type FormSettings, type FormSettingsPatch} from '../../.
 import {defaultTheme, themePreset, type FormTheme} from '../../../lib/intelform/form/theme';
 import {cache} from '../../../platform/cache';
 import {getAppSettings} from '../settings/settings';
+import {writeCatalogAtPublish} from '../responses/catalog';
+import {exactResponsesSql} from './counts';
 import {
   completionRate,
   countFields,
@@ -120,6 +122,29 @@ const ORDER = {
   responses: Prisma.sql`f.response_count DESC, f.updated_at DESC, f.id DESC`,
 } as const;
 
+/** The same orders reversed (every direction flipped): the previous and last pages read backwards. */
+const ORDER_BACK = {
+  updated: Prisma.sql`f.updated_at ASC, f.id ASC`,
+  created: Prisma.sql`f.created_at ASC, f.id ASC`,
+  title: Prisma.sql`lower(f.title) DESC, f.id DESC`,
+  responses: Prisma.sql`f.response_count ASC, f.updated_at ASC, f.id ASC`,
+} as const;
+
+/** Rows before `cursor` in the list's order (the mirror of `after`). */
+function before(cursor: ListCursor | null): Prisma.Sql {
+  if (!cursor) return Prisma.sql`true`;
+  switch (cursor.sort) {
+    case 'updated':
+      return Prisma.sql`(f.updated_at, f.id) > (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+    case 'created':
+      return Prisma.sql`(f.created_at, f.id) > (${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+    case 'title':
+      return Prisma.sql`(lower(f.title), f.id) < (${cursor.title}::text, ${cursor.id}::uuid)`;
+    case 'responses':
+      return Prisma.sql`(f.response_count, f.updated_at, f.id) > (${cursor.count}::int, ${cursor.at}::timestamptz, ${cursor.id}::uuid)`;
+  }
+}
+
 function after(cursor: ListCursor | null): Prisma.Sql {
   if (!cursor) return Prisma.sql`true`;
   switch (cursor.sort) {
@@ -139,7 +164,9 @@ export interface ListPage {
   total: number;
   matched: number;
   page: number;
+  pageSize: number;
   nextCursor: string | null;
+  prevCursor: string | null;
 }
 
 /**
@@ -150,23 +177,32 @@ export interface ListPage {
  * own forms (tens to hundreds of rows, created by hand), and the UI needs "no results" vs
  * "no forms yet".
  */
-export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | null): Promise<ListPage> {
+export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | null, prev: ListCursor | null = null): Promise<ListPage> {
+  const size = query.size ?? PAGE_SIZE;
+  const last = cursor || prev || !query.last ? null : Math.min(query.last, size);
+  // Backwards (previous page, last page): read in the reverse order, then flip.
+  const backwards = !cursor && (!!prev || last !== null);
+  const want = last ?? size;
   const matches = Prisma.sql`true
     ${query.status !== 'all' ? Prisma.sql`AND f.status = ${query.status}` : Prisma.empty}
     ${query.q ? Prisma.sql`AND f.title ILIKE ${likePattern(query.q)}` : Prisma.empty}`;
   const order = ORDER[query.sort];
+  const pageOrder = backwards ? ORDER_BACK[query.sort] : order;
+  const startAt = backwards ? before(prev) : after(cursor);
 
-  // All-time starts and this week's responses from counters kept on write (forms.starts_total,
-  // form_response_hours: at most 168 rows per form by its primary key), never a count of responses.
+  // All-time counts from the copy on forms (refreshed every minute by syncFormCounts: the list,
+  // its sort and its keyset cursor all read the same indexed column, so a page never shifts),
+  // and this week's responses from form_response_hours (at most 168 hours x 16 shards per form
+  // by its primary key prefix form_id, hour), never a count of responses.
   const [rows, counts] = await Promise.all([
     db.$queryRaw<ListRow[]>`
       WITH paged AS (
         SELECT f.id, f.title, f.slug, f.status, f.draft->>'layout' AS layout, f.response_count,
           f.has_unpublished, f.published_version_id, f.created_at, f.updated_at, f.starts_total
         FROM forms f
-        WHERE ${matches} AND ${after(cursor)}
-        ORDER BY ${order}
-        LIMIT ${PAGE_SIZE + 1}
+        WHERE ${matches} AND ${startAt}
+        ORDER BY ${pageOrder}
+        LIMIT ${want + 1}
       )
       SELECT f.id::text AS id, f.title, f.slug, f.status,
         COALESCE(f.layout, 'all_at_once') AS layout,
@@ -177,19 +213,20 @@ export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | n
         f.created_at AS "createdAt", f.updated_at AS "updatedAt"
       FROM paged f
       CROSS JOIN LATERAL (
-        SELECT COALESCE(sum(n), 0)::int AS n FROM form_response_hours
+        SELECT GREATEST(COALESCE(sum(n), 0), 0)::int AS n FROM form_response_hours
         WHERE form_id = f.id AND hour >= date_trunc('hour', now()) - interval '7 days'
       ) w
-      ORDER BY ${order}
+      ORDER BY ${pageOrder}
     `,
     db.$queryRaw<{total: number; matched: number}[]>`
       SELECT count(*)::int AS total, count(*) FILTER (WHERE ${matches})::int AS matched FROM forms f
     `,
   ]);
 
-  const page = cursor ? cursor.page + 1 : 1;
-  const shown = rows.slice(0, PAGE_SIZE);
-  const last = shown.at(-1);
+  const page = query.page ?? (cursor ? cursor.page + 1 : 1);
+  const more = rows.length > want;
+  const shown = backwards ? rows.slice(0, want).reverse() : rows.slice(0, want);
+  const cursorOf = (r: ListRow | undefined) => (r ? encodeCursor(query.sort, page, r) : null);
   return {
     forms: shown.map(r => ({
       id: r.id,
@@ -207,7 +244,11 @@ export async function listForms(db: Db, query: ListQuery, cursor: ListCursor | n
     total: counts[0]?.total ?? 0,
     matched: counts[0]?.matched ?? 0,
     page,
-    nextCursor: rows.length > PAGE_SIZE && last ? encodeCursor(query.sort, page, last) : null,
+    pageSize: size,
+    // Forwards: more rows past this page mean a next one. Backwards: the page we came from (none
+    // for the last page) is next, and more rows mean a previous one.
+    nextCursor: backwards ? (prev ? cursorOf(shown.at(-1)) : null) : more ? cursorOf(shown.at(-1)) : null,
+    prevCursor: backwards ? (more ? cursorOf(shown[0]) : null) : cursor ? cursorOf(shown[0]) : null,
   };
 }
 
@@ -240,8 +281,10 @@ export function localDay(hour: Date, timezone: string): string {
 
 /**
  * Every read in ONE round trip, from counters kept on write: forms.response_count and
- * starts_total, and form_response_hours (responses per form per hour, kept by the responses
- * triggers), never the responses or form_event_counts tables. The app's time zone comes from
+ * starts_total (the copy syncFormCounts refreshes every minute: fine for a 5-minute cached strip),
+ * and form_response_hours (responses per form per hour in 16 shards, kept by the responses
+ * triggers; sums are clamped at 0, as a shard may be negative after deletes), never the responses
+ * or form_event_counts tables. The app's time zone comes from
  * the cached app settings; the last 8 days of hourly counts are put into local days here.
  */
 export async function loadFormsStrip(db: PrismaClient): Promise<FormsStrip> {
@@ -259,8 +302,8 @@ export async function loadFormsStrip(db: PrismaClient): Promise<FormsStrip> {
       FROM forms
     `,
     db.$queryRaw<{this_week: number; last_week: number}[]>`
-      SELECT coalesce(sum(n) FILTER (WHERE hour >= date_trunc('hour', now()) - interval '7 days'), 0)::int AS this_week,
-        coalesce(sum(n) FILTER (WHERE hour < date_trunc('hour', now()) - interval '7 days'), 0)::int AS last_week
+      SELECT GREATEST(coalesce(sum(n) FILTER (WHERE hour >= date_trunc('hour', now()) - interval '7 days'), 0), 0)::int AS this_week,
+        GREATEST(coalesce(sum(n) FILTER (WHERE hour < date_trunc('hour', now()) - interval '7 days'), 0), 0)::int AS last_week
       FROM form_response_hours WHERE hour >= date_trunc('hour', now()) - interval '14 days'
     `,
     db.$queryRaw<MostActive[]>`
@@ -275,7 +318,7 @@ export async function loadFormsStrip(db: PrismaClient): Promise<FormsStrip> {
       LIMIT 3
     `,
     db.$queryRaw<{hour: Date; n: number}[]>`
-      SELECT hour, sum(n)::int AS n FROM form_response_hours
+      SELECT hour, GREATEST(sum(n), 0)::int AS n FROM form_response_hours
       WHERE hour >= now() - interval '9 days'
       GROUP BY hour
     `,
@@ -446,8 +489,10 @@ export async function publishForm(db: PrismaClient, id: string, userId: number):
 
 /** `publishForm` inside a transaction the caller opened. */
 export async function publishFormIn(tx: Db, id: string, userId: number): Promise<PublishResponse> {
-  const [row] = await tx.$queryRaw<{status: FormStatus; draft: unknown; theme: unknown; settings: unknown}[]>`
-    SELECT status, draft, theme, settings FROM forms WHERE id = ${id}::uuid FOR UPDATE
+  const [row] = await tx.$queryRaw<
+    {status: FormStatus; draft: unknown; theme: unknown; settings: unknown; published_version_id: string | null}[]
+  >`
+    SELECT status, draft, theme, settings, published_version_id::text AS published_version_id FROM forms WHERE id = ${id}::uuid FOR UPDATE
   `;
   if (!row) throw notFound();
   const parsed = formDefinition.safeParse(row.draft);
@@ -473,6 +518,8 @@ export async function publishFormIn(tx: Db, id: string, userId: number): Promise
     )
     RETURNING id::text AS id, version, published_at
   `;
+  // The responses catalog for this version, merged from the previous one (same lock, same transaction).
+  await writeCatalogAtPublish(tx, id, row.published_version_id, version!, definition.fields);
   // A closed form stays closed: publishing a fix must not reopen it by surprise. Reopen does that.
   const status: FormStatus = row.status === 'closed' ? 'closed' : 'live';
   const [after] = await tx.$queryRaw<{revision: number; response_count: number}[]>`
@@ -484,7 +531,7 @@ export async function publishFormIn(tx: Db, id: string, userId: number): Promise
       updated_by = ${userId},
       updated_at = now()
     WHERE id = ${id}::uuid
-    RETURNING revision, response_count
+    RETURNING revision, ${exactResponsesSql(Prisma.sql`forms.id`)} AS response_count
   `;
   return {
     version: version!.version,
@@ -513,13 +560,19 @@ const statusResponse = (r: StatusRow): FormStatusResponse => ({
   settings: clientSettings(readSettings(r.settings), {canEdit: true}),
 });
 
+/**
+ * The exact response count (sum of form_counts) for the header these answers update and for the
+ * cap check on reopen: right after a delete the copy on forms may still be a minute old.
+ */
+const EXACT_COUNT = exactResponsesSql(Prisma.sql`forms.id`);
+
 /** Closes a published form now (one conditional statement). 409 before the first publish. */
 export async function closeForm(db: Db, id: string, userId: number): Promise<FormStatusResponse> {
   const [row] = await db.$queryRaw<StatusRow[]>`
     UPDATE forms SET status = 'closed', settings = settings || '{"closed": true}'::jsonb,
       revision = revision + 1, updated_by = ${userId}, updated_at = now()
     WHERE id = ${id}::uuid AND status IN ('live', 'closed')
-    RETURNING status, revision, has_unpublished, published_version_id::text AS published_version_id, response_count, settings
+    RETURNING status, revision, has_unpublished, published_version_id::text AS published_version_id, ${EXACT_COUNT} AS response_count, settings
   `;
   if (row) return statusResponse(row);
   const exists = await db.form.findUnique({where: {id}, select: {id: true}});
@@ -540,8 +593,8 @@ export async function reopenForm(db: Db, id: string, userId: number): Promise<Fo
              ELSE '{}'::jsonb END,
       revision = revision + 1, updated_by = ${userId}, updated_at = now()
     WHERE id = ${id}::uuid AND status IN ('closed', 'live') AND published_version_id IS NOT NULL
-      AND NOT COALESCE(jsonb_typeof(settings->'responseCap') = 'number' AND response_count >= (settings->>'responseCap')::numeric, false)
-    RETURNING status, revision, has_unpublished, published_version_id::text AS published_version_id, response_count, settings
+      AND NOT COALESCE(jsonb_typeof(settings->'responseCap') = 'number' AND ${EXACT_COUNT} >= (settings->>'responseCap')::numeric, false)
+    RETURNING status, revision, has_unpublished, published_version_id::text AS published_version_id, ${EXACT_COUNT} AS response_count, settings
   `;
   if (row) return statusResponse(row);
   const form = await db.form.findUnique({where: {id}, select: {status: true, publishedVersionId: true}});

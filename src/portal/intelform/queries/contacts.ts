@@ -1,7 +1,9 @@
-import {infiniteQueryOptions, keepPreviousData, queryOptions, useMutation, useQueryClient} from '@tanstack/react-query';
+import {keepPreviousData, queryOptions, useMutation, useQueryClient} from '@tanstack/react-query';
 
 import {
   CONTACT_HAS,
+  CONTACTS_PAGE_SIZE,
+  CONTACTS_PAGE_SIZES,
   type ContactDetailResponse,
   type ContactHas,
   type ContactSegment,
@@ -12,6 +14,7 @@ import {
 } from '../../../lib/intelform/api-contacts';
 import {toQueryString} from '../../../lib/intelform/api-responses';
 import {api} from '../lib/api';
+import {FIRST_PAGE, type PageNav} from './responses';
 
 /**
  * Contacts data for the dashboard (`/site-api/contacts`). Mutations invalidate by prefix
@@ -94,15 +97,47 @@ export function filterParams(s: ContactsState, tz = browserTz) {
   };
 }
 
-/** The list, 50 a page by keyset; "Load more" asks for the rows after the last one. */
-export const contactsListQuery = (s: ContactsState) =>
-  infiniteQueryOptions({
-    queryKey: [...contactsKey, 'list', s],
-    queryFn: ({pageParam, signal}) =>
-      api<ContactsListResponse>(`${CONTACTS_PATH}${toQueryString({...filterParams(s), cursor: pageParam ?? undefined})}`, {signal}),
-    initialPageParam: null as string | null,
-    getNextPageParam: last => last.nextCursor ?? undefined,
+const SIZE_KEY = 'intelform:contacts-page-size';
+
+/** Rows per page this person last picked, in this browser (the responses table's choices). */
+export function rememberedContactsSize(): number {
+  try {
+    const n = Number(localStorage.getItem(SIZE_KEY));
+    return (CONTACTS_PAGE_SIZES as readonly number[]).includes(n) ? n : CONTACTS_PAGE_SIZE;
+  } catch {
+    return CONTACTS_PAGE_SIZE;
+  }
+}
+
+export function rememberContactsSize(n: number): void {
+  try {
+    localStorage.setItem(SIZE_KEY, String(n));
+  } catch {
+    // Storage blocked: the default size next time.
+  }
+}
+
+/**
+ * One numbered page of the list by keyset, like the responses table: after `cursor` (next),
+ * before `before` (previous) or the last `last` rows (last page). Pages are dropped a minute
+ * after they leave the screen, so walking many keeps memory bounded.
+ */
+export const contactsListQuery = (s: ContactsState, size: number = CONTACTS_PAGE_SIZE, nav: PageNav = FIRST_PAGE) =>
+  queryOptions({
+    queryKey: [...contactsKey, 'list', s, size, nav],
+    queryFn: ({signal}) =>
+      api<ContactsListResponse>(
+        `${CONTACTS_PATH}${toQueryString({
+          ...filterParams(s),
+          cursor: nav.cursor,
+          before: nav.cursor ? undefined : nav.before,
+          last: nav.cursor || nav.before ? undefined : nav.last,
+          size: size === CONTACTS_PAGE_SIZE ? undefined : size,
+        })}`,
+        {signal}
+      ),
     placeholderData: keepPreviousData,
+    gcTime: 60_000,
   });
 
 /** Strip and filter choices: workspace-wide, so one fetch serves every filter. */

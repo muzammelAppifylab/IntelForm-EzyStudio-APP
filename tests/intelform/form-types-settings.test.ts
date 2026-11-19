@@ -1,4 +1,5 @@
 import {createElement, type ComponentType} from 'react';
+import {QueryClient, QueryClientProvider} from '@tanstack/react-query';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it} from 'vitest';
 
@@ -14,7 +15,12 @@ describe('form-types builder UI (server markup)', () => {
     for (const t of FIELD_TYPES) {
       const Settings = FIELD_SETTINGS[t] as ComponentType<FieldSettingsProps>;
       const html = renderToStaticMarkup(
-        createElement(ToastProvider, null, createElement(Settings, {field: createField(t), onChange: () => {}, readOnly: true}))
+        // The portal always has a query client (the signature panel reads whether storage is on).
+        createElement(
+          QueryClientProvider,
+          {client: new QueryClient()},
+          createElement(ToastProvider, null, createElement(Settings, {field: createField(t), onChange: () => {}, readOnly: true}))
+        )
       );
       expect(html, t).not.toMatch(/style="/);
       // No Tailwind utility leftovers.

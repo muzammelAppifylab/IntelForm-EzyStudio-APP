@@ -106,12 +106,6 @@ export function noMatchText(search: string, status: FormStatus | 'all'): {title:
   return {title: 'No forms match', body: 'Nothing to show yet.'};
 }
 
-/** The line under the Forms title: "12 forms · 3 live". */
-export function formsSubtitle(counts: FormsStrip['counts'] | undefined): string {
-  if (!counts) return 'Every form, its status and its latest responses.';
-  return `${plural(counts.all, 'form')} · ${formatCount(counts.live)} live`;
-}
-
 /** The public link of a form (works once published). */
 export const publicFormUrl = (origin: string, slug: string) => `${origin}/f/${encodeURIComponent(slug)}/`;
 
