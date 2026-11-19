@@ -5,7 +5,7 @@ import {app} from '../../src/server/app';
 import '../../src/server/background';
 import {unzip} from '../intelform/unzip';
 import {syncFormCounts} from '../../src/server/intelform/forms/counts';
-import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
+import {Browser, configureEnv, DATABASE_URL, db, downloadExport, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
  * The Responses API (`/site-api/responses/*`) against a real Postgres: who may read and delete,
@@ -206,17 +206,21 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect(started.json).toMatchObject({kind: 'responses', status: 'ready', rows: 30});
     const id = started.json.id as string;
     expect((await viewer.get(`/site-api/exports/${id}`)).json).toMatchObject({status: 'ready'});
-    const res = await viewer.get(`/site-api/exports/${id}/download`);
+    const res = await downloadExport(viewer, id);
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('text/csv; charset=utf-8');
-    expect(res.headers.get('content-disposition')).toContain('Feedback feedback responses');
-    const lines = String(res.json.text).split('\r\n').filter(Boolean);
+    expect(res.files).toHaveLength(1);
+    expect(res.files[0]!.contentType).toBe('text/csv');
+    expect(res.files[0]!.name).toContain('Feedback feedback responses');
+    const lines = res.files[0]!.text.split('\r\n').filter(Boolean);
     expect(lines).toHaveLength(31);
-    // The body decoder drops the BOM; the unit tests check it is sent.
-    expect(lines[0]!.replace(/^﻿/, '')).toBe('Email,Favourite fruit,Recommend us?,Submitted at,Completion time (seconds),Device,Browser,Country,Response ID');
+    // The file starts with the BOM (TextDecoder drops it), then the header.
+    expect(res.files[0]!.bytes.slice(0, 3)).toEqual(new Uint8Array([0xef, 0xbb, 0xbf]));
+    expect(lines[0]!.replace(/^\uFEFF/, '')).toBe('Email,Favourite fruit,Recommend us?,Submitted at,Completion time (seconds),Device,Browser,Country,Response ID');
+    // Someone else's export: no links, however they ask.
+    expect((await editor.get(`/site-api/exports/${id}/files`)).status).toBe(404);
     const pick = await viewer.post('/site-api/exports', {kind: 'responses', formId: FORM, query: {ids: [rid(3), rid(1001)]}});
-    const picked = await viewer.get(`/site-api/exports/${pick.json.id as string}/download`);
-    expect(String(picked.json.text).split('\r\n').filter(Boolean)).toHaveLength(2);
+    const picked = await downloadExport(viewer, pick.json.id as string);
+    expect(picked.files[0]!.text.split('\r\n').filter(Boolean)).toHaveLength(2);
   });
 
   it('summarises', async () => {
@@ -297,19 +301,15 @@ describe.skipIf(!DATABASE_URL)('responses API (integration, real Postgres)', () 
     expect((await editor.post('/site-api/exports', {kind: 'all'})).status).toBe(403);
     const started = await owner.post('/site-api/exports', {kind: 'all'});
     expect(started.json).toMatchObject({kind: 'all', status: 'ready'});
-    const zip = await owner.get(`/site-api/exports/${started.json.id as string}/download`);
+    const zip = await downloadExport(owner, started.json.id as string);
     expect(zip.status).toBe(200);
-    expect(zip.headers.get('content-type')).toBe('application/zip');
-    // The parts stay until the hourly sweep, a day later.
+    expect(zip.files).toHaveLength(1);
+    expect(zip.files[0]!.contentType).toBe('application/zip');
+    // The files stay until the hourly sweep, a day later; the rows hold their ids, never bytes.
     expect(await db.intelformExportPart.count()).toBeGreaterThan(0);
-    // The bytes the live export job wrote (exports/builders.ts) read back as a valid ZIP: every
+    // The bytes the live export job stored (exports/builders.ts) read back as a valid ZIP: every
     // record signature, offset and CRC-32 checks out, one CSV per form.
-    const parts = await db.intelformExportPart.findMany({
-      where: {exportId: started.json.id as string},
-      orderBy: {seq: 'asc'},
-      select: {data: true},
-    });
-    const entries = unzip(Buffer.concat(parts.map(p => Buffer.from(p.data))));
+    const entries = unzip(Buffer.from(zip.files[0]!.bytes));
     expect(entries.map(e => e.name).sort()).toEqual(['feedback.csv', 'other.csv']);
     for (const e of entries) {
       expect(e.crcOk, e.name).toBe(true);

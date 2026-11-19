@@ -1,8 +1,12 @@
 {
   "lists": {
-    "intelform-every-minute": {
+    "intelform-notify": {
       "retries": 0,
       "concurrency": 5
+    },
+    "intelform-quarter": {
+      "retries": 0,
+      "concurrency": 1
     },
     "intelform-response-notify": {
       "retries": 4,
@@ -34,9 +38,9 @@
     }
   },
   "schedules": {
-    "intelform-every-minute": {
-      "every": "minute",
-      "label": "IntelForm: send response notifications and webhooks, refresh form counts and summaries"
+    "intelform-quarter": {
+      "cron": "*/15 * * * *",
+      "label": "IntelForm: summaries and counts of forms that changed; anything a refused send left"
     },
     "intelform-retention": {
       "cron": "30 * * * *",

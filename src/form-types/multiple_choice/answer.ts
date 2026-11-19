@@ -1,4 +1,4 @@
-import {OTHER_OPTION_ID} from '../../lib/intelform/form/base';
+import {OTHER_OPTION_ID} from '../../lib/intelform/form/base-core';
 import {OTHER_VALUE} from '../_respondent/constants';
 
 export interface ChoiceAnswer {

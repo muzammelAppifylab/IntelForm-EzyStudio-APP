@@ -4,7 +4,7 @@ import {JobRejected} from '../../src/platform/background';
 import {publishInTx} from '../../src/server/intelform/builder/publish';
 import {runExportJob, resendPendingExports} from '../../src/server/intelform/exports/job';
 import {EMPTY_CATALOG, finishCatalog, foldVersions, loadCatalog, type VersionFields} from '../../src/server/intelform/responses/catalog';
-import {configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
+import {configureEnv, DATABASE_URL, db, resetDatabase, storedFiles} from './support/harness';
 
 /**
  * The precomputed responses catalog (form_catalogs) and an export built over several runs,
@@ -106,7 +106,7 @@ describe.skipIf(!DATABASE_URL)('form catalogs and long exports (integration, rea
     expect((await storedRow(fresh!.id))!.version_id).not.toBeNull();
   });
 
-  it('exports a few thousand rows over several runs; a refused send waits for the every-minute job', async () => {
+  it('exports a few thousand rows over several runs, one stored file each; a refused send waits for the 15-minute job', async () => {
     const userId = await user();
     const f = await form([V1]);
     const N = 3200;
@@ -122,9 +122,8 @@ describe.skipIf(!DATABASE_URL)('form catalogs and long exports (integration, rea
       RETURNING id::text AS id`;
     const id = exp!.id;
 
-    // A clock that moves 10 s each time it is read: a run stops after a few batches (its 30 s budget).
-    let clock = 0;
-    const now = () => (clock += 10_000);
+    // A run builds one file of `partRows` rows at most (rows and bytes, never the clock).
+    const partRows = 1000;
     const sent: number[] = [];
     let refuse = true;
     const send = async (_url: string, _id: string, step: number) => {
@@ -134,8 +133,8 @@ describe.skipIf(!DATABASE_URL)('form catalogs and long exports (integration, rea
       }
       sent.push(step);
     };
-    await runExportJob(db, 'https://shop.example.test/x', {exportId: id}, {now, send});
-    // Refused: the export is not failed, it waits for the every-minute job.
+    await runExportJob(db, 'https://shop.example.test/x', {exportId: id}, {send, partRows});
+    // Refused: the export is not failed, it waits for the 15-minute job.
     let [row] = await db.$queryRaw<{status: string; send_pending: boolean; runs: number}[]>`
       SELECT status, send_pending, runs FROM intelform_exports WHERE id = ${id}::uuid`;
     expect(row).toMatchObject({status: 'running', send_pending: true, runs: 1});
@@ -145,7 +144,7 @@ describe.skipIf(!DATABASE_URL)('form catalogs and long exports (integration, rea
     expect(row!.send_pending).toBe(false);
 
     for (let i = 0; i < 50 && row!.status === 'running'; i++) {
-      await runExportJob(db, 'https://shop.example.test/x', {exportId: id}, {now, send});
+      await runExportJob(db, 'https://shop.example.test/x', {exportId: id}, {send, partRows});
       [row] = await db.$queryRaw`SELECT status, send_pending, runs FROM intelform_exports WHERE id = ${id}::uuid`;
     }
     expect(row!.status).toBe('ready');
@@ -153,13 +152,26 @@ describe.skipIf(!DATABASE_URL)('form catalogs and long exports (integration, rea
     // Each run's next run had its own job key.
     expect(new Set(sent).size).toBe(sent.length);
 
-    const parts = await db.$queryRaw<{data: Uint8Array}[]>`
-      SELECT data FROM intelform_export_parts WHERE export_id = ${id}::uuid ORDER BY seq`;
-    const csv = Buffer.concat(parts.map(p => Buffer.from(p.data))).toString('utf8');
-    const lines = csv.split('\r\n').filter(Boolean);
-    expect(lines).toHaveLength(N + 1);
-    expect(lines[0]).toContain('Name');
-    expect(new Set(lines.slice(1).map(l => l.split(',')[0])).size).toBe(N);
+    // Every file is in storage (the rows hold ids only), each a complete CSV with its header.
+    const parts = await db.$queryRaw<{file_id: string; ready: boolean}[]>`
+      SELECT file_id, ready FROM intelform_export_parts WHERE export_id = ${id}::uuid ORDER BY seq`;
+    expect(parts.length).toBe(Math.ceil(N / partRows));
+    const texts = parts.map(p => {
+      expect(p.ready).toBe(true);
+      const file = storedFiles.get(p.file_id)!;
+      expect(file.ready).toBe(true);
+      expect(file.contentType).toBe('text/csv');
+      return new TextDecoder().decode(file.bytes!);
+    });
+    expect(storedFiles.get(parts[1]!.file_id)!.name).toBe('survey part 2.csv');
+    const lines: string[] = [];
+    for (const t of texts) {
+      const [head, ...rest] = t.replace(/^\uFEFF/, '').split('\r\n').filter(Boolean);
+      expect(head).toContain('Name');
+      lines.push(...rest);
+    }
+    expect(lines).toHaveLength(N);
+    expect(new Set(lines.map(l => l.split(',')[0])).size).toBe(N);
     const [{rows}] = await db.$queryRaw<{rows: number}[]>`SELECT rows FROM intelform_exports WHERE id = ${id}::uuid`;
     expect(rows).toBe(N);
   });

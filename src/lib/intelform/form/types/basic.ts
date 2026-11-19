@@ -1,4 +1,5 @@
 import * as z from 'zod/mini'
+import { DATE_FORMATS, formatDate, ISO_DATE_RE, isIsoDate, isTime, TIME_RE, type DateFormat } from './formats'
 import {
   DATE_OPS,
   NUMBER_OPS,
@@ -17,7 +18,7 @@ import {
   toNumber,
   type AnswerContext,
 } from './common'
-import { answerPlainText, htmlToPlain, isBlankHtml, isRichAnswer, plainToHtml, sanitizeRichText, type RichAnswer } from '../rich-text'
+import { answerPlainText, htmlToPlain, isBlankHtml, isRichAnswer, plainToHtml, sanitizeRichTextBest, type RichAnswer } from '../rich-text-core'
 
 /** Shorthands for zod/mini, which has functions instead of methods. */
 const int = (min: number, max: number) => z.number().check(z.int(), z.gte(min), z.lte(max))
@@ -55,7 +56,7 @@ function richTextAnswerSchema(min: number | null, max: number, htmlMax: number, 
         issue(`maxChars:${max}`)
         return { html: '' }
       }
-      const html = sanitizeRichText(raw, { inline })
+      const html = sanitizeRichTextBest(raw, { inline })
       const length = htmlToPlain(html).trim().length
       if (length > max || html.length > htmlMax) issue(`maxChars:${max}`)
       else if (min && length < min) issue(`minChars:${min}`)
@@ -219,36 +220,6 @@ export const url = defineType({
 
 // ------------------------------------------------------------------ Date: "YYYY-MM-DD"
 
-export const DATE_FORMATS = ['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD', 'DD.MM.YYYY'] as const
-export type DateFormat = (typeof DATE_FORMATS)[number]
-
-export const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-
-export function isIsoDate(v: unknown): v is string {
-  if (typeof v !== 'string') return false
-  const m = ISO_DATE_RE.exec(v)
-  if (!m) return false
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  const dt = new Date(Date.UTC(y, mo - 1, d))
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
-}
-
-/** Show a stored ISO date in the field's display format. */
-export function formatDate(iso: string, format: DateFormat): string {
-  const m = ISO_DATE_RE.exec(iso)
-  if (!m) return iso
-  const [, y, mo, d] = m
-  switch (format) {
-    case 'DD/MM/YYYY':
-      return `${d}/${mo}/${y}`
-    case 'MM/DD/YYYY':
-      return `${mo}/${d}/${y}`
-    case 'DD.MM.YYYY':
-      return `${d}.${mo}.${y}`
-    default:
-      return iso
-  }
-}
 
 const isoDate = z.string().check(z.refine(isIsoDate, 'Use YYYY-MM-DD'))
 
@@ -286,11 +257,6 @@ export const date = defineType({
 
 // ------------------------------------------------------------------ Time: "HH:mm" (24 h)
 
-export const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/
-
-export function isTime(v: unknown): v is string {
-  return typeof v === 'string' && TIME_RE.test(v)
-}
 
 /** "14:05" → "2:05 PM" for 12-hour fields. */
 export function formatTime(hhmm: string, hourCycle: '12' | '24'): string {
@@ -328,3 +294,5 @@ export const time = defineType({
   ...single((v) => (isTime(v) ? v : '')),
   migrateProps: (from, old) => (from === 'time' ? z.partial(timeProps).safeParse(old).data ?? {} : {}),
 })
+
+export { DATE_FORMATS, formatDate, ISO_DATE_RE, isIsoDate, isTime, TIME_RE, type DateFormat }

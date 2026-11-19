@@ -9,6 +9,7 @@ import {buildSearchText, redirectWithAnswers} from './answers';
 import {exactResponsesSql} from '../forms/counts';
 import {fieldErrors, notFound, RespondentError} from './errors';
 import {isClosed, type LoadedForm} from './load';
+import {wakeNotifyJob} from '../notify/wake';
 import {clearPublicSiteCache} from '../public-site/data';
 import {clearPublicFormSlugs, loadPublishedBySlug} from './cache';
 import {retryAfter, tooMany} from './rate-limit';
@@ -47,9 +48,9 @@ import './validators';
  *     statement. A capped form's statement targets its form_caps row (see
  *     cappedInsertSql). The unique (form_id, submission_id) index makes a retried fill a no-op;
  *     the unique email_key catches a repeated address.
- *  8. after commit: only cache clears when the cap closed the form. No job is sent from here:
- *     a job drains intelform_notify_queue once a minute (the platform takes 10 new jobs a
- *     minute, so one job per response would be refused at any real volume).
+ *  8. after commit: cache clears when the cap closed the form, and the wake-up of the notify job
+ *     (notify/wake.ts): ONE keyed job a minute drains intelform_notify_queue, however many
+ *     responses arrive (one job per response would be refused at any real volume).
  *  9. reply { ok, redirectUrl? }
  *
  * Database round trips (a cached form): 1 the gate; 2 the duplicate pre-checks (only with one per
@@ -823,6 +824,8 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
   // 8. After commit. A response that reached the cap closed the form: the public forms list and
   // this form's cached page must stop offering it. The notify work is already queued.
   if (out.closedNow) await Promise.all([clearPublicSiteCache(), clearPublicFormSlugs(form.slug)]).catch(() => undefined);
+  // The notify job for this minute (one a minute, however many arrive; never throws).
+  await wakeNotifyJob(ctx.requestUrl);
 
   // 9. Reply
   return reply(form.settings, def, answers);

@@ -1,6 +1,6 @@
 import {useMemo, useState} from 'react';
 
-import {OTHER_OPTION_ID} from '../../lib/intelform/form/base';
+import {OTHER_OPTION_ID} from '../../lib/intelform/form/base-core';
 import type {FieldRendererProps} from '../../respondent/types';
 import {shuffled} from '../../respondent/util';
 import {ChoiceGroup, OTHER_VALUE} from '../_respondent/choice';

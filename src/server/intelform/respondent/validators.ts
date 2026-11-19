@@ -1,6 +1,8 @@
 import {isValidPhoneNumber} from 'libphonenumber-js/max';
 
 import {configureValidators} from '../../../lib/intelform/form/types/registry';
+// Rich text answers are checked with the full sanitizer (xss + the platform's) on the server.
+import '../../../lib/intelform/form/rich-text';
 import freeDomains from './free-email-domains.json';
 
 /**

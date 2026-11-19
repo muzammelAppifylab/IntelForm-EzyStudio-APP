@@ -2,6 +2,7 @@ import {Prisma, type PrismaClient} from '../../../generated/prisma/client';
 import {contactsCsvQuery, type ContactsCsvQuery} from '../../../lib/intelform/api-contacts';
 import type {ExportKind} from '../../../lib/intelform/api-exports';
 import {responsesCsvQuery, type ResponsesCsvQuery} from '../../../lib/intelform/api-responses';
+import {applyContactQueue} from '../contacts/apply';
 import {contactsCsvBatch, contactsCsvHeader} from '../contacts/query';
 import type {ContactCursor} from '../contacts/sql';
 import {loadCatalog, type FormCatalog} from '../responses/catalog';
@@ -38,7 +39,12 @@ export interface BuildContext {
   catalogOf?: string;
   /** Bytes of the export before this step (sizes it early). */
   written?: number;
+  /** Rows the current file may still take (job.ts): a batch never runs past the file's cap. */
+  rowsLeft?: number;
 }
+
+/** A batch's rows for this form, never past what the current file may still take. */
+const rowsFor = (ctx: BuildContext, fields: number) => Math.max(1, Math.min(batchRows(fields), ctx.rowsLeft ?? Infinity));
 
 export type BuildState = Record<string, unknown>;
 
@@ -47,6 +53,8 @@ export interface Built {
   rows: number;
   state: BuildState;
   done: boolean;
+  /** The last step of a later file that holds nothing (job.ts keeps no file for it). */
+  empty?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -136,7 +144,7 @@ async function responsesStep(ctx: BuildContext, state: BuildState): Promise<Buil
     return {bytes: encoder.encode(CSV_BOM + headerRow(cat)), rows: 0, state: {started: true, cur: null}, done: false};
   }
   const cursor = isCursor(state.cur) ? state.cur : null;
-  const b = await responsesBatch(ctx.db, cat, query, tz, origin, cursor);
+  const b = await responsesBatch(ctx.db, cat, query, tz, origin, cursor, rowsFor(ctx, cat.entries.length));
   const bytes = encoder.encode(b.text);
   // The first rows size the whole file (an unfiltered one: the form's count is its row count).
   if (!cursor && b.next && unfiltered(query)) {
@@ -148,7 +156,11 @@ async function responsesStep(ctx: BuildContext, state: BuildState): Promise<Buil
 async function contactsStep(ctx: BuildContext, state: BuildState): Promise<Built> {
   const query: ContactsCsvQuery = contactsCsvQuery.parse(ctx.params.query ?? {});
   const tz = safeTz(typeof ctx.params.tz === 'string' ? ctx.params.tz : query.tz);
-  if (!state.started) return {bytes: encoder.encode(contactsCsvHeader()), rows: 0, state: {started: true, cur: null}, done: false};
+  if (!state.started) {
+    // Responses since the last notify run go into `contacts` first, so the file has every one.
+    await applyContactQueue(ctx.db, {budgetMs: 5_000});
+    return {bytes: encoder.encode(contactsCsvHeader()), rows: 0, state: {started: true, cur: null}, done: false};
+  }
   const cur = state.cur as ContactCursor | null;
   const b = await contactsCsvBatch(ctx.db, query, tz, cur && typeof cur.k === 'string' ? cur : null);
   return {bytes: encoder.encode(b.text), rows: b.rows, state: {started: true, cur: b.next}, done: !b.next};
@@ -179,6 +191,8 @@ interface ZipState {
   dir: DirTuple[];
   offset: number;
   used: string[];
+  /** Entries written in any file of this export (the README is only for none at all). */
+  entries: number;
 }
 
 function zipState(s: BuildState): ZipState {
@@ -190,6 +204,7 @@ function zipState(s: BuildState): ZipState {
     dir: Array.isArray(s.dir) ? (s.dir as DirTuple[]) : [],
     offset: Number(s.offset ?? 0),
     used: Array.isArray(s.used) ? (s.used as string[]) : [],
+    entries: Number(s.entries ?? 0),
   };
 }
 
@@ -237,7 +252,7 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
       cur.started = true;
     } else {
       const first = !cur.cursor;
-      const b = await responsesBatch(ctx.db, cat, responsesCsvQuery.parse({}), tz, origin, cur.cursor);
+      const b = await responsesBatch(ctx.db, cat, responsesCsvQuery.parse({}), tz, origin, cur.cursor, rowsFor(ctx, cat.entries.length));
       text = b.text;
       rows = b.rows;
       cur.cursor = b.next;
@@ -272,6 +287,7 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
     const header = localHeader(encoder.encode(name), time, date);
     z.cur = {formId, name, cursor: null, started: false, crc: 0, size: 0, start: z.offset, time, date};
     z.offset += header.length;
+    z.entries++;
     if (z.dir.length >= 0xffff) throw new ExportError('Too many forms for one ZIP file.');
     return {bytes: header, rows: 0, state: {...z}, done: false};
   }
@@ -295,7 +311,7 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
 
   // 4. No forms at all: a note, so the archive is never empty.
   const parts: Uint8Array[] = [];
-  if (!z.dir.length) {
+  if (!z.dir.length && !z.entries) {
     const name = encoder.encode('README.txt');
     const body = encoder.encode('No forms yet.\r\n');
     const {time, date} = dosDateTime(new Date());
@@ -303,6 +319,7 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
     const head = localHeader(name, time, date);
     parts.push(head, body, dataDescriptor(crc, body.length));
     z.dir.push(['README.txt', crc, body.length, z.offset, time, date]);
+    z.entries++;
     z.offset += head.length + body.length + 16;
   }
   // 5. The central directory and its end record.
@@ -315,7 +332,73 @@ async function zipStep(ctx: BuildContext, state: BuildState): Promise<Built> {
   }
   checkSize(dirStart + dirSize);
   parts.push(endOfDirectory(z.dir.length, dirSize, dirStart));
-  return {bytes: concat(...parts), rows: 0, state: {}, done: true};
+  // A later file of the export with no entry left to write (the last form ended with the file
+  // before): nothing to keep.
+  return {bytes: concat(...parts), rows: 0, state: {}, done: true, empty: !z.dir.length};
+}
+
+/** The central directory and end record of the entries written so far. */
+function zipTrailer(z: ZipState): Uint8Array {
+  const parts: Uint8Array[] = [];
+  let dirSize = 0;
+  for (const [name, crc, size, offset, time, date] of z.dir) {
+    const entry = centralEntry({name: encoder.encode(name), crc, size, offset, time, date});
+    dirSize += entry.length;
+    parts.push(entry);
+  }
+  checkSize(z.offset + dirSize);
+  parts.push(endOfDirectory(z.dir.length, dirSize, z.offset));
+  return concat(...parts);
+}
+
+// ------------------------------------------------------------------ Files of one export
+
+/**
+ * A big export is several files, one per job run (job.ts: PART_ROWS rows or PART_BYTES bytes), each
+ * complete on its own: a CSV part starts with the BOM and header row again; a ZIP part ends with
+ * its own central directory, and a form cut at the end of a file carries on in the next one under
+ * the same name (its header row again).
+ *
+ * `closeFile` ends the current file when the export isn't done: the bytes to append and the
+ * progress for the next file. `openFile` starts the next one: the bytes it begins with (written
+ * only once that file gets content of its own, so an export that ends exactly at a file's end
+ * makes no empty file).
+ */
+export async function openFile(ctx: BuildContext, state: BuildState): Promise<{head: Uint8Array; state: BuildState}> {
+  if (ctx.kind === 'responses') {
+    const cat = ctx.formId ? await catalogFor(ctx, ctx.formId) : null;
+    if (!cat) throw new ExportError('The form was deleted while it was being exported.');
+    return {head: encoder.encode(CSV_BOM + headerRow(cat)), state};
+  }
+  if (ctx.kind === 'contacts') return {head: encoder.encode(contactsCsvHeader()), state};
+  const z = zipState(state);
+  z.dir = [];
+  z.offset = 0;
+  z.used = [];
+  if (!z.cur) return {head: new Uint8Array(0), state: {...z}};
+  // The form the last file stopped in: a new entry of the same name, from its header row.
+  const {time, date} = dosDateTime(new Date());
+  const head = localHeader(encoder.encode(z.cur.name), time, date);
+  z.used = [z.cur.name];
+  z.cur = {...z.cur, started: false, crc: 0, size: 0, start: 0, time, date};
+  z.offset = head.length;
+  return {head, state: {...z}};
+}
+
+export function closeFile(ctx: BuildContext, state: BuildState): {tail: Uint8Array; state: BuildState} {
+  if (ctx.kind !== 'all') return {tail: new Uint8Array(0), state};
+  const z = zipState(state);
+  const parts: Uint8Array[] = [];
+  if (z.cur) {
+    // The entry so far ends here; `cur` stays, so the next file carries on with the same form.
+    const cur = z.cur;
+    const descriptor = dataDescriptor(cur.crc, cur.size);
+    parts.push(descriptor);
+    z.offset += descriptor.length;
+    z.dir.push([cur.name, cur.crc, cur.size, cur.start, cur.time, cur.date]);
+  }
+  parts.push(zipTrailer(z));
+  return {tail: concat(...parts), state: {...z, dir: [], offset: 0}};
 }
 
 /** One bounded step of an export. */

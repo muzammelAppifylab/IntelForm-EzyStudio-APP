@@ -5,6 +5,7 @@ import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {drainNotifyQueue} from '../../src/server/intelform/notify';
 import {syncFormCounts} from '../../src/server/intelform/forms/counts';
+import {quarterTodo} from '../../src/server/background';
 import {configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
@@ -100,5 +101,35 @@ describe.skipIf(!DATABASE_URL)('every-minute job (integration, real Postgres)', 
     expect(form.lastResponseAt).not.toBeNull();
 
     expect(await syncFormCounts(db)).toBe(0);
+  });
+  it('only marked forms are synced; settled markers go, so an idle site reads nothing and writes nothing', async () => {
+    const {formId} = await formWithResponses(3);
+    const quiet = await formWithResponses(2);
+    // Both are marked by their inserts (kind c, this minute); nothing else is.
+    const marks = async () =>
+      db.$queryRaw<{form_id: string; kind: string}[]>`SELECT form_id::text AS form_id, kind FROM intelform_dirty_forms WHERE kind = 'c' ORDER BY form_id`;
+    expect((await marks()).map(m => m.form_id).sort()).toEqual([formId, quiet.formId].sort());
+    expect(await syncFormCounts(db)).toBe(2);
+    // This minute's markers stay for the next run (a submit may still be committing)…
+    expect(await marks()).toHaveLength(2);
+    expect(await syncFormCounts(db)).toBe(0);
+    // …and go once their minute has settled.
+    await db.$executeRaw`UPDATE intelform_dirty_forms SET bucket = bucket - interval '5 minutes'`;
+    expect(await syncFormCounts(db)).toBe(0);
+    expect(await marks()).toHaveLength(0);
+    // A change nothing marked is not picked up (nothing reads every form)…
+    await db.$executeRaw`UPDATE forms SET response_count = 99 WHERE id = ${quiet.formId}::uuid`;
+    expect(await syncFormCounts(db)).toBe(0);
+    // …a delete marks its form.
+    await db.$executeRaw`DELETE FROM responses WHERE id = ${quiet.ids[0]!}::uuid`;
+    expect(await syncFormCounts(db)).toBe(1);
+    expect((await db.form.findUniqueOrThrow({where: {id: quiet.formId}, select: {responseCount: true}})).responseCount).toBe(1);
+  });
+
+  it('the 15-minute run on an idle site: one statement, nothing to do', async () => {
+    await formWithResponses(1);
+    await db.$executeRaw`DELETE FROM intelform_dirty_forms`;
+    await db.$executeRaw`DELETE FROM intelform_contact_queue`;
+    expect(await quarterTodo(db)).toEqual({contacts: false, counts: false, summary: false, exports: false, notify: false});
   });
 });

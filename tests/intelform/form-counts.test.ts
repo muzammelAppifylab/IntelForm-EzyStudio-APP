@@ -1,38 +1,40 @@
 import {describe, expect, it} from 'vitest';
 import {Prisma} from '../../src/generated/prisma-node/client';
 import {exactCountsJoin, exactResponsesSql, sumShards, SYNC_BATCH, syncFormCounts} from '../../src/server/intelform/forms/counts';
-import {EVENTS_IP_RATE_LIMIT, EVENTS_RATE_LIMIT, handleEvent} from '../../src/server/intelform/respondent/events';
+import {EVENTS_IP_RATE_LIMIT, handleEvent} from '../../src/server/intelform/respondent/events';
 
 const SESSION = '6f1c1d2e-1111-4222-8333-444455556666';
 const squash = (s: string) => s.replace(/\s+/g, ' ');
 
-describe('syncFormCounts (the every-minute copy onto forms)', () => {
-  it('is ONE bounded UPDATE of only the forms whose copy differs', async () => {
+describe('syncFormCounts (the copy onto forms, for marked forms only)', () => {
+  it('is ONE bounded statement over the dirty markers, writing only what changed', async () => {
     const calls: {sql: string; values: unknown[]}[] = [];
     const db = {
-      $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
         const s = Prisma.sql(strings, ...values);
         calls.push({sql: squash(s.sql), values: s.values});
-        return 2;
+        return [{updated: 2, cleared: 3}];
       },
     };
     expect(await syncFormCounts(db as never)).toBe(2);
     expect(calls).toHaveLength(1);
     const {sql, values} = calls[0]!;
-    // Sums every shard per form; a negative shard never makes a negative copy.
-    expect(sql).toContain('FROM form_counts GROUP BY form_id');
-    expect(sql).toContain('GREATEST(s.responses, 0)');
-    // Writes only what changed, so an idle site writes nothing.
-    expect(sql).toContain('f.response_count IS DISTINCT FROM');
-    expect(sql).toContain('f.starts_total IS DISTINCT FROM');
-    expect(sql).toContain('l.last_at IS DISTINCT FROM c.old_last');
+    // Only marked forms (an idle site reads one empty range of the markers' primary key).
+    expect(sql).toContain("SELECT DISTINCT form_id FROM intelform_dirty_forms WHERE kind = 'c' ORDER BY form_id LIMIT ?");
+    expect(sql).not.toMatch(/FROM form_counts GROUP BY form_id/);
+    // Sums the marked forms' shards; a negative shard never makes a negative copy.
+    expect(sql).toContain('GREATEST(coalesce(sum(fc.responses), 0), 0)');
+    // Writes only what changed.
+    expect(sql).toContain('c.response_count IS DISTINCT FROM c.responses');
+    expect(sql).toContain('c.starts_total IS DISTINCT FROM c.starts');
+    expect(sql).toContain('c.last_response_at IS DISTINCT FROM c.last_at');
     // last_response_at is the newest response that still exists (moves back after deletes).
-    expect(sql).toContain('FROM responses r WHERE r.form_id = c.id ORDER BY r.submitted_at DESC LIMIT 1');
-    expect(sql).toContain("LIMIT ?");
+    expect(sql).toContain('FROM responses r WHERE r.form_id = f.id ORDER BY r.submitted_at DESC LIMIT 1');
     expect(values).toEqual([SYNC_BATCH]);
-    expect(sql).toMatch(/^ ?WITH .* UPDATE forms f SET response_count = c\.responses, starts_total = c\.starts, last_response_at = c\.last_at FROM changed c WHERE f\.id = c\.id/);
-    // Never folds shards (no DELETE racing the triggers).
-    expect(sql).not.toContain('DELETE');
+    // Markers of minutes that ended a while ago go; the shards are never folded.
+    expect(sql).toContain("DELETE FROM intelform_dirty_forms d USING marked m WHERE d.kind = 'c'");
+    expect(sql).toContain("interval '90 seconds'");
+    expect(sql).not.toContain('DELETE FROM form_counts');
   });
 
   it('reads the exact count inside the caller’s query, by a column reference (never a bound value)', () => {
@@ -63,17 +65,20 @@ describe('the view/start beacon', () => {
     return {db, calls};
   }
 
-  it('ONE statement: both limits, the form, the event and its counts in one random shard', async () => {
+  it('ONE statement: the IP limit, the form, the event, its counts in one random shard and the markers', async () => {
     const {db, calls} = fakeDb();
     await handleEvent(db as never, 'Contact-Us', JSON.stringify({type: 'start', session: SESSION}), 'ipkey');
     // One round trip: the IP limit no longer goes ahead of the form read.
     expect(calls).toHaveLength(1);
     const main = calls[0]!.sql;
     expect(main).toMatch(/^ ?WITH ipl AS \( INSERT INTO intelform_rate_limits/);
-    // The form only under the IP limit; the per-form window only for a found form.
+    // The form only under the IP limit; ONE rate-limit row per beacon (no per-form window).
     expect(main).toContain("WHERE f.slug = ? AND f.published_version_id IS NOT NULL AND f.status <> 'draft' AND (SELECT count FROM ipl) <= ?::int");
-    expect(main).toContain('rl AS ( INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count) SELECT ? || f.id::text');
-    expect(main).toContain('FROM f WHERE f.open AND (SELECT count FROM rl) <= ?::int ON CONFLICT DO NOTHING');
+    expect(main.match(/INSERT INTO intelform_rate_limits/g)).toHaveLength(1);
+    expect(main).toContain('FROM f WHERE f.open ON CONFLICT DO NOTHING');
+    // Dirty markers: the Summary's (`e`), and the counters' (`c`) for a start; no lock when there.
+    expect(main).toContain("INSERT INTO intelform_dirty_forms (kind, bucket, form_id)");
+    expect(main).toContain("SELECT 'c' WHERE ins.type = 'start'");
     expect(main).toContain('s AS (SELECT floor(random() * 16)::smallint AS shard)');
     expect(main).toContain('INSERT INTO form_event_counts AS ec (form_id, bucket, shard, views, starts)');
     expect(main).toContain('ON CONFLICT (form_id, bucket, shard) DO UPDATE');
@@ -85,15 +90,13 @@ describe('the view/start beacon', () => {
     expect(calls[0]!.values).toContain(SESSION);
     expect(calls[0]!.values).toContain('contact-us');
     expect(calls[0]!.values).toContain('events:ip:ipkey');
-    expect(calls[0]!.values).toContain('events:ipkey:');
+    expect(calls[0]!.values).not.toContain('events:ipkey:');
   });
 
-  it('per-IP ceilings are generous enough for a school or office behind one address', async () => {
-    expect(EVENTS_RATE_LIMIT).toBeGreaterThanOrEqual(600);
+  it('the per-IP ceiling is generous enough for a school or office behind one address', async () => {
     expect(EVENTS_IP_RATE_LIMIT).toBeGreaterThanOrEqual(1200);
     await expect(handleEvent(fakeDb({ipCount: EVENTS_IP_RATE_LIMIT}).db as never, 'contact-us', JSON.stringify({type: 'view', session: SESSION}), 'k')).resolves.toBeUndefined();
     await expect(handleEvent(fakeDb({ipCount: EVENTS_IP_RATE_LIMIT + 1, found: false}).db as never, 'contact-us', JSON.stringify({type: 'view', session: SESSION}), 'k')).rejects.toMatchObject({status: 429});
-    await expect(handleEvent(fakeDb({formCount: EVENTS_RATE_LIMIT + 1}).db as never, 'contact-us', JSON.stringify({type: 'view', session: SESSION}), 'k')).rejects.toMatchObject({status: 429});
   });
 
   it('unknown, draft and malformed slugs are 404s (a malformed one without a query)', async () => {

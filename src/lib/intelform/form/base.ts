@@ -1,4 +1,5 @@
 import * as z from 'zod/mini'
+import { CONDITION_OPS } from './base-core'
 
 /**
  * Low-level building blocks shared by the definition schema and the field-type registry.
@@ -11,36 +12,7 @@ import * as z from 'zod/mini'
 export const fieldId = z.string().check(z.regex(/^f_[a-z0-9]{4,12}$/))
 export const optionId = z.string().check(z.regex(/^o_[a-z0-9]{2,12}$/))
 
-/**
- * Reserved option id for the "Other" choice (single and multiple choice). Generated option
- * ids are 6 characters long, so they never collide with it.
- */
-export const OTHER_OPTION_ID = 'o_other'
-
-export const CONDITION_OPS = [
-  'is',
-  'is_not',
-  'contains',
-  'not_contains',
-  'is_empty',
-  'is_not_empty',
-  'eq',
-  'neq',
-  'gt',
-  'gte',
-  'lt',
-  'lte',
-  'before',
-  'after',
-  'includes',
-  'not_includes',
-  'is_yes',
-  'is_no',
-] as const
-export type ConditionOp = (typeof CONDITION_OPS)[number]
-
-/** Operators that take no comparison value. */
-export const VALUELESS_OPS: readonly ConditionOp[] = ['is_empty', 'is_not_empty', 'is_yes', 'is_no']
+export { CONDITION_OPS, OTHER_OPTION_ID, VALUELESS_OPS, type ConditionOp } from './base-core'
 
 export const condition = z.object({
   field: fieldId,

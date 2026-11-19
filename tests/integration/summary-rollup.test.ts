@@ -7,6 +7,7 @@ import {formSummary, questionData} from '../../src/server/intelform/responses/su
 import {deleteResponses} from '../../src/server/intelform/responses/table';
 import {clearAppSettingsCache} from '../../src/server/intelform/settings/settings';
 import {refreshSummaryRollups} from '../../src/server/intelform/summary';
+import {markFormsForZone} from '../../src/server/intelform/summary/marks';
 import {configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
@@ -47,7 +48,14 @@ const def = (fields: unknown[]) => JSON.stringify({layout: 'all_at_once', startS
 
 async function setTz(tz: string) {
   await db.$executeRaw`INSERT INTO intelform_settings (id, timezone) VALUES (1, ${tz}) ON CONFLICT (id) DO UPDATE SET timezone = EXCLUDED.timezone`;
+  // What saving the setting does: forms rolled up in another zone are marked for the job.
+  await markFormsForZone(db, tz);
   await clearAppSettingsCache();
+}
+
+/** What the events beacon leaves for the job (a marker an hour old: its buckets can be folded). */
+async function markEvents() {
+  await db.$executeRaw`INSERT INTO intelform_dirty_forms (kind, bucket, form_id) VALUES ('e', date_trunc('minute', now() - interval '1 hour'), ${FORM}::uuid) ON CONFLICT DO NOTHING`;
 }
 
 /** `count` random responses submitted between `maxAgo` and `minAgo` ago. */
@@ -263,6 +271,7 @@ describe.skipIf(!DATABASE_URL)('summary rollup (integration, real Postgres)', ()
           floor(random() * 16)::smallint AS sh, 1 + floor(random() * 20)::int AS v, floor(random() * 10)::int AS st
         FROM generate_series(1, 4000)) e
       GROUP BY b, sh`;
+    await markEvents();
     await db.$executeRaw`
       UPDATE form_counts SET starts = (SELECT sum(starts) FROM form_event_counts WHERE form_id = ${FORM}::uuid)
       WHERE form_id = ${FORM}::uuid AND shard = (SELECT min(shard) FROM form_counts WHERE form_id = ${FORM}::uuid)`;
@@ -323,6 +332,8 @@ describe.skipIf(!DATABASE_URL)('summary rollup (integration, real Postgres)', ()
     expect(before.some(r => r.n === 0)).toBe(false);
     await db.$executeRaw`DELETE FROM form_summary_days WHERE form_id = ${FORM}::uuid`;
     await db.$executeRaw`UPDATE form_summary_state SET wm_at = NULL, wm_id = NULL, ev_wm = NULL WHERE form_id = ${FORM}::uuid`;
+    await db.$executeRaw`INSERT INTO intelform_dirty_forms (kind, bucket, form_id) VALUES ('s', date_trunc('minute', now() - interval '1 hour'), ${FORM}::uuid) ON CONFLICT DO NOTHING`;
+    await markEvents();
     await refreshAll();
     const after = await snapshot();
     expect(after.length).toBe(before.length);

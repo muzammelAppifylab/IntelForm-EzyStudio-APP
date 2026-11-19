@@ -2,6 +2,7 @@ import type {PrismaClient} from '../../../platform/db';
 import {cache} from '../../../platform/cache';
 import {config} from '../../../platform/config';
 import {themePreset} from '../../../lib/intelform/form/theme-core';
+import {markFormsForZone} from '../summary/marks';
 import type {AppSettingsResponse} from './view';
 import {
   type AppSettingsPatch,
@@ -158,6 +159,8 @@ export async function saveAppSettings(db: PrismaClient, patch: AppSettingsPatch,
     update: {...data, updatedById: userId},
     select: SETTINGS_ROW_SELECT,
   });
+  // A new time zone: the Summary's day rollups of every form start again in it (marked forms only).
+  if ('timezone' in data && typeof data.timezone === 'string') await markFormsForZone(db, data.timezone);
   await clearAppSettingsCache();
   return viewOf(row);
 }

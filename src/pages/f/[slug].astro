@@ -107,6 +107,19 @@ const image = state.kind === 'closed' && meta.theme.background.type === 'image' 
       state.kind === 'form' ? (
         <div id="rf-root" class="rf-root">
           <PublicForm client:only="react" slug={slug.toLowerCase()} initial={state.payload} search={Astro.url.search} />
+          {/* The first screen before the script runs: the themed shell and the form's title
+              (text, escaped). Hidden by CSS as soon as the form draws its own shell. */}
+          <div class={`${shellClass} rf-skeleton`} aria-busy="true">
+            <main class="rf-main">
+              <div class="rf-screen">
+                <div class="rf-screen-body">
+                  <h1 class="rf-question-xl rf-heading">{state.payload.title}</h1>
+                  <div class="rf-skeleton-line" />
+                  <div class="rf-skeleton-line rf-skeleton-short" />
+                </div>
+              </div>
+            </main>
+          </div>
           <noscript>
             <div class={shellClass}>
               <main class="rf-main">

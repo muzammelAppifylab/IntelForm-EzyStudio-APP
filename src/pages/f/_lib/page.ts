@@ -10,9 +10,9 @@ import {defaultTheme, type FormTheme} from '../../../lib/intelform/form/theme-co
 import {type EmbedOptions, embedQuery} from '../../../respondent/embed';
 import {themeFontFiles} from '../../../respondent/fonts';
 import {styleHash, themeCss} from '../../../respondent/theme-css';
-import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
 import {SLUG_RE, type Db} from '../../../server/intelform/respondent/load';
-import {limitedPayload, PUBLIC_GET_RATE_LIMIT} from '../../../server/intelform/respondent/page';
+import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
+import {limitedPayload} from '../../../server/intelform/respondent/page';
 
 /**
  * Server half of the public form page (src/pages/f/[slug].astro): which state the slug is in,
@@ -21,12 +21,6 @@ import {limitedPayload, PUBLIC_GET_RATE_LIMIT} from '../../../server/intelform/r
  *
  * Files under `src/pages/**` whose name starts with `_` are not routes.
  */
-
-/**
- * Page loads per caller per minute; the JSON read (/site-api/public/forms/:slug) shares the key
- * and the limit (src/server/intelform/respondent/page.ts).
- */
-export {PUBLIC_GET_RATE_LIMIT};
 
 export type FormPageState =
   | {kind: 'form'; payload: PublicFormLive | PublicFormLocked}
@@ -54,8 +48,9 @@ export async function loadFormPage({db, secret, slug, ip, now = Date.now()}: Loa
   if (!SLUG_RE.test(clean)) return {kind: 'missing'};
   if (!db || !secret) return {kind: 'unavailable'};
   try {
-    // The form from the Site Cache, then ONE statement: the limit's hit and, for a capped form,
-    // its exact count. A cache miss reads the form first (one more trip).
+    // The form from the Site Cache: no statement at all, none that writes; for a capped form, one
+    // read of its exact count. A cache miss reads the form first (one more trip).
+    // The render token in this page is bound to the caller's network (tokens.ts).
     const out = await limitedPayload(db, secret, await ipKeyFor(secret, ip), clean, null, now);
     if (out.kind === 'limited') return {kind: 'limited', retryAfter: out.retryAfter};
     return stateOf(out.payload);

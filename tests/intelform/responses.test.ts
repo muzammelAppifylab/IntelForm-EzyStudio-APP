@@ -9,7 +9,7 @@ const buildCatalog = (versions: Parameters<typeof foldVersions>[1], published: s
 };
 
 import {csvFilename, dataRow, headerRow} from '../../src/server/intelform/responses/csv';
-import {contentDisposition, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
+import {csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
 import {buildSearchText, displayAnswer, signatureLinkFor} from '../../src/server/intelform/responses/format';
 import {
   addDays,
@@ -231,9 +231,6 @@ describe('csv', () => {
   });
 
   it('names the download safely', () => {
-    expect(contentDisposition('Ünïcode "x".csv')).toBe(
-      `attachment; filename="_n_code _x_.csv"; filename*=UTF-8''${encodeURIComponent('Ünïcode "x".csv')}`
-    );
     expect(csvFilename({title: 'a/b:c', slug: 's'}, '2026-01-02')).toBe('a b c responses 2026-01-02.csv');
     expect(csvFilename({title: '', slug: ''}, '2026-01-02')).toBe('responses responses 2026-01-02.csv');
   });
