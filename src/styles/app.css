@@ -358,6 +358,12 @@ html:has(.app-shell) {
   flex-direction: column;
 }
 
+/* Anything scrolled into view (back to a list's top after "Next page", a focused field) stops
+   below the sticky top bar instead of under it. */
+html:has(.app-topbar) {
+  scroll-padding-top: calc(60px + 0.75rem);
+}
+
 .app-topbar {
   position: sticky;
   top: 0;

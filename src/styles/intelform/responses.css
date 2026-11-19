@@ -422,6 +422,22 @@
   gap: 1rem;
   min-width: 0;
 }
+/* The view (eye) column stays pinned to the table's right edge while the other columns scroll. */
+@media (min-width: 721px) {
+  .screen-responses .responses-table .data-table .cell-actions {
+    position: sticky;
+    right: 0;
+    z-index: 1;
+    background: var(--surface);
+    box-shadow: inset 1px 0 0 var(--line);
+  }
+  .screen-responses .responses-table .data-table th.cell-actions {
+    background: color-mix(in srgb, var(--surface) 55%, var(--card));
+  }
+  .screen-responses .responses-table .data-table tbody tr:hover td.cell-actions {
+    background: color-mix(in srgb, var(--hover) 55%, var(--surface));
+  }
+}
 .screen-responses .responses-table .search-input {
   width: min(18rem, 100%);
 }

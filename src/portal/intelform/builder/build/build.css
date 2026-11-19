@@ -38,6 +38,9 @@
 /* The tab's own scroll area: a slim scrollbar in the theme's colours, room kept for it so the
    content never shifts, and scrolling that stops at its ends instead of moving the page. */
 .if-builder-main {
+  /* Positioned so absolutely placed descendants (visually-hidden labels, popovers) stay inside
+     this scroll area; static, they extend the hidden page scroll and "Next page" moves the page. */
+  position: relative;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
