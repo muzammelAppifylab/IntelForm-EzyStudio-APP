@@ -406,7 +406,7 @@ async function submitGate(
       if (refused.strikes >= FIXED_LIMITS.strikesBeforeBlock && ctx.ipKey !== LOCAL_IP_KEY) {
         const block = await autoBlock(ctx.db, {ipKey: ctx.ipKey, ipBlock: ctx.ipBlock ?? null, formId: form.id, strikes: refused.strikes});
         if (block.fresh) {
-          await reportAbusiveIp({requestUrl: ctx.requestUrl}, {ipKey: ctx.ipKey, reason: 'limits', count: refused.strikes}).catch(() => undefined);
+          if (ctx.ipBlock) await reportAbusiveIp({ipBlock: ctx.ipBlock, reason: 'limits', count: refused.strikes}).catch(() => undefined);
           ctx.abuse?.({kind: 'blocked', formId: form.id, step: block.step, strikes: refused.strikes, until: block.until});
         }
         throw tooMany(Math.max(1, Math.ceil((block.until.getTime() - now) / 1000)), BLOCKED_MESSAGE);
