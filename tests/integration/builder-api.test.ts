@@ -2,8 +2,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
 import {insertDelivery, runDelivery} from '../../src/server/intelform/builder/webhook-delivery';
-import {renderToken} from '../../src/server/intelform/respondent/tokens';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
+import {Browser, configureEnv, DATABASE_URL, db, renderTokenAt, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
  * The builder API (src/server/routes/builder.ts and intelform/builder/form-routes.ts) through
@@ -102,7 +101,7 @@ describe.skipIf(!DATABASE_URL)('builder API (integration, real Postgres)', () =>
     expect(v1.json).toMatchObject({version: 1, status: 'live'});
     const v1Id = (await db.formVersion.findFirstOrThrow({where: {formId, version: 1}, select: {id: true}})).id;
     // A respondent opens version 1 now and submits after the owner republished.
-    const token = await renderToken('integration-test-secret-0123456789-abcdefghijklmnop', formId, Date.now() - 5000);
+    const token = await renderTokenAt('integration-test-secret-0123456789-abcdefghijklmnop', formId);
 
     expect((await patch(editor, {draft: field('Your name')})).json.hasUnpublished).toBe(true);
     // Two teammates, two tabs, retries: ten publishes of the same change at once, without keys.

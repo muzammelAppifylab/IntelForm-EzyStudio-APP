@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { DAY_BELOW_HOUR, defaultFormLimits, embedOriginsSetting, formLimitShape } from '../spam'
+
 /**
  * Per-form settings stored as jsonb in forms.settings (PRD "Form settings", plus the Share
  * tab's SEO and front page card). Keys are flat so SQL can read them directly, e.g. the close
@@ -41,6 +43,16 @@ export type AfterSubmit = (typeof AFTER_SUBMIT)[number]
 export const STEP_SOUNDS = ['off', 'tick', 'chime', 'pop'] as const
 export type StepSound = (typeof STEP_SOUNDS)[number]
 
+/**
+ * Header names the delivery sets itself: the signature headers (`webhook-id`, `webhook-timestamp`,
+ * `webhook-signature`, and any other `webhook-…`) and the body's type. A custom header with one of
+ * these names could make a receiver trust a forged signature or misread the body.
+ */
+export function reservedWebhookHeader(name: string): boolean {
+  const n = name.trim().toLowerCase()
+  return n.startsWith('webhook-') || n === 'content-type'
+}
+
 export const webhookHeader = z.object({
   key: z
     .string()
@@ -51,6 +63,14 @@ export const webhookHeader = z.object({
   value: z.string().max(1000),
 })
 
+/**
+ * A header as the dashboard SAVES it: the stored shape plus no reserved names. Stored rows are read
+ * with `webhookHeader` (an older row with such a header still parses; the delivery drops it).
+ */
+export const webhookHeaderInput = webhookHeader.extend({
+  key: webhookHeader.shape.key.refine((v) => !reservedWebhookHeader(v), 'The webhook sets this header itself. Use another name'),
+})
+
 export const webhookSettings = z.object({
   enabled: z.boolean(),
   /** One outbound URL per form; POST JSON on each completed response. */
@@ -58,6 +78,9 @@ export const webhookSettings = z.object({
   headers: z.array(webhookHeader).max(20),
 })
 export type WebhookSettings = z.infer<typeof webhookSettings>
+
+/** The webhook settings a save may send (headers checked as `webhookHeaderInput`). */
+export const webhookSettingsInput = webhookSettings.extend({ headers: z.array(webhookHeaderInput).max(20) })
 
 /** Every settings key without defaults. The PATCH input is a partial of this. */
 const shape = {
@@ -83,6 +106,11 @@ const shape = {
   redirectUrl: httpUrl.nullable(),
   /** Append answers to the redirect URL as query parameters. */
   redirectAppendAnswers: z.boolean(),
+
+  // Spam protection (src/lib/intelform/spam.ts): per-address, per-form and confirmation limits
+  ...formLimitShape,
+  /** Sites allowed to embed the form (origins); empty = any site. */
+  embedOrigins: embedOriginsSetting,
 
   // Sounds (one at a time and section by section layouts)
   /** Short sound when a respondent moves to the next question or section, and on submit. */
@@ -128,6 +156,8 @@ export function defaultFormSettings(): FormSettings {
     afterSubmit: 'end_screen',
     redirectUrl: null,
     redirectAppendAnswers: false,
+    ...defaultFormLimits(),
+    embedOrigins: [],
     stepSound: 'off',
     notifyOnResponse: false,
     notifyRecipients: [],
@@ -152,6 +182,9 @@ const strictSettings = z.object(shape).superRefine((s, ctx) => {
   if (s.afterSubmit === 'redirect' && !s.redirectUrl) {
     ctx.addIssue({ code: 'custom', path: ['redirectUrl'], message: 'Enter the link to send people to after they submit' })
   }
+  if (s.spamIpPerDay < s.spamIpPerHour) {
+    ctx.addIssue({ code: 'custom', path: ['spamIpPerDay'], message: DAY_BELOW_HOUR })
+  }
 })
 
 /**
@@ -174,7 +207,7 @@ export const formSettingsPatch = z
   .object({
     ...editable,
     /** Only the keys sent change. */
-    webhook: webhookSettings.partial(),
+    webhook: webhookSettingsInput.partial(),
     password: z.string().min(8, 'Use at least 8 characters').max(200).nullable(),
   })
   .partial()
@@ -211,6 +244,8 @@ export interface PublicFormSettings {
   seoDescription: string
   ogImage: string | null
   noindex: boolean
+  /** Sites allowed to embed the form (empty: any). The page's frame-ancestors header says the same. */
+  embedOrigins: string[]
 }
 
 export function publicSettings(settings: FormSettings): PublicFormSettings {
@@ -225,6 +260,7 @@ export function publicSettings(settings: FormSettings): PublicFormSettings {
     seoDescription: settings.seoDescription,
     ogImage: settings.ogImage,
     noindex: settings.noindex,
+    embedOrigins: settings.embedOrigins,
   }
 }
 

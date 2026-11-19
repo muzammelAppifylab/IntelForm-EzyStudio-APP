@@ -5,7 +5,7 @@ import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {app} from '../../src/server/app';
 import {renderToken} from '../../src/server/intelform/respondent/tokens';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
+import {Browser, LOOSE_LIMITS, looseSiteLimits, renderTokenAt, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
  * Burst-safe submits (src/server/intelform/respondent/submit.ts) against a real Postgres: an
@@ -28,7 +28,7 @@ const DEF = formDefinition.parse({
 let seq = 0;
 async function makeForm(settings: Record<string, unknown> = {}) {
   const slug = `b-${++seq}`;
-  const s = {...defaultFormSettings(), ...settings};
+  const s = {...defaultFormSettings(), ...LOOSE_LIMITS, ...settings};
   const form = await db.form.create({
     data: {slug, title: `Burst ${seq}`, status: 'live', draft: DEF as never, settings: s as never, theme: defaultTheme() as never},
     select: {id: true, updatedAt: true},
@@ -53,10 +53,13 @@ async function body(form: {id: string; versionId: string}, extra: Record<string,
 
 const sid = (n: number) => `fill-${String(n).padStart(4, '0')}-abcdefghijklmn`;
 // Respondent writes carry the page's render token in a header (no CSRF cookie: embeds).
-const post = (form: {slug: string}, b: unknown, ip = '203.0.113.10') =>
-  new Browser(app, ip).request('POST', `/site-api/public/forms/${form.slug}/responses`, b, {
-    'x-intelform-render': String((b as {renderToken?: unknown}).renderToken ?? ''),
+// Each post is a page load at `ip`: its render token is bound to that address.
+const post = async (form: {id: string; slug: string}, b: Record<string, unknown>, ip = '203.0.113.10') => {
+  const token = await renderTokenAt(SECRET, form.id, ip);
+  return new Browser(app, ip).request('POST', `/site-api/public/forms/${form.slug}/responses`, {...b, renderToken: token}, {
+    'x-intelform-render': token,
   });
+};
 
 async function counts(formId: string) {
   const [row] = await db.$queryRaw<{responses: number; queued: number; rows: number}[]>`
@@ -71,7 +74,10 @@ async function counts(formId: string) {
 describe.skipIf(!DATABASE_URL)('burst-safe submits (integration, real Postgres)', () => {
   beforeAll(configureEnv);
   afterAll(() => db.$disconnect());
-  beforeEach(resetDatabase);
+  beforeEach(async () => {
+    await resetDatabase();
+    await looseSiteLimits();
+  });
 
   it('an uncapped form: saved without writing the form row; notify work queued only when needed', async () => {
     const quiet = await makeForm();

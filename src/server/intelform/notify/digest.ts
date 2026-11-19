@@ -2,7 +2,7 @@ import { config } from '../../../platform/config'
 import type { PrismaClient } from '../../../platform/db'
 import { MailError, normalizeMessage, type MailProvider } from './mailer'
 import { doneKey, markAllDone } from './markers'
-import { CONFIRM_EMAIL_LIMIT, NOTIFY_EMAILS_PER_HOUR, ownerRelay } from './notify'
+import { NOTIFY_EMAILS_PER_HOUR, ownerRelay } from './notify'
 import { notifyRun, type Relay } from './run'
 import { readNotifySettings } from './settings'
 
@@ -180,8 +180,8 @@ export interface NotifyStats {
 
 /** The form's notification numbers for its settings (null = no such form). One query. */
 export async function notifyStats(db: PrismaClient, formId: string): Promise<NotifyStats | null> {
-  const rows = await db.$queryRaw<{ capped: number; digested: number }[]>`
-    SELECT coalesce(sum(h.confirm_capped), 0)::int AS capped, coalesce(sum(h.digest_pending), 0)::int AS digested
+  const rows = await db.$queryRaw<{ capped: number; digested: number; settings: unknown }[]>`
+    SELECT coalesce(sum(h.confirm_capped), 0)::int AS capped, coalesce(sum(h.digest_pending), 0)::int AS digested, f.settings
     FROM forms f LEFT JOIN intelform_notify_hours h ON h.form_id = f.id AND h.hour > now() - interval '24 hours'
     WHERE f.id = ${formId}::uuid
     GROUP BY f.id
@@ -191,7 +191,7 @@ export async function notifyStats(db: PrismaClient, formId: string): Promise<Not
   return {
     cappedConfirmations: Number(row.capped),
     digested: Number(row.digested),
-    confirmLimit: CONFIRM_EMAIL_LIMIT,
+    confirmLimit: readNotifySettings(row.settings).confirmPerHour,
     notifyLimit: NOTIFY_EMAILS_PER_HOUR,
   }
 }

@@ -28,6 +28,7 @@ import {embedOptions} from '../../respondent/embed';
 import {PublicForm} from '../../respondent/PublicForm';
 import {
   allowFraming,
+  embedOriginsOf,
   fontPreloads,
   loadFormPage,
   movedLocation,
@@ -55,10 +56,11 @@ if (state.kind === 'limited') Astro.response.headers.set('Retry-After', String(s
 const meta = pageMeta(state, opts);
 if (meta.noindex) Astro.response.headers.set('X-Robots-Tag', 'noindex');
 
-// Any site may embed a form; signature uploads only where the form needs them: a live form with a
+// Any site may embed a form, unless it lists its allowed embedding sites; signature uploads only
+// where the form needs them: a live form with a
 // signature question, or a locked one (its questions arrive after the password). Every other view
 // skips the platform storage call (it is not cached while storage is off).
-allowFraming(Astro.csp, Astro.response.headers);
+allowFraming(Astro.csp, Astro.response.headers, embedOriginsOf(state));
 const needsUploads =
   state.kind === 'form' &&
   (!('definition' in state.payload) || state.payload.definition.fields.some(f => f.type === 'signature'));

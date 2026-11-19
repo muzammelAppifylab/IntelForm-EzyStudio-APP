@@ -34,7 +34,7 @@ describe.skipIf(!DATABASE_URL)('app settings (integration, real Postgres)', () =
     const before = await owner.get('/site-api/app-settings');
     expect(before.status).toBe(200);
     expect((before.json.general as {appName: string}).appName).toBe('IntelForm');
-    expect(before.json).not.toHaveProperty('spam');
+    expect((before.json.spam as {sitePerMinute: number}).sitePerMinute).toBe(300);
 
     const saved = await owner.request('PATCH', '/site-api/app-settings', {general: {appName: 'Acme Forms'}, data: {retentionDays: 90}});
     expect(saved.status).toBe(200);

@@ -72,6 +72,10 @@ export const exportsRoutes = new Hono()
   .post('/', body, withViewer, requireAuth, withDb, async c => {
     const input = c.req.valid('json');
     if (!(await mayExport(c, input.kind))) return c.json(problem('forbidden', 'You do not have access to this.'), 403);
+    // Starting one is a write (a background job and a stored file): a read-only role can't.
+    if ((await permissionScope(c, PERMISSIONS.RESPONSE_EXPORT)) !== 'all') {
+      return c.json(problem('forbidden', 'Exporting needs permission to export responses. Ask an admin.'), 403);
+    }
     const db = c.var.db;
     const userId = c.var.viewer.id!;
     if (!(await hitRateLimit(db, `export:${userId}`, 10, 10 * 60))) {

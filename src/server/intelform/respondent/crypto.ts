@@ -1,6 +1,6 @@
 import type {Context} from 'hono';
 
-import {clientIp, rateLimitIp} from '../../../platform/auth/kit';
+import {clientIp} from '../../../platform/auth/kit';
 import {subjectHash} from '../../../platform/auth/keys';
 import {config} from '../../../platform/config';
 import {RespondentError} from './errors';
@@ -90,9 +90,48 @@ export async function ipHashFor(secret: string, ip: string | null): Promise<stri
 }
 
 /**
- * Rate-limit key part for the caller: the keyed hash of their address block (IPv4 address, or the
- * IPv6 /56 the template's limits use), or "local" without one (local development, tests).
+ * The caller's address BLOCK, the unit every respondent limit and block is about: an IPv4 address
+ * as it is (/32), an IPv6 address cut to its /64 (one home or phone network: everything behind
+ * it is one visitor), an IPv4-mapped IPv6 address as its IPv4 address. Null for anything that
+ * isn't an IP address. Pure: shared with the Blocked visitors screen (an admin types an address).
+ */
+export function ipBlockOf(ip: string): string | null {
+  const v = ip.trim().toLowerCase();
+  if (!v || v.length > 64) return null;
+  const v4 = v.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) return v4.slice(1).every(o => Number(o) <= 255 && String(Number(o)) === o) ? v4.slice(1).join('.') : null;
+  const bare = v.replace(/\/64$/, '');
+  const mapped = bare.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) return ipBlockOf(mapped[1]!);
+  if (!/^[0-9a-f:]+$/.test(bare) || (bare.match(/::/g) ?? []).length > 1) return null;
+  const [head = '', tail] = bare.split('::');
+  const left = head ? head.split(':') : [];
+  const right = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? left : [...left, ...Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+  if (groups.length !== 8 || groups.some(g => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  return `${groups.slice(0, 4).map(g => g.replace(/^0+(?=.)/, '')).join(':')}::/64`;
+}
+
+/** A block an admin may see in part (no permission to change settings): `203.0.•.•`, `2001:db8:•:•::/64`. */
+export function maskIpBlock(block: string | null): string | null {
+  if (!block) return null;
+  if (!block.includes(':')) {
+    const parts = block.split('.');
+    return parts.length === 4 ? `${parts[0]}.${parts[1]}.•.•` : '•';
+  }
+  const groups = block.replace(/::\/64$/, '').split(':');
+  return `${groups.slice(0, 2).join(':')}:•:•::/64`;
+}
+
+/** The key of an address block (never the block itself): what the limits and the block list use. */
+export async function ipKeyOfBlock(secret: string, block: string): Promise<string> {
+  return (await subjectHash(secret, 'ip', `block:${block}`)).slice(0, 40);
+}
+
+/**
+ * Rate-limit key part for the caller: the keyed hash of their address block (`ipBlockOf`), or
+ * "local" without one (local development, tests).
  */
 export async function ipKeyFor(secret: string, ip: string | null): Promise<string> {
-  return ip ? (await subjectHash(secret, 'ip', rateLimitIp(ip))).slice(0, 40) : 'local';
+  return ip ? ipKeyOfBlock(secret, ipBlockOf(ip) ?? ip.trim().slice(0, 64)) : 'local';
 }

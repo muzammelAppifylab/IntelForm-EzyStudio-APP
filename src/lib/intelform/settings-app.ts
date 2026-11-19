@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { IMAGE_RULES, type ImagePurpose } from '../../server/intelform/uploads/rules'
+import { defaultSpamSettings, readSpamSettings, spamSettingsInput, type SpamSettings } from './spam'
 
 /**
  * IntelForm's app settings (Settings screen, codename `site:intelform:settings`), stored in the
@@ -138,6 +139,8 @@ export const appSettingsPatch = z.object({
   data: dataSettingsInput.optional(),
   site: siteSettingsInput.optional(),
   legal: legalSettingsInput.optional(),
+  /** Spam protection: the site's ceilings and the limits new forms start with (./spam.ts). */
+  spam: spamSettingsInput.optional(),
 })
 export type AppSettingsPatch = z.infer<typeof appSettingsPatch>
 
@@ -157,6 +160,7 @@ export interface AppSettingsView {
   data: { retentionDays: number | null }
   site: { indexing: boolean; description: string; ogImage: string | null; contactEmail: string }
   legal: { privacy: string; terms: string }
+  spam: SpamSettings
 }
 
 /** The settings before anyone changed them (the migration's column defaults). */
@@ -170,6 +174,7 @@ export function defaultAppSettings(): Omit<AppSettingsView, 'notifications'> & {
     data: { retentionDays: null },
     site: { indexing: false, description: '', ogImage: null, contactEmail: '' },
     legal: { privacy: '', terms: '' },
+    spam: defaultSpamSettings(),
   }
 }
 
@@ -192,6 +197,8 @@ export interface AppSettingsRow {
   termsText: string
   emailFromName: string | null
   emailReplyTo: string | null
+  /** intelform_settings.spam_limits (jsonb, read leniently). */
+  spamLimits: unknown
 }
 
 /** Row → view. Values outside the allowed sets fall back to the defaults. */
@@ -213,6 +220,7 @@ export function settingsView(row: AppSettingsRow, extra: { emailEnabled: boolean
     data: { retentionDays: row.retentionDays },
     site: { indexing: row.siteIndexing, description: row.siteDescription, ogImage: row.siteOgImage, contactEmail: row.contactEmail },
     legal: { privacy: row.privacyText, terms: row.termsText },
+    spam: readSpamSettings(row.spamLimits),
   }
 }
 
@@ -240,6 +248,7 @@ export function settingsPatchData(patch: AppSettingsPatch): Partial<AppSettingsR
   set('contactEmail', site?.contactEmail)
   set('privacyText', legal?.privacy)
   set('termsText', legal?.terms)
+  // `spam` merges into the stored object: the server does it (settings.ts saveAppSettings).
   return out
 }
 

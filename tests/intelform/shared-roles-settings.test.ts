@@ -29,6 +29,7 @@ describe('app settings', () => {
     termsText: '',
     emailFromName: null,
     emailReplyTo: null,
+    spamLimits: {},
   };
 
   it('accepts only files stored on this site as images', () => {

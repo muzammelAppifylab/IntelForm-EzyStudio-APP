@@ -5,6 +5,7 @@ import type {
   PublicFormResponse,
 } from '../../../lib/intelform/api-public';
 import {SYSTEM_LABELS} from '../../../lib/intelform/form/labels';
+import {frameAncestors} from '../../../lib/intelform/spam';
 import {defaultTheme, type FormTheme} from '../../../lib/intelform/form/theme-core';
 import {type EmbedOptions, embedQuery} from '../../../respondent/embed';
 import {themeFontFiles} from '../../../respondent/fonts';
@@ -150,14 +151,24 @@ export interface PageCsp {
 }
 
 /**
- * Any site may frame /f/* (the embed). A CSP `frame-ancestors` in the response header wins over
- * the template's `X-Frame-Options: DENY` in every current browser (CSP Level 2+: when
- * frame-ancestors is present, X-Frame-Options is ignored).
+ * Who may frame this /f/* page (the embed): any site, unless the form lists its "Allowed embedding
+ * sites" (then those origins and this site only). A CSP `frame-ancestors` in the response header
+ * wins over the template's `X-Frame-Options: DENY` in every current browser (CSP Level 2+: when
+ * frame-ancestors is present, X-Frame-Options is ignored). The origins were normalised on save
+ * and again here (`frameAncestors`): nothing but `scheme://host[:port]` reaches the header.
  */
-export function allowFraming(csp: PageCsp | undefined, headers?: Headers): void {
-  csp?.insertDirective('frame-ancestors *');
+export function allowFraming(csp: PageCsp | undefined, headers?: Headers, origins?: readonly string[] | null): void {
+  const value = frameAncestors(origins);
+  csp?.insertDirective(`frame-ancestors ${value}`);
   // Astro sends this page's CSP as a <meta> tag, and browsers IGNORE frame-ancestors in a meta
   // CSP, so the template's `X-Frame-Options: DENY` header would still block every embed. A real
   // CSP header carrying only frame-ancestors makes browsers ignore X-Frame-Options (CSP Level 2+).
-  headers?.set('Content-Security-Policy', 'frame-ancestors *');
+  headers?.set('Content-Security-Policy', `frame-ancestors ${value}`);
+}
+
+/** The allowed embedding sites of the form a page shows ([] = any site). */
+export function embedOriginsOf(state: FormPageState): string[] {
+  if (state.kind !== 'form' && state.kind !== 'closed') return [];
+  const list = (state.payload.settings as {embedOrigins?: unknown}).embedOrigins;
+  return Array.isArray(list) ? list.filter((o): o is string => typeof o === 'string') : [];
 }

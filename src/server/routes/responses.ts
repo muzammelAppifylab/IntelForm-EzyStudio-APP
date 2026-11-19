@@ -15,6 +15,7 @@ import {
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
+import {isDemoViewer} from '../demo-role';
 import {GONE, loadCatalog} from '../intelform/responses/catalog';
 import {decodeCursor} from '../intelform/responses/query';
 import {cachedFormSummary, clearSummaryCache, SummaryRangeError} from '../intelform/responses/summary';
@@ -146,6 +147,8 @@ export const responsesRoutes = new Hono()
         select: {id: true},
       });
       if (!form) return gone(c);
+      // The read-only demo: the screen keeps its columns for this visit, nothing is stored.
+      if (await isDemoViewer(c)) return c.json<TablePrefsResponse>({columns});
       await db.responseTablePref.upsert({
         where: {userId_formId: {userId, formId}},
         create: {userId, formId, columns},

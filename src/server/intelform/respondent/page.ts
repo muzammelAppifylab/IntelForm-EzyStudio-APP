@@ -77,7 +77,7 @@ export async function limitedPayload(
   if (count > PUBLIC_GET_RATE_LIMIT) return {kind: 'limited', retryAfter: retryAfter(PUBLIC_GET_WINDOW, now)};
   if (r.kind === 'missing' || state === null) return {kind: 'payload', payload: null};
   if (r.kind === 'moved') return {kind: 'payload', payload: {status: 'moved', redirectTo: r.slug}};
-  return {kind: 'payload', payload: await publishedPayload(db, secret, r.published, unlock, state)};
+  return {kind: 'payload', payload: await publishedPayload(db, secret, r.published, unlock, state, ipKey)};
 }
 
 export interface PublicFormPage {

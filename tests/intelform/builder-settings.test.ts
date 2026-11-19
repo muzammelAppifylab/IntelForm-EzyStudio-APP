@@ -80,3 +80,37 @@ describe('misc', () => {
     expect(toggleRecipient([1, 2], 1, false)).toEqual([2]);
   });
 });
+
+describe('spam protection and embedding settings', () => {
+  it('limits: defaults, bounds, and a day limit never below the hour', async () => {
+    const {formSettings, formSettingsPatch, defaultFormSettings} = await import('../../src/lib/intelform/form/settings');
+    expect(defaultFormSettings()).toMatchObject({spamIpPerHour: 5, spamIpPerDay: 20, spamFormPerMinute: 60, confirmPerHour: 100, embedOrigins: []});
+    expect(formSettingsPatch.safeParse({spamIpPerHour: 1000}).success).toBe(true);
+    expect(formSettingsPatch.safeParse({spamIpPerHour: 1001}).success).toBe(false);
+    expect(formSettingsPatch.safeParse({spamIpPerHour: 0}).success).toBe(false);
+    expect(formSettingsPatch.safeParse({spamFormPerMinute: 2.5}).success).toBe(false);
+    const merged = formSettings.safeParse({...defaultFormSettings(), spamIpPerHour: 30, spamIpPerDay: 20});
+    expect(merged.success).toBe(false);
+    expect(merged.error?.issues[0]?.path).toEqual(['spamIpPerDay']);
+  });
+
+  it('allowed embedding sites: plain origins only, normalised', async () => {
+    const {formSettingsPatch} = await import('../../src/lib/intelform/form/settings');
+    const ok = formSettingsPatch.safeParse({embedOrigins: ['https://Shop.Example.com/', 'https://shop.example.com', 'http://localhost:4321']});
+    expect(ok.success && ok.data.embedOrigins).toEqual(['https://shop.example.com', 'http://localhost:4321']);
+    for (const bad of ['http://shop.example.com', 'https://shop.example.com/page', 'https://*.example.com', "https://a.example.com 'unsafe-inline'", 'javascript:alert(1)']) {
+      expect(formSettingsPatch.safeParse({embedOrigins: [bad]}).success, bad).toBe(false);
+    }
+  });
+
+  it('webhook headers: the signature headers and content-type are refused on save, any case', async () => {
+    const {formSettingsPatch, webhookHeader} = await import('../../src/lib/intelform/form/settings');
+    for (const key of ['Webhook-Signature', 'webhook-id', 'WEBHOOK-TIMESTAMP', 'webhook-anything', 'Content-Type', 'content-type']) {
+      expect(formSettingsPatch.safeParse({webhook: {headers: [{key, value: 'x'}]}}).success, key).toBe(false);
+      expect(headerError({key, value: 'x'})).toBe('The webhook sets this header itself. Use another name');
+    }
+    expect(formSettingsPatch.safeParse({webhook: {headers: [{key: 'Authorization', value: 'Bearer x'}]}}).success).toBe(true);
+    // A row stored before this rule still reads (the delivery drops it), so no form loses its settings.
+    expect(webhookHeader.safeParse({key: 'Content-Type', value: 'x'}).success).toBe(true);
+  });
+});

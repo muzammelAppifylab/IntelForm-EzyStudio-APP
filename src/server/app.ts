@@ -11,6 +11,7 @@ import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
 import {activityRoutes} from './routes/activity';
 import {appSettingsRoutes} from './routes/app-settings';
+import {blockedVisitorsRoutes} from './routes/blocked-visitors';
 import {builderRoutes} from './routes/builder';
 import {contactsRoutes} from './routes/contacts';
 import {exportsRoutes} from './routes/exports';
@@ -128,6 +129,7 @@ export const app = new Hono()
   .route('/exports', exportsRoutes)
   .route('/uploads', uploadsRoutes)
   .route('/app-settings', appSettingsRoutes)
+  .route('/blocked-visitors', blockedVisitorsRoutes)
   .route('/public-site', publicSiteRoutes)
   .route('/memberships', membershipRoutes)
 
