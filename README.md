@@ -2,7 +2,7 @@
 
 **IntelForm** is a form builder for one business: build forms (bookings, questions, feedback,
 sign-ups, waitlists) in the dashboard, publish them at `/f/<slug>`, and read, chart, export and act
-on the answers. It runs on the EzyStudio web-app template: [Astro](https://astro.build) pages and a
+on the answers. It runs on the platform's web-app template: [Astro](https://astro.build) pages and a
 [Hono](https://hono.dev) backend at `/site-api` on one Cloudflare Worker, Postgres through
 [Prisma ORM 7](https://www.prisma.io), and a React dashboard at `/dashboard`
 ([TanStack Router](https://tanstack.com/router) and [Query](https://tanstack.com/query)) on the
@@ -160,14 +160,14 @@ No Docker? Any Postgres 15 or later on your computer works: put its address in `
 
 ### Get the code
 
-IntelForm is a clone of the EzyStudio web-app template with the app built on top, so template
+IntelForm is a clone of the platform's web-app template with the app built on top, so template
 releases merge into it ([Staying up to date](#staying-up-to-date)). Clone this repository and add
 the template as `upstream`:
 
 ```bash
 git clone <this repository's address> intelform
 cd intelform
-git remote add upstream https://github.com/EzyStudio/web-app-template.git
+git remote add upstream <the template repository's address>
 git fetch upstream --tags
 ```
 
