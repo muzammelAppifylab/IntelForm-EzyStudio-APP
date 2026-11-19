@@ -1,7 +1,7 @@
 import {useMemo, useState} from 'react';
 
 import {formatLabel} from '../../lib/intelform/form/labels';
-import {escapeHtml} from '../../lib/intelform/form/rich-text';
+import {escapeHtml} from '../../lib/intelform/form/rich-text-core';
 import type {FieldRendererProps} from '../../respondent/types';
 import {shuffled} from '../../respondent/util';
 import {ChoiceGroup} from '../_respondent/choice';

@@ -1,4 +1,5 @@
 import * as z from 'zod/mini'
+import { E164_RE, isE164 } from './formats'
 import { COUNTRY_CODES, countryName, isCountryCode } from './countries'
 import {
   TEXT_OPS,
@@ -106,13 +107,6 @@ const phoneProps = z.object({
   defaultCountry: def(z.nullable(countryCode), null),
 })
 
-/** E.164: "+", country code, up to 15 digits in all. libphonenumber /max runs on the server. */
-export const E164_RE = /^\+[1-9]\d{6,14}$/
-
-/** Spaces, brackets, dots and dashes are ignored, as in the answer: "+1 (650) 253-0000" passes. */
-export function isE164(v: unknown): boolean {
-  return typeof v === 'string' && E164_RE.test(v.replace(/[\s().-]/g, ''))
-}
 
 export const phone = defineType({
   ...base('phone'),
@@ -256,3 +250,5 @@ export const country = defineType({
       ? { defaultCountry: isCountryCode(old.defaultCountry) ? old.defaultCountry : null }
       : {},
 })
+
+export { E164_RE, isE164 }

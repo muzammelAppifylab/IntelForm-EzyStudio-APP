@@ -68,6 +68,10 @@ export function PublicForm({slug: initialSlug, initial, search}: {slug: string; 
   }, [data]);
 
   useEmbedBridge(opts.embed);
+  // The page's static first screen hides itself by CSS (:has); a browser without :has drops it here.
+  useEffect(() => {
+    if (typeof CSS !== 'undefined' && !CSS.supports('selector(:has(*))')) document.querySelector('.rf-skeleton')?.remove();
+  }, []);
 
   const shellMode = opts.embed === 'inline' ? 'embed' : 'page';
   if (!data) return <div aria-busy="true" className="rf-loading" />;

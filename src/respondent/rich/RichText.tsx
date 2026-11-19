@@ -1,6 +1,6 @@
 import {useMemo} from 'react';
 
-import {sanitizeRichText} from '../../lib/intelform/form/rich-text';
+import {sanitizeRichTextLite as sanitizeRichText} from '../../lib/intelform/form/rich-text-core';
 import {cx} from '../util';
 import './rich-text.css';
 

@@ -1,7 +1,7 @@
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 import {SYSTEM_LABELS, type Labels} from '../../lib/intelform/form/labels';
-import {isBlankHtml, isRichAnswer, plainToHtml, sanitizeRichText, type RichAnswer} from '../../lib/intelform/form/rich-text';
+import {isBlankHtml, isRichAnswer, plainToHtml, sanitizeRichTextLite as sanitizeRichText, type RichAnswer} from '../../lib/intelform/form/rich-text-core';
 import {canonicalFromPastedHtml, prepareEditing, runCommand, serializeRichText} from '../../lib/intelform/form/rich-text-dom';
 import {cx} from '../util';
 import {RichToolbar} from './RichToolbar';
@@ -55,7 +55,7 @@ export function RichTextInput(props: RichTextInputProps) {
     const html = htmlOf(value, inline);
     if (html === lastEmitted.current) return;
     lastEmitted.current = html;
-    // sanitizeRichText runs the platform's sanitizeHtml: safe to draw as markup.
+    // The allow-list sanitizer builds its output from the subset only: safe to draw as markup.
     el.innerHTML = sanitizeRichText(html, {inline});
     setEmpty(isBlankHtml(html));
   }, [value, inline]);

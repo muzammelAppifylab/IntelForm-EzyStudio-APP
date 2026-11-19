@@ -10,7 +10,7 @@ import {multipleChoiceAnswer, selectedValues} from '../../src/form-types/multipl
 import {nextNameValue} from '../../src/form-types/name/Renderer';
 import {parseNumberText} from '../../src/form-types/number/parse';
 import {nextPictureSelection} from '../../src/form-types/picture_choice/Renderer';
-import {FIELD_RENDERERS, respondentRenderers} from '../../src/form-types/renderers';
+import {FIELD_RENDERERS, preloadFieldRenderers, respondentRenderers} from '../../src/form-types/renderers';
 import {LETTERS, OTHER_VALUE, toggleValue} from '../../src/form-types/_respondent/constants';
 import {faceFor, ratingStepName, ratingSteps} from '../../src/form-types/_respondent/scales';
 import {CONDITION_VALUE_INPUTS, FIELD_SETTINGS, settingsEditors} from '../../src/form-types/settings';
@@ -69,11 +69,20 @@ describe('form-types registries', () => {
   });
 });
 
+// The renderers themselves (FIELD_RENDERERS loads each on demand; server markup can't wait for it).
+const RENDERER_MODULES = import.meta.glob('../../src/form-types/*/Renderer.tsx', {eager: true}) as Record<string, {default: ComponentType<FieldRendererProps>}>;
+const rendererOf = (type: FieldType) => RENDERER_MODULES[`../../src/form-types/${type}/Renderer.tsx`]!.default;
+
 describe('respondent renderers (server markup)', () => {
+  it('FIELD_RENDERERS holds every type, each fetched on demand', async () => {
+    for (const t of FIELD_TYPES) expect(rendererOf(t), t).toBeTypeOf('function');
+    await expect(preloadFieldRenderers(FIELD_TYPES)).resolves.toBeDefined();
+  });
+
   const render = (type: FieldType, value?: unknown, extra: Partial<FieldRendererProps> = {}) => {
     const field = createField(type);
     field.label = 'Question';
-    const Renderer = FIELD_RENDERERS[type] as ComponentType<FieldRendererProps>;
+    const Renderer = rendererOf(type);
     return renderToStaticMarkup(
       createElement(Renderer, {
         field,
@@ -108,7 +117,7 @@ describe('respondent renderers (server markup)', () => {
   it('marks the selected choice tile', () => {
     const field = createField('single_choice');
     const first = (field.props as {options: {id: string}[]}).options[0]!.id;
-    const Renderer = FIELD_RENDERERS.single_choice as ComponentType<FieldRendererProps>;
+    const Renderer = rendererOf('single_choice');
     const html = renderToStaticMarkup(
       createElement(Renderer, {
         field,

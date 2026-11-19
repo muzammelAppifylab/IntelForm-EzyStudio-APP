@@ -1,4 +1,4 @@
-import {RichTextInput} from '../../respondent/rich/RichTextInput';
+import {RichTextInput} from '../../respondent/rich/LazyRichTextInput';
 import type {FieldRendererProps} from '../../respondent/types';
 import {TextInput} from '../../respondent/ui';
 

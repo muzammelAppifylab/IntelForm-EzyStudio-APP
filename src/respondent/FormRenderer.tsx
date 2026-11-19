@@ -1,13 +1,16 @@
 import {lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import type {FormDefinition} from '../lib/intelform/form/definition';
-import {validateSubmission} from '../lib/intelform/form/logic';
+import {SYSTEM_LABELS} from '../lib/intelform/form/labels';
+import {validateSubmission} from '../lib/intelform/form/logic-core';
 import type {StepSound} from '../lib/intelform/form/settings';
 import type {FormTheme} from '../lib/intelform/form/theme-core';
 import {TtcClock, useFormEngine} from './engine';
 import type {FormErrorAction, LayoutContext, SubmitOutcome} from './layouts/context';
 import {redirectAfterSubmit} from './redirect';
-import {EndScreenView, StartScreen} from './screens';
+import {preloadFieldRenderers} from '../form-types/renderers';
+import {fieldTypesReady, loadFieldTypes} from './field-types';
+import {EndScreenView, MessageScreen, StartScreen} from './screens';
 import {FormShell} from './Shell';
 import {playStepSound} from './sound';
 import {cx} from './util';
@@ -69,7 +72,39 @@ function isDesktop(device?: 'desktop' | 'mobile'): boolean {
   }
 }
 
+/**
+ * The form, once the schemas of the field types it uses are loaded (./field-types.ts: a chunk
+ * per group, so a public form downloads only what it shows). Until then nothing is drawn (the
+ * page's static first screen stays); a chunk that can't load says so with a reload hint.
+ */
 export function FormRenderer(props: FormRendererProps) {
+  const def = props.definition;
+  const ready = fieldTypesReady(def);
+  const [, loaded] = useState(0);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (ready) return;
+    let live = true;
+    Promise.all([loadFieldTypes(def), preloadFieldRenderers(def.fields.map(f => f.type))]).then(
+      () => live && loaded(n => n + 1),
+      () => live && setFailed(true)
+    );
+    return () => {
+      live = false;
+    };
+  }, [def, ready]);
+  if (ready) return <LoadedForm {...props} />;
+  if (!failed) return null;
+  return (
+    <FormShell theme={props.theme} mode={props.mode === 'preview' ? 'preview' : 'page'} transparent={props.transparent}>
+      <div role="main" className="rf-main">
+        <MessageScreen center={props.theme.alignment === 'center'} title={SYSTEM_LABELS.loadErrorTitle} message={SYSTEM_LABELS.loadError} />
+      </div>
+    </FormShell>
+  );
+}
+
+function LoadedForm(props: FormRendererProps) {
   const {definition: def, theme, mode, device, onSubmit, title, embed, manageDocumentTitle} = props;
   const preview = mode === 'preview';
   const engine = useFormEngine(def, props.initialAnswers);

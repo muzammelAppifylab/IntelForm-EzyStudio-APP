@@ -1,6 +1,6 @@
 import {lazy, type RefObject, Suspense, useEffect, useId, useLayoutEffect, useRef, useState} from 'react';
 
-import {formatDate, isIsoDate} from '../../lib/intelform/form/types/basic';
+import {formatDate, isIsoDate} from '../../lib/intelform/form/types/formats';
 import type {FieldRendererProps} from '../../respondent/types';
 import {TextInput} from '../../respondent/ui';
 import {cx, CONTROL_BOX} from '../../respondent/util';

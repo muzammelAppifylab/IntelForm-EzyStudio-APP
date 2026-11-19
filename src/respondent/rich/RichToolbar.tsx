@@ -1,7 +1,7 @@
 import {type RefObject, useEffect, useId, useRef, useState} from 'react';
 
 import {SYSTEM_LABELS, type Labels} from '../../lib/intelform/form/labels';
-import {safeLinkHref} from '../../lib/intelform/form/rich-text';
+import {safeLinkHref} from '../../lib/intelform/form/rich-text-core';
 import {applyLink, EMPTY_STATE, readState, type RichCommand, type RichState, runCommand, saveRange} from '../../lib/intelform/form/rich-text-dom';
 import {cx} from '../util';
 import './rich-text.css';
