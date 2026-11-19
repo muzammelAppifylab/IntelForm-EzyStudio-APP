@@ -4,6 +4,8 @@ import {resetOwnerSeatForTests} from '../../../src/platform/auth/owner-seat';
 import {PREVIEW_COOKIE_HEADER, PREVIEW_SET_COOKIE_HEADER} from '../../../src/platform/auth/preview-cookies';
 import {createDb, getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
+import {ipKeyFor} from '../../../src/server/intelform/respondent/crypto';
+import {renderToken} from '../../../src/server/intelform/respondent/tokens';
 import {env} from './cloudflare-workers';
 
 /**
@@ -157,15 +159,33 @@ export const db = createDb(DATABASE_URL || 'postgresql://unused@localhost/unused
 
 export async function resetDatabase() {
   await db.$executeRawUnsafe(
-    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits", "intelform_done_markers", "idempotency_keys", "contacts", "intelform_file_trash", "intelform_exports" RESTART IDENTITY CASCADE'
+    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits", "intelform_done_markers", "idempotency_keys", "contacts", "intelform_file_trash", "intelform_exports", "intelform_blocked_ips" RESTART IDENTITY CASCADE'
   );
   // IntelForm's `editor` / `viewer` roles come from its migration: keep them (their grants too).
   await db.$executeRawUnsafe(`DELETE FROM "roles" WHERE NOT "is_system" AND "slug" NOT IN ('editor', 'viewer')`);
   await db.$executeRawUnsafe('UPDATE "auth_state" SET "owner_user_id" = NULL, "owner_env_id" = NULL');
+  // Spam protection's site limits back to the built-in defaults.
+  await db.$executeRawUnsafe(`UPDATE "intelform_settings" SET "spam_limits" = '{}'`);
   emails.length = 0;
   ownerTickets.clear();
   platformOwner.current = null;
   resetOwnerSeatForTests();
+}
+
+/**
+ * Spam protection off the way for tests about something else (caps, bursts, publishing): the
+ * per-network and per-form limits raised to their highest. spam-protection.test.ts tests the defaults.
+ */
+export const LOOSE_LIMITS = {spamIpPerHour: 1000, spamIpPerDay: 10_000, spamFormPerMinute: 100_000} as const;
+
+/** The site's per-minute ceiling raised too (bursts across many forms or addresses). */
+export async function looseSiteLimits(): Promise<void> {
+  await db.$executeRawUnsafe(`UPDATE "intelform_settings" SET "spam_limits" = '{"sitePerMinute": 100000}'`);
+}
+
+/** A render token for one page load of `formId` by a browser at `ip` (tokens are bound to the address). */
+export async function renderTokenAt(secret: string, formId: string, ip = '203.0.113.10', at = Date.now() - 5000): Promise<string> {
+  return renderToken(secret, formId, at, await ipKeyFor(secret, ip));
 }
 
 type App = Pick<Hono, 'request'>;

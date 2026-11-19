@@ -242,6 +242,18 @@ describe('CSP additions', () => {
     expect(c.insertDirective).toHaveBeenCalledWith('frame-ancestors *');
     allowFraming(undefined);
   });
+
+  it('lets only the listed sites frame a form that names them (header and CSP alike)', () => {
+    const c = csp();
+    const headers = new Headers();
+    allowFraming(c, headers, ['https://shop.example.com', 'https://blog.example.org:8443']);
+    expect(c.insertDirective).toHaveBeenCalledWith("frame-ancestors 'self' https://shop.example.com https://blog.example.org:8443");
+    expect(headers.get('Content-Security-Policy')).toBe("frame-ancestors 'self' https://shop.example.com https://blog.example.org:8443");
+    // Anything that isn't a plain origin never reaches the header.
+    const h2 = new Headers();
+    allowFraming(undefined, h2, ["https://ok.example.com; script-src 'unsafe-inline'", 'javascript:alert(1)']);
+    expect(h2.get('Content-Security-Policy')).toBe("frame-ancestors 'self'");
+  });
 });
 
 describe('respondent client helpers', () => {

@@ -1,4 +1,5 @@
 import { defaultFormSettings } from '../../../lib/intelform/form/settings'
+import { FORM_LIMITS } from '../../../lib/intelform/spam'
 
 /** The parts of forms.settings the response jobs read, read leniently (a stored row never breaks a job). */
 export interface NotifySettings {
@@ -8,6 +9,8 @@ export interface NotifySettings {
   confirmationEmailFieldId: string | null
   confirmationSubject: string
   confirmationBody: string
+  /** Confirmation emails per hour for this form (spam protection). */
+  confirmPerHour: number
 }
 
 export function readNotifySettings(json: unknown): NotifySettings {
@@ -25,5 +28,9 @@ export function readNotifySettings(json: unknown): NotifySettings {
       typeof s.confirmationEmailFieldId === 'string' && s.confirmationEmailFieldId ? s.confirmationEmailFieldId.slice(0, 40) : null,
     confirmationSubject: str(s.confirmationSubject, d.confirmationSubject).slice(0, 200),
     confirmationBody: str(s.confirmationBody, d.confirmationBody).slice(0, 10_000),
+    confirmPerHour:
+      typeof s.confirmPerHour === 'number' && Number.isInteger(s.confirmPerHour) && s.confirmPerHour >= FORM_LIMITS.confirmPerHour.min && s.confirmPerHour <= FORM_LIMITS.confirmPerHour.max
+        ? s.confirmPerHour
+        : d.confirmPerHour,
   }
 }

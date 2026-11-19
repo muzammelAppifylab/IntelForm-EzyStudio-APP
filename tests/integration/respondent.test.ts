@@ -49,7 +49,10 @@ async function makeForm(settings: Record<string, unknown> = {}, status = 'live')
  * routes sit before csrf for embedded forms and check that token: src/server/routes/public-forms.ts).
  */
 async function rpost(b: Browser, form: {id: string; slug: string}, op: 'responses' | 'events' | 'unlock', body: unknown) {
-  return b.request('POST', `/site-api/public/forms/${form.slug}/${op}`, body, {'x-intelform-render': await renderToken(SECRET, form.id)});
+  // The page load the browser had: a render token bound to its address (one response per load).
+  const token = await renderToken(SECRET, form.id, Date.now() - 5000, await ipKeyFor(SECRET, b.ip));
+  const sent = body && typeof body === 'object' && 'renderToken' in body ? {...body, renderToken: token} : body;
+  return b.request('POST', `/site-api/public/forms/${form.slug}/${op}`, sent, {'x-intelform-render': token});
 }
 
 const good = {f_name: {first: 'Ada', last: 'Lovelace'}, f_email: 'ada@example.com'};
@@ -124,8 +127,8 @@ describe.skipIf(!DATABASE_URL)('respondent API (integration, real Postgres)', ()
     expect(await db.response.count({where: {formId: form.id}})).toBe(1);
   });
 
-  it('rate limits submits per browser and form (the per-address ceiling is far higher: submit-burst.test.ts)', async () => {
-    const form = await makeForm();
+  it('rate limits submits per browser and form (with the per-address limits raised: spam-protection.test.ts has the defaults)', async () => {
+    const form = await makeForm({spamIpPerHour: 1000, spamIpPerDay: 1000});
     const visitor = new Browser(app, '203.0.113.60');
     const statuses: number[] = [];
     for (let i = 0; i < 11; i++) {

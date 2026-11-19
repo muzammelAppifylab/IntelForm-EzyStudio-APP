@@ -14,6 +14,7 @@ import {
   settingsPatchData,
   settingsView,
 } from '../../../lib/intelform/settings-app';
+import {DAY_BELOW_HOUR, readSpamSettings} from '../../../lib/intelform/spam';
 
 /**
  * IntelForm's app settings on the server: the one `intelform_settings` row (id = 1), read through
@@ -60,6 +61,7 @@ export const SETTINGS_ROW_SELECT = {
   termsText: true,
   emailFromName: true,
   emailReplyTo: true,
+  spamLimits: true,
 } as const;
 
 /** The row as it is before anyone saved anything (the migration inserts it with these defaults). */
@@ -83,6 +85,7 @@ export function defaultSettingsRow(): AppSettingsRow {
     termsText: '',
     emailFromName: null,
     emailReplyTo: null,
+    spamLimits: {},
   };
 }
 
@@ -120,6 +123,11 @@ export type SettingsFieldErrors = Record<string, string>;
 /** Checks the parts of a patch that need the database. Field keys are the input names. */
 export async function checkPatch(db: PrismaClient, patch: AppSettingsPatch): Promise<SettingsFieldErrors> {
   const errors: SettingsFieldErrors = {};
+  if (patch.spam) {
+    const current = readSpamSettings((await db.intelformSettings.findUnique({where: {id: 1}, select: {spamLimits: true}}))?.spamLimits);
+    const next = {...current, ...patch.spam};
+    if (next.spamIpPerDay < next.spamIpPerHour) errors.spamIpPerDay = DAY_BELOW_HOUR;
+  }
   const themeId = patch.branding?.defaultThemeId;
   if (themeId) {
     if (themePreset(themeId)) return errors;
@@ -138,7 +146,12 @@ export async function checkPatch(db: PrismaClient, patch: AppSettingsPatch): Pro
  * write succeeded and outside any transaction (cache.md). Returns the new view.
  */
 export async function saveAppSettings(db: PrismaClient, patch: AppSettingsPatch, userId: number | null): Promise<AppSettingsResponse> {
-  const data = settingsPatchData(patch);
+  const data: Record<string, unknown> = settingsPatchData(patch);
+  if (patch.spam) {
+    // Merge into what is stored (only the limits sent change), validated value by value.
+    const current = (await db.intelformSettings.findUnique({where: {id: 1}, select: {spamLimits: true}}))?.spamLimits;
+    data.spamLimits = {...readSpamSettings(current), ...patch.spam};
+  }
   const row = await db.intelformSettings.upsert({
     where: {id: 1},
     create: {id: 1, ...data, updatedById: userId},

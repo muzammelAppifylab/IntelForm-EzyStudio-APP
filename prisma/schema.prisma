@@ -81,6 +81,7 @@ model User {
   responseTablePrefs ResponseTablePref[]
   formPresence       FormPresence[]
   intelformSettings  IntelformSettings[]
+  blockedIps         IntelformBlockedIp[]
   intelformExports   IntelformExport[]
 
   @@index([status, id])
@@ -501,6 +502,7 @@ model Form {
   tablePrefs        ResponseTablePref[]
   presence          FormPresence[]
   responseHours     FormResponseHour[]
+  blockedIps        IntelformBlockedIp[]
   counts            FormCount[]
   capRow            FormCap?
   catalog           FormCatalog?
@@ -954,6 +956,8 @@ model IntelformSettings {
   /// Sender name on response notifications and confirmations; null = the app name.
   emailFromName    String?  @map("email_from_name") @db.VarChar(100)
   emailReplyTo     String?  @map("email_reply_to") @db.VarChar(254)
+  /// Spam protection: the site's ceilings and new forms' defaults (src/lib/intelform/spam.ts); {} = built-in.
+  spamLimits       Json     @default("{}") @map("spam_limits")
   updatedById      Int?     @map("updated_by")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -1050,4 +1054,31 @@ model IntelformDoneMarker {
 
   @@index([expiresAt])
   @@map("intelform_done_markers")
+}
+
+/// Address blocks refused at the submit gate (src/server/intelform/abuse/). Keyed by the keyed hash
+/// of the block; `ipBlock` (an IPv4 address or IPv6 /64) is shown in full only with the app
+/// settings permission. Kept 30 days after expiry so repeat blocks escalate (1 h, 24 h, 7 d).
+model IntelformBlockedIp {
+  ipKey       String   @id @map("ip_key") @db.VarChar(40)
+  ipBlock     String?  @map("ip_block") @db.VarChar(64)
+  /// `limits` (automatic) or `manual`.
+  reason      String   @db.VarChar(32)
+  hits        Int      @default(0)
+  /// Times blocked (the escalation step).
+  blocks      Int      @default(1)
+  /// The form it was refused on last (automatic blocks).
+  formId      String?  @map("form_id") @db.Uuid
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(3)
+  createdById Int?     @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  form      Form? @relation(fields: [formId], references: [id], onDelete: SetNull)
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([expiresAt])
+  @@index([updatedAt, ipKey])
+  @@index([createdById])
+  @@map("intelform_blocked_ips")
 }

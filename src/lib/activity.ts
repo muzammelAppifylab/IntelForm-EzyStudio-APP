@@ -84,6 +84,10 @@ export const ACTIVITY_CATEGORIES = {
     label: 'Settings',
     actions: ['app_settings_changed'],
   },
+  spam: {
+    label: 'Spam protection',
+    actions: ['visitor_blocked', 'visitor_unblocked', 'spam_limit_reached', 'confirmation_skipped'],
+  },
 } as const satisfies Record<string, {label: string; actions: readonly string[]}>;
 
 export type ActivityCategory = keyof typeof ACTIVITY_CATEGORIES;

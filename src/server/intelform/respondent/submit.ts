@@ -14,7 +14,12 @@ import {clearPublicFormSlugs, loadPublishedBySlug} from './cache';
 import {retryAfter, tooMany} from './rate-limit';
 import type {RequestMeta} from './request-meta';
 import {removeSignatures, storeSignatures} from './signatures';
-import {checkUnlockToken, hashBrowserToken, readRenderToken} from './tokens';
+import {checkUnlockToken, hashBrowserToken, LOCAL_IP_KEY, readSubmitToken} from './tokens';
+import {FIXED_LIMITS, SITE_LIMITS} from '../../../lib/intelform/spam';
+import type {AbuseEvent} from '../abuse/alert';
+import {autoBlock} from '../abuse/blocks';
+import {reportAbusiveIp} from '../abuse/report';
+import {DONE_SECONDS, doneKey} from '../notify/markers';
 import './validators';
 
 /**
@@ -25,15 +30,21 @@ import './validators';
  *  1. body: the app's 64 KB limit, a strict schema, 256 KB of answers without signatures
  *  2. the published form from the Site Cache (respondent/cache.ts); live and close date
  *     (closed: a retry of a fill that was saved still answers success, one read)
- *  3. the gate, ONE statement: rate limits (300 a minute per IP per form, for a school or office
- *     behind one address; 10 a minute per browser token per form) and, read exactly by primary
- *     key, the password hash (token check), the cap and its exact count, "this fill is saved"
- *  4. honeypot + minimum fill time (a fake 200 on a hit); a render token over 24 h old: reload
+ *  3. the gate, ONE statement (spam protection, src/lib/intelform/spam.ts): the block list (a
+ *     primary-key probe), the per-address limits (default 5 an hour and 20 a day per form; 10 a
+ *     minute per browser token), then, only for an address within its limits, the form's limit
+ *     (default 60 a minute) and the site's (default 300 a minute); a refusal over a per-address
+ *     limit counts a strike. Beside them, read exactly by primary key: the password hash, the
+ *     cap and its exact count, "this fill is saved" and "this page load already saved a response"
+ *  4. honeypot + minimum fill time against THIS page load (a fake 200 on a hit); a render token
+ *     over 24 h old, for another address block, or already used by another fill: reload
  *  5. validateSubmission against the version the browser rendered (+ the one-per-email answer)
  *  6. this fill already saved: answer success again; one per browser and one per email
  *     (pre-checks, one read when the form has either); then signature uploads (PNG only)
- *  7. the insert, ONE autocommit statement, queuing the notify work in intelform_notify_queue in
- *     the same statement. A capped form's statement targets its form_caps row (see
+ *  7. the insert, ONE autocommit statement, claiming the render token (one response per page load),
+ *     queuing the notify work in intelform_notify_queue and, for a form that sends confirmations,
+ *     counting this address's confirmations (over 3 an hour: that response gets none), in the same
+ *     statement. A capped form's statement targets its form_caps row (see
  *     cappedInsertSql). The unique (form_id, submission_id) index makes a retried fill a no-op;
  *     the unique email_key catches a repeated address.
  *  8. after commit: only cache clears when the cap closed the form. No job is sent from here:
@@ -46,12 +57,14 @@ import './validators';
  * shape only for what the insert statement re-checks or what can't let a wrong response in.
  */
 
-/** Per IP per form per minute: high, so a whole class behind one address can respond. */
-export const SUBMIT_IP_LIMIT = 300;
 /** Per browser token per form per minute. */
 export const SUBMIT_BROWSER_LIMIT = 10;
-const RATE_WINDOW = 60;
-const RATE_MESSAGE = 'You sent several responses in a row. Wait a minute and try again.';
+const MINUTE = 60;
+const HOUR = 3600;
+const DAY = 86_400;
+const IP_MESSAGE = 'You sent several responses from this network in a short time. Try again later.';
+const BUSY_MESSAGE = 'This form is getting a lot of responses right now. Wait a minute and try again.';
+const BLOCKED_MESSAGE = 'Responses from your network are paused for a while. Try again later.';
 /** Anything faster than this from render to submit is a bot. */
 export const MIN_FILL_MS = 2000;
 export const MAX_ANSWERS_BYTES = 256 * 1024;
@@ -70,6 +83,10 @@ export interface SubmitContext {
   requestUrl: string;
   /** Keyed rate-limit key part for the caller (crypto.ts ipKeyFor). */
   ipKey: string;
+  /** The caller's address block (crypto.ts ipBlockOf), kept with an automatic block; null when unknown. */
+  ipBlock?: string | null;
+  /** Spam protection's log and owner alert, run after the answer (the route defers it). */
+  abuse?: (event: AbuseEvent) => void;
   /** Hashed IP, country, device, browser (request-meta.ts). */
   meta: () => Promise<RequestMeta>;
   now?: () => number;
@@ -184,14 +201,39 @@ async function dupes(db: Pick<PrismaClient, '$queryRaw'>, form: LoadedForm, brow
   return {seen: !!rows[0]?.seen, taken: !!rows[0]?.taken};
 }
 
-/** The rate-limit keys of one submit: always the caller's IP; the browser token when sent. */
-export function submitRateKeys(ipKey: string, formId: string, browserHash: string | null): {key: string; limit: number}[] {
-  const keys = [{key: `respond:${ipKey}:${formId}`, limit: SUBMIT_IP_LIMIT}];
-  if (browserHash) keys.push({key: `respond-b:${browserHash}:${formId}`, limit: SUBMIT_BROWSER_LIMIT});
-  return keys;
+/** One rate-limit key of the gate: its window and its limit. */
+export interface GateKey {
+  key: string;
+  window: number;
+  limit: number;
 }
 
-/** What the gate statement read about the form, exactly, beside the rate-limit hits. */
+/** The limits of one submit, from the form's settings (src/lib/intelform/spam.ts). */
+export function gateKeys(
+  ipKey: string,
+  formId: string,
+  browserHash: string | null,
+  s: Pick<FormSettings, 'spamIpPerHour' | 'spamIpPerDay' | 'spamFormPerMinute'>
+): {perAddress: GateKey[]; perForm: GateKey; perSite: Omit<GateKey, 'limit'>; strike: string} {
+  const perAddress: GateKey[] = [
+    {key: `respond-h:${ipKey}:${formId}`, window: HOUR, limit: s.spamIpPerHour},
+    {key: `respond-d:${ipKey}:${formId}`, window: DAY, limit: s.spamIpPerDay},
+  ];
+  if (browserHash) perAddress.push({key: `respond-b:${browserHash}:${formId}`, window: MINUTE, limit: SUBMIT_BROWSER_LIMIT});
+  return {
+    perAddress,
+    perForm: {key: `respond-f:${formId}`, window: MINUTE, limit: s.spamFormPerMinute},
+    perSite: {key: 'respond-site', window: MINUTE},
+    strike: `strike:${ipKey}`,
+  };
+}
+
+/** The done-marker key that says a page load (its render token) saved a response. */
+export const tokenKey = (formId: string, tokenId: string) => `tok:${formId}:${tokenId}`;
+/** A used token is remembered past its 24 hours of life. */
+const TOKEN_KEEP_SECONDS = 25 * 3600;
+
+/** What the gate statement read, beside the rate-limit hits. */
 export interface Gate {
   /** False: the form was deleted since it was loaded. */
   found: boolean;
@@ -202,22 +244,84 @@ export interface Gate {
   responses: number;
   /** This fill (its submissionId) is already saved. */
   saved: boolean;
+  /** This page load (its render token) already saved a response. */
+  tokenUsed: boolean;
 }
 
+export interface GateRow {
+  blocked_until: Date | null;
+  ip_over: boolean | null;
+  counts: Record<string, number> | string | null;
+  site_limit: number | null;
+  strikes: number | null;
+  found: boolean;
+  password_hash: string | null;
+  cap: number | null;
+  responses: number;
+  saved: boolean;
+  token_used: boolean;
+}
+
+const windowStart = (w: Prisma.Sql) => Prisma.sql`date_bin(make_interval(secs => ${w}), now(), 'epoch')`;
+
 /**
- * The gate: ONE statement counts one hit on each rate-limit key (the same table and windows as
- * rate-limit.ts `hit`) and reads, by primary key, what the Site Cache leaves out of the form: its
- * password hash, its cap and (only with a cap) its exact count, and whether this fill is already
- * saved. Keys always come in the same order (IP, then browser), so two submits never lock them in
- * opposite order. Throws a 429 when any key is over its limit.
+ * The gate: ONE statement. In order:
+ *   blk     the block list, one primary-key probe: a blocked address writes nothing at all;
+ *   ip      one hit on each per-address key (the same table and windows as rate-limit.ts `hit`);
+ *   wide    only when every per-address count is within its limit: one hit on the form's and the
+ *           site's per-minute keys, so one address hammering a form can't use up everyone's share;
+ *   strike  only when a per-address count is over: one strike for the address (an hour), which
+ *           blocks it after FIXED_LIMITS.strikesBeforeBlock (./submit.ts, ../abuse/blocks.ts);
+ * and, by primary key, what the Site Cache leaves out of the form: its password hash, its cap and
+ * (only with a cap) its exact count, whether this fill is saved and whether this page load already
+ * saved a response. The site's limit comes from intelform_settings (a primary-key read). Keys
+ * always come in the same order (address, then form, then site), so two submits never lock them in
+ * opposite order.
  */
-export const gateSql = (keys: {key: string}[], formId: string, submissionId: string | null) => Prisma.sql`
-  WITH rl AS (
+export const gateSql = (
+  ipKey: string,
+  keys: ReturnType<typeof gateKeys>,
+  formId: string,
+  submissionId: string | null,
+  usedKey: string | null
+) => {
+  const ipValues = Prisma.join(keys.perAddress.map(k => Prisma.sql`(${k.key}::text, ${k.window}::int, ${k.limit}::int)`));
+  return Prisma.sql`
+  WITH blk AS (
+    SELECT expires_at FROM intelform_blocked_ips WHERE ip_key = ${ipKey} AND expires_at > now()
+  ),
+  lim AS (SELECT * FROM (VALUES ${ipValues}) AS v(k, w, lim)),
+  ip AS (
     INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
-    SELECT k, date_bin(make_interval(secs => ${RATE_WINDOW}::int), now(), 'epoch'), ${RATE_WINDOW}::int, 1
-    FROM (VALUES ${Prisma.join(keys.map(k => Prisma.sql`(${k.key}::text)`))}) AS v(k)
+    SELECT lim.k, ${windowStart(Prisma.sql`lim.w`)}, lim.w, 1 FROM lim
+    WHERE NOT EXISTS (SELECT 1 FROM blk)
     ON CONFLICT (key, window_start) DO UPDATE SET count = intelform_rate_limits.count + 1
     RETURNING key, count
+  ),
+  ip_over AS (
+    SELECT coalesce(bool_or(ip.count > lim.lim), false) AS over FROM ip JOIN lim ON lim.k = ip.key
+  ),
+  site AS (
+    SELECT CASE WHEN jsonb_typeof(s.spam_limits->'sitePerMinute') = 'number'
+      THEN least(greatest(ceil((s.spam_limits->>'sitePerMinute')::numeric)::int, ${SITE_LIMITS.sitePerMinute.min}::int), ${SITE_LIMITS.sitePerMinute.max}::int)
+      ELSE ${SITE_LIMITS.sitePerMinute.default}::int END AS lim
+    FROM (SELECT 1) AS one LEFT JOIN intelform_settings s ON s.id = 1
+  ),
+  wide AS (
+    INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
+    SELECT v.k, ${windowStart(Prisma.sql`${MINUTE}::int`)}, ${MINUTE}::int, 1
+    FROM (VALUES (${keys.perForm.key}::text, 1), (${keys.perSite.key}::text, 2)) AS v(k, o)
+    WHERE NOT EXISTS (SELECT 1 FROM blk) AND NOT (SELECT over FROM ip_over)
+    ORDER BY v.o
+    ON CONFLICT (key, window_start) DO UPDATE SET count = intelform_rate_limits.count + 1
+    RETURNING key, count
+  ),
+  strike AS (
+    INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
+    SELECT ${keys.strike}, ${windowStart(Prisma.sql`${HOUR}::int`)}, ${HOUR}::int, 1
+    WHERE (SELECT over FROM ip_over)
+    ON CONFLICT (key, window_start) DO UPDATE SET count = intelform_rate_limits.count + 1
+    RETURNING count
   ),
   x AS (
     SELECT f.id IS NOT NULL AS found, f.settings->>'passwordHash' AS password_hash,
@@ -228,28 +332,91 @@ export const gateSql = (keys: {key: string}[], formId: string, submissionId: str
         submissionId
           ? Prisma.sql`EXISTS (SELECT 1 FROM responses r WHERE r.form_id = ${formId}::uuid AND r.submission_id = ${submissionId})`
           : Prisma.sql`false`
-      } AS saved
+      } AS saved,
+      ${
+        usedKey
+          ? Prisma.sql`EXISTS (SELECT 1 FROM intelform_done_markers m WHERE m.key = ${usedKey} AND m.expires_at > now())`
+          : Prisma.sql`false`
+      } AS token_used
     FROM (SELECT 1) AS one LEFT JOIN forms f ON f.id = ${formId}::uuid
   )
-  SELECT rl.key, rl.count, x.found, x.password_hash, x.cap, x.responses, x.saved FROM rl, x
+  SELECT (SELECT max(expires_at) FROM blk) AS blocked_until,
+    (SELECT over FROM ip_over) AS ip_over,
+    (SELECT jsonb_object_agg(c.key, c.count) FROM (SELECT key, count FROM ip UNION ALL SELECT key, count FROM wide) AS c) AS counts,
+    (SELECT lim FROM site) AS site_limit,
+    (SELECT count FROM strike) AS strikes,
+    x.found, x.password_hash, x.cap, x.responses, x.saved, x.token_used
+  FROM x
 `;
+};
 
-async function submitGate(db: Pick<PrismaClient, '$queryRaw'>, keys: {key: string; limit: number}[], formId: string, submissionId: string | null): Promise<Gate> {
-  const rows = await db.$queryRaw<{key: string; count: number; found: boolean; password_hash: string | null; cap: number | null; responses: number; saved: boolean}[]>(
-    gateSql(keys, formId, submissionId)
-  );
-  for (const k of keys) {
-    const row = rows.find(r => r.key === k.key);
-    if (row && Number(row.count) > k.limit) throw tooMany(retryAfter(RATE_WINDOW), RATE_MESSAGE);
+/** A refused submit: the 429 to answer, and what spam protection does about it. */
+export type GateRefusal =
+  | {kind: 'blocked'; until: Date}
+  | {kind: 'address'; window: number; strikes: number}
+  | {kind: 'form' | 'site'};
+
+/** Reads the gate's row: the refusal, if any (the block first, then the address, the form, the site). */
+export function gateRefusal(row: GateRow | undefined, keys: ReturnType<typeof gateKeys>): GateRefusal | null {
+  if (!row) return null;
+  if (row.blocked_until) return {kind: 'blocked', until: new Date(row.blocked_until)};
+  const counts = (typeof row.counts === 'string' ? JSON.parse(row.counts) : row.counts ?? {}) as Record<string, number>;
+  const over = (k: {key: string; limit: number}) => Number(counts[k.key] ?? 0) > k.limit;
+  const address = keys.perAddress.filter(over);
+  if (address.length) {
+    return {kind: 'address', window: Math.max(...address.map(k => k.window)), strikes: Number(row.strikes ?? 0)};
   }
-  const x = rows[0];
+  if (over(keys.perForm)) return {kind: 'form'};
+  if (row.site_limit !== null && Number(counts[keys.perSite.key] ?? 0) > Number(row.site_limit)) return {kind: 'site'};
+  return null;
+}
+
+function gateOf(row: GateRow | undefined): Gate {
   return {
-    found: !!x?.found,
-    passwordHash: x?.password_hash || null,
-    cap: x?.cap === null || x?.cap === undefined ? null : Number(x.cap),
-    responses: Number(x?.responses ?? 0),
-    saved: !!x?.saved,
+    found: !!row?.found,
+    passwordHash: row?.password_hash || null,
+    cap: row?.cap === null || row?.cap === undefined ? null : Number(row.cap),
+    responses: Number(row?.responses ?? 0),
+    saved: !!row?.saved,
+    tokenUsed: !!row?.token_used,
   };
+}
+
+/**
+ * Runs the gate. A refusal answers 429; on the way it blocks an address that keeps going over
+ * its limits (escalating, ../abuse/blocks.ts) and tells spam protection's log and owner alert.
+ */
+async function submitGate(
+  ctx: SubmitContext,
+  form: Pick<LoadedForm, 'id' | 'settings'>,
+  browserHash: string | null,
+  submissionId: string | null,
+  usedKey: string | null,
+  now: number
+): Promise<Gate> {
+  const keys = gateKeys(ctx.ipKey, form.id, browserHash, form.settings);
+  const rows = await ctx.db.$queryRaw<GateRow[]>(gateSql(ctx.ipKey, keys, form.id, submissionId, usedKey));
+  const refused = gateRefusal(rows[0], keys);
+  if (!refused) return gateOf(rows[0]);
+  switch (refused.kind) {
+    case 'blocked':
+      throw tooMany(Math.max(1, Math.ceil((refused.until.getTime() - now) / 1000)), BLOCKED_MESSAGE);
+    case 'address': {
+      // Keeps going over: block the address (never "local", the address-less development caller).
+      if (refused.strikes >= FIXED_LIMITS.strikesBeforeBlock && ctx.ipKey !== LOCAL_IP_KEY) {
+        const block = await autoBlock(ctx.db, {ipKey: ctx.ipKey, ipBlock: ctx.ipBlock ?? null, formId: form.id, strikes: refused.strikes});
+        if (block.fresh) {
+          await reportAbusiveIp({requestUrl: ctx.requestUrl}, {ipKey: ctx.ipKey, reason: 'limits', count: refused.strikes}).catch(() => undefined);
+          ctx.abuse?.({kind: 'blocked', formId: form.id, step: block.step, strikes: refused.strikes, until: block.until});
+        }
+        throw tooMany(Math.max(1, Math.ceil((block.until.getTime() - now) / 1000)), BLOCKED_MESSAGE);
+      }
+      throw tooMany(retryAfter(refused.window, now), IP_MESSAGE);
+    }
+    default:
+      ctx.abuse?.({kind: 'limit', formId: form.id, scope: refused.kind});
+      throw tooMany(retryAfter(MINUTE, now), BUSY_MESSAGE);
+  }
 }
 
 /** This fill (its submissionId) was already saved on this form. */
@@ -285,6 +452,10 @@ export interface InsertParams {
   /** Queue the notify work (notification, confirmation, webhook) in the same statement. */
   needsJobs: boolean;
   now: Date;
+  /** The done-marker that claims this page load (tokenKey): one response per render token. Null: none to claim. */
+  usedKey?: string | null;
+  /** The form sends confirmations: this address's confirmation count key (else null). */
+  confirmIpKey?: string | null;
 }
 
 const closeAtOk = (now: Date) =>
@@ -302,17 +473,39 @@ const capSql = Prisma.sql`CASE WHEN jsonb_typeof(forms.settings->'responseCap') 
  * written here.
  */
 const insertCtes = (p: InsertParams, source: Prisma.Sql) => Prisma.sql`
+  want AS (SELECT ${p.usedKey ?? null}::text AS key),
+  tok AS (
+    INSERT INTO intelform_done_markers (key, expires_at)
+    SELECT want.key, now() + make_interval(secs => ${TOKEN_KEEP_SECONDS}::int)
+    FROM ${source} AS s0, want WHERE want.key IS NOT NULL
+    ON CONFLICT (key) DO NOTHING
+    RETURNING key
+  ),
   ins AS (
     INSERT INTO responses (form_id, form_version_id, answers, started_at, duration_ms, ttc, ip_hash, country, device, browser, browser_token, search_text, email_key, submission_id)
     SELECT src.id, ${p.versionId}::uuid, ${p.answersJson}::jsonb, ${p.startedAt}, ${p.durationMs}::int, ${p.ttcJson}::jsonb,
            ${p.meta.ipHash}, ${p.meta.country}, ${p.meta.device}, ${p.meta.browser}, ${p.browserHash}, ${p.search}, ${p.emailKey}, ${p.submissionId}
     FROM ${source} AS src
+    WHERE NOT EXISTS (SELECT 1 FROM want WHERE want.key IS NOT NULL) OR EXISTS (SELECT 1 FROM tok)
     ON CONFLICT (form_id, submission_id) WHERE submission_id IS NOT NULL DO NOTHING
     RETURNING id, submitted_at
   ),
   q AS (
     INSERT INTO intelform_notify_queue (response_id)
     SELECT id FROM ins WHERE ${p.needsJobs}::boolean
+  ),
+  cip AS (
+    INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
+    SELECT ${p.confirmIpKey ?? null}::text, ${windowStart(Prisma.sql`${HOUR}::int`)}, ${HOUR}::int, 1
+    FROM ins WHERE ${p.confirmIpKey ?? null}::text IS NOT NULL
+    ON CONFLICT (key, window_start) DO UPDATE SET count = intelform_rate_limits.count + 1
+    RETURNING count
+  ),
+  cipm AS (
+    INSERT INTO intelform_done_markers (key, expires_at)
+    SELECT ${doneKey('confirm-skip-ip', '')} || ins.id::text, now() + make_interval(secs => ${DONE_SECONDS}::int)
+    FROM ins, cip WHERE cip.count > ${FIXED_LIMITS.confirmPerIpPerHour}::int
+    ON CONFLICT (key) DO NOTHING
   )`;
 
 /**
@@ -334,7 +527,8 @@ export const uncappedInsertSql = (p: InsertParams) => Prisma.sql`
     DELETE FROM form_caps WHERE form_id IN (SELECT id FROM uncapped)
   ),
   ${insertCtes(p, Prisma.sql`uncapped`)}
-  SELECT true AS passed, f.capped, ins.id::text AS id, ins.submitted_at, false AS closed_now, false AS replay
+  SELECT true AS passed, f.capped, ins.id::text AS id, ins.submitted_at, false AS closed_now, false AS replay,
+    EXISTS (SELECT 1 FROM tok) AS claimed
   FROM f LEFT JOIN ins ON true
 `;
 
@@ -381,7 +575,8 @@ export const cappedInsertSql = (p: InsertParams) => Prisma.sql`
     EXISTS (SELECT 1 FROM c) AS took,
     ins.id::text AS id, ins.submitted_at,
     EXISTS (SELECT 1 FROM closed) AS closed_now,
-    EXISTS (SELECT 1 FROM dup) AS replay
+    EXISTS (SELECT 1 FROM dup) AS replay,
+    EXISTS (SELECT 1 FROM tok) AS claimed
   FROM (SELECT 1) AS one LEFT JOIN f ON true LEFT JOIN ins ON true
 `;
 
@@ -405,6 +600,8 @@ export interface InsertRow {
   submitted_at: Date | null;
   closed_now: boolean;
   replay: boolean;
+  /** This statement claimed the page load's render token (undefined: an older shape, treated as claimed). */
+  claimed?: boolean;
 }
 
 export interface CappedRow extends InsertRow {
@@ -416,7 +613,9 @@ export type InsertOutcome =
   | {kind: 'saved'; id: string; closedNow: boolean}
   | {kind: 'duplicate'}
   | {kind: 'closed'}
-  | {kind: 'capped'};
+  | {kind: 'capped'}
+  /** Nothing saved because the page load's render token was taken (by this fill in parallel, or another). */
+  | {kind: 'token'};
 
 /** Reads the uncapped statement's one row (none: the form is not live or past its close date). */
 export function insertOutcome(row: InsertRow | undefined, hasSubmissionId = true): InsertOutcome {
@@ -425,6 +624,7 @@ export function insertOutcome(row: InsertRow | undefined, hasSubmissionId = true
   if (row.replay) return {kind: 'duplicate'};
   if (!row.passed) return {kind: 'closed'};
   if (row.capped) return {kind: 'capped'};
+  if (row.claimed === false) return {kind: 'token'};
   // The form passed and nothing was inserted: the (form_id, submission_id) index refused it.
   // Without a submission id nothing could have refused it: never answer success for a response
   // that was not saved.
@@ -445,6 +645,7 @@ export function cappedOutcome(row: CappedRow | undefined, hasSubmissionId = true
   if (!row.has_row) return {kind: 'init'};
   // No slot left (or the row went with a removed cap: the next submit sees it).
   if (!row.took) return {kind: 'closed'};
+  if (row.claimed === false) return {kind: 'token'};
   // A slot was free and nothing was inserted: the unique index refused a parallel copy.
   if (!hasSubmissionId) throw new Error('intelform submit: the capped insert saved nothing');
   return {kind: 'duplicate'};
@@ -508,14 +709,24 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     if (await alreadySaved(db, form.id, input.submissionId)) return replyAgain(form, input.answers, clock());
     throw closedError(form, labels);
   }
-  const browserHash = input.browserToken ? await hashBrowserToken(secret, form.id, input.browserToken) : null;
+  // One per browser without a browser token (a script that leaves it out) falls back to the
+  // caller's address block: still a soft limit, but it can't be skipped by sending nothing.
+  const browserHash = input.browserToken
+    ? await hashBrowserToken(secret, form.id, input.browserToken)
+    : form.settings.onePerBrowser
+      ? await hashBrowserToken(secret, form.id, `address:${ctx.ipKey}`)
+      : null;
+  // The render token, checked in code (no query): which page load this is, bound to the address.
+  const token = await readSubmitToken(secret, input.renderToken, form.id, ctx.ipKey, clock());
+  const usedKey = token?.kind === 'ok' ? tokenKey(form.id, token.id) : null;
 
-  // 3. The gate (trip 2): rate limits, before anything that costs (uploads), with the password
-  // hash, the cap and its exact count, and "this fill is saved", in one statement. Beside it,
-  // the rendered version (a read only when it is the version just replaced).
+  // 3. The gate (trip 2): the block list and the limits, before anything that costs (uploads),
+  // with the password hash, the cap and its exact count, "this fill is saved" and "this page
+  // load is used", in one statement. Beside it, the rendered version (a read only when it is the
+  // version just replaced).
   const [version, gate] = await Promise.all([
     versionFor(db, form, input.formVersionId),
-    submitGate(db, submitRateKeys(ctx.ipKey, form.id, browserHash), form.id, submissionId),
+    submitGate(ctx, form, browserHash, submissionId, usedKey, clock()),
   ]);
   if (!gate.found) throw notFound();
   const hash = gate.passwordHash;
@@ -527,15 +738,16 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     throw closedError(form, labels);
   }
 
-  // 4. Honeypot and minimum time: pretend it worked, keep nothing.
-  const renderedAt = await readRenderToken(secret, input.renderToken, form.id, clock());
-  if ((input.hp ?? '') !== '' || renderedAt === null || (renderedAt !== 'expired' && clock() - renderedAt < MIN_FILL_MS)) {
+  // 4. Honeypot and minimum time since THIS page load: pretend it worked, keep nothing.
+  if ((input.hp ?? '') !== '' || token === null || (token.kind === 'ok' && clock() - token.at < MIN_FILL_MS)) {
     console.info(`intelform submit: dropped by spam checks (form ${form.id})`);
     return {ok: true};
   }
-  // A genuine token, but the page has been open for over a day: no fake success (a real person
-  // would lose their answers). The form offers a reload that keeps them and fetches a new token.
-  if (renderedAt === 'expired') throw new RespondentError(409, 'page_expired', labels.pageExpired);
+  // A genuine token, but the page has been open for over a day, the visitor's address changed
+  // since it loaded, or it already saved another response: no fake success (a real person would
+  // lose their answers). The form offers a reload that keeps them and fetches a new token.
+  if (token.kind !== 'ok') throw new RespondentError(409, 'page_expired', labels.pageExpired);
+  if (gate.tokenUsed && !gate.saved) throw new RespondentError(409, 'page_expired', labels.pageExpired);
 
   // 5. Validate against the version that was rendered (consent stamped with server time and version)
   const def = version.definition;
@@ -575,6 +787,9 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     submissionId,
     needsJobs: pub.needsJobs,
     now,
+    usedKey,
+    confirmIpKey:
+      pub.needsJobs && form.settings.confirmationEmail && form.settings.confirmationEmailFieldId ? `confirm-ip:${ctx.ipKey}` : null,
   };
 
   let out: InsertOutcome;
@@ -597,6 +812,11 @@ export async function handleSubmit(ctx: SubmitContext, slug: string, bodyText: s
     // Nothing was saved by this request: the files it claimed belong to nothing.
     await removeSignatures(ctx.requestUrl, stored);
     if (out.kind === 'duplicate') return reply(form.settings, def, answers);
+    // The page load's token was taken in parallel: by this very fill (a retry), or by another.
+    if (out.kind === 'token') {
+      if (await alreadySaved(db, form.id, input.submissionId)) return reply(form.settings, def, answers);
+      throw new RespondentError(409, 'page_expired', labels.pageExpired);
+    }
     throw closedError(form, labels);
   }
 

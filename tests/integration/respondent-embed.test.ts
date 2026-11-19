@@ -7,7 +7,7 @@ import {inRequestScope} from '../../src/platform/request-scope';
 import {getDb} from '../../src/platform/db';
 import {app} from '../../src/server/app';
 import {renderToken} from '../../src/server/intelform/respondent/tokens';
-import {configureEnv, DATABASE_URL, db, ORIGIN, resetDatabase} from './support/harness';
+import {configureEnv, DATABASE_URL, db, ORIGIN, renderTokenAt, resetDatabase} from './support/harness';
 
 /**
  * A form embedded on ANOTHER website (public/embed.js: a cross-site iframe of /f/<slug>): the
@@ -85,7 +85,7 @@ describe.skipIf(!DATABASE_URL)('embedded form: respondent writes with no cookies
   it('a submit with no cookies at all is saved; a token for another form is refused', async () => {
     const form = await makeForm();
     const other = await makeForm();
-    const token = await renderToken(SECRET, form.id, Date.now() - 5000);
+    const token = await renderTokenAt(SECRET, form.id, '203.0.113.90');
     const body = {formVersionId: form.versionId, answers: {f_email: 'ada@example.com'}, renderToken: token, startedAt: Date.now() - 4000};
 
     const res = await framePost(`/site-api/public/forms/${form.slug}/responses`, body, token);

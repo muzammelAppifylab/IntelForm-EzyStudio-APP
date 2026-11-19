@@ -5,7 +5,7 @@ import {describe, expect, it} from 'vitest';
 import {formDefinition} from '../../src/lib/intelform/form/definition';
 import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {buildSearchText, redirectWithAnswers} from '../../src/server/intelform/respondent/answers';
-import {ipHashFor, ipKeyFor, safeEqual} from '../../src/server/intelform/respondent/crypto';
+import {ipBlockOf, ipHashFor, ipKeyFor, maskIpBlock, safeEqual} from '../../src/server/intelform/respondent/crypto';
 import {parseEvent} from '../../src/server/intelform/respondent/events';
 import {isClosed, loadBySlug, parseSettings, SLUG_RE} from '../../src/server/intelform/respondent/load';
 import {safeJson} from '../../src/server/intelform/respondent/page';
@@ -16,7 +16,9 @@ import {
   checkUnlockToken,
   hashBrowserToken,
   readRenderToken,
+  readSubmitToken,
   RENDER_TOKEN_MAX_AGE_MS,
+  RENDER_TOKEN_SHAPE,
   renderToken,
   unlockToken,
   UNLOCK_TTL_MS,
@@ -31,14 +33,37 @@ describe('respondent tokens', () => {
   it('render token: round trip, other form, forged, expired', async () => {
     const now = 1_760_000_000_000;
     const t = await renderToken(SECRET, FORM, now);
-    expect(t).toMatch(/^\d+\.[A-Za-z0-9_-]{32}$/);
+    expect(t).toMatch(RENDER_TOKEN_SHAPE);
     expect(await readRenderToken(SECRET, t, FORM, now + 5000)).toBe(now);
     expect(await readRenderToken(SECRET, t, '00000000-0000-4000-8000-00000000f002', now)).toBeNull();
     expect(await readRenderToken('another-secret-0123456789-abcdefghijklmnop', t, FORM, now)).toBeNull();
-    expect(await readRenderToken(SECRET, `${now + 1}.${t.split('.')[1]}`, FORM, now)).toBeNull();
+    const [, n, sig, ip] = t.split('.');
+    expect(await readRenderToken(SECRET, `${now + 1}.${n}.${sig}.${ip}`, FORM, now)).toBeNull();
     expect(await readRenderToken(SECRET, `${t}.x`, FORM, now)).toBeNull();
     expect(await readRenderToken(SECRET, 'garbage', FORM, now)).toBeNull();
     expect(await readRenderToken(SECRET, t, FORM, now + RENDER_TOKEN_MAX_AGE_MS + 1)).toBe('expired');
+  });
+
+  it('render token: one per page load, bound to the address block it was handed to', async () => {
+    const now = 1_760_000_000_000;
+    const here = await ipKeyFor(SECRET, '203.0.113.9');
+    const there = await ipKeyFor(SECRET, '198.51.100.4');
+    const a = await renderToken(SECRET, FORM, now, here);
+    const b = await renderToken(SECRET, FORM, now, here);
+    // The same millisecond, the same address: still two page loads (a nonce), two ids.
+    expect(a).not.toBe(b);
+    const ra = await readSubmitToken(SECRET, a, FORM, here, now + 3000);
+    const rb = await readSubmitToken(SECRET, b, FORM, here, now + 3000);
+    expect(ra).toMatchObject({kind: 'ok', at: now});
+    expect(rb).toMatchObject({kind: 'ok', at: now});
+    expect(ra?.kind === 'ok' && rb?.kind === 'ok' && ra.id !== rb.id).toBe(true);
+    // Another address: genuine but moved (a reload that keeps the answers, not a silent drop).
+    expect(await readSubmitToken(SECRET, a, FORM, there, now + 3000)).toEqual({kind: 'moved'});
+    // The address tag can't be swapped onto another token.
+    const other = await renderToken(SECRET, FORM, now, there);
+    expect(await readSubmitToken(SECRET, `${a.split('.').slice(0, 3).join('.')}.${other.split('.')[3]}`, FORM, there, now)).toEqual({kind: 'moved'});
+    expect(await readSubmitToken(SECRET, a, FORM, here, now + RENDER_TOKEN_MAX_AGE_MS + 1)).toEqual({kind: 'expired'});
+    expect(await readSubmitToken(SECRET, a, '00000000-0000-4000-8000-00000000f002', here, now)).toBeNull();
   });
 
   it('unlock token: bound to the password hash and expiry', async () => {
@@ -58,12 +83,22 @@ describe('respondent tokens', () => {
     expect(await hashBrowserToken(SECRET, '00000000-0000-4000-8000-00000000f002', 'tok')).not.toBe(a);
   });
 
-  it('ip hashes are keyed; rate-limit keys pool an IPv6 /56', async () => {
+  it('ip hashes are keyed; rate-limit keys pool an IPv6 /64', async () => {
     const h = await ipHashFor(SECRET, '203.0.113.9');
     expect(h).toMatch(/^[0-9a-f]{64}$/);
     expect(await ipHashFor(SECRET, null)).toBeNull();
     expect(await ipKeyFor(SECRET, null)).toBe('local');
-    expect(await ipKeyFor(SECRET, '2001:db8:1:200::1')).toBe(await ipKeyFor(SECRET, '2001:db8:1:2ff::9'));
+    expect(await ipKeyFor(SECRET, '2001:db8:1:2::1')).toBe(await ipKeyFor(SECRET, '2001:0db8:0001:0002:ffff::9'));
+    expect(await ipKeyFor(SECRET, '2001:db8:1:2::1')).not.toBe(await ipKeyFor(SECRET, '2001:db8:1:3::1'));
+    expect(await ipKeyFor(SECRET, '::ffff:203.0.113.9')).toBe(await ipKeyFor(SECRET, '203.0.113.9'));
+    expect(ipBlockOf('2001:DB8:1:2:3:4:5:6')).toBe('2001:db8:1:2::/64');
+    expect(ipBlockOf('2001:db8::1')).toBe('2001:db8:0:0::/64');
+    expect(ipBlockOf('203.0.113.9')).toBe('203.0.113.9');
+    expect(ipBlockOf('203.0.113.256')).toBeNull();
+    expect(ipBlockOf('not an ip')).toBeNull();
+    expect(ipBlockOf('1::2::3')).toBeNull();
+    expect(maskIpBlock('203.0.113.9')).toBe('203.0.•.•');
+    expect(maskIpBlock('2001:db8:1:2::/64')).toBe('2001:db8:•:•::/64');
     expect(await ipKeyFor(SECRET, '203.0.113.9')).not.toBe(await ipKeyFor(SECRET, '203.0.113.10'));
     expect(safeEqual('abc', 'abc')).toBe(true);
     expect(safeEqual('abc', 'abd')).toBe(false);

@@ -6,8 +6,7 @@ import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {app} from '../../src/server/app';
 import {clearPublicFormCacheFor, clearPublicFormSlugs, loadPublishedBySlug} from '../../src/server/intelform/respondent/cache';
-import {renderToken} from '../../src/server/intelform/respondent/tokens';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
+import {Browser, LOOSE_LIMITS, looseSiteLimits, renderTokenAt, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
  * Response caps as ONE statement on the form's form_caps row (submit.ts cappedInsertSql, the
@@ -27,7 +26,7 @@ const DEF = formDefinition.parse({
 let seq = 0;
 async function makeForm(settings: Record<string, unknown> = {}) {
   const slug = `cap-${++seq}`;
-  const s = {...defaultFormSettings(), ...settings};
+  const s = {...defaultFormSettings(), ...LOOSE_LIMITS, ...settings};
   const form = await db.form.create({
     data: {slug, title: `Cap ${seq}`, status: 'live', draft: DEF as never, settings: s as never, theme: defaultTheme() as never},
     select: {id: true},
@@ -39,11 +38,11 @@ async function makeForm(settings: Record<string, unknown> = {}) {
 
 type Form = Awaited<ReturnType<typeof makeForm>>;
 
-async function body(form: Form, extra: Record<string, unknown> = {}) {
+async function body(form: Form, extra: Record<string, unknown> = {}, ip = '203.0.113.10') {
   return {
     formVersionId: form.versionId,
     answers: {f_name: 'Ada'},
-    renderToken: await renderToken(SECRET, form.id, Date.now() - 5000),
+    renderToken: await renderTokenAt(SECRET, form.id, ip),
     startedAt: Date.now() - 4000,
     ...extra,
   };
@@ -52,7 +51,7 @@ async function body(form: Form, extra: Record<string, unknown> = {}) {
 const sid = (n: number) => `fill-${String(n).padStart(4, '0')}-capcapcapcapcap`;
 /** A submit, with the page's render token in the header every respondent write carries. */
 async function post(form: Form, n: number | null, ip = '203.0.113.10') {
-  const b = await body(form, n === null ? {} : {submissionId: sid(n)});
+  const b = await body(form, n === null ? {} : {submissionId: sid(n)}, ip);
   return new Browser(app, ip).request('POST', `/site-api/public/forms/${form.slug}/responses`, b, {'x-intelform-render': b.renderToken});
 }
 
@@ -75,7 +74,10 @@ async function setSettings(form: Form, patch: Record<string, unknown>, status?: 
 describe.skipIf(!DATABASE_URL)('response caps on form_caps (integration, real Postgres)', () => {
   beforeAll(configureEnv);
   afterAll(() => db.$disconnect());
-  beforeEach(resetDatabase);
+  beforeEach(async () => {
+    await resetDatabase();
+    await looseSiteLimits();
+  });
 
   it('a cap of N under 3N parallel submits takes exactly N and closes the form', async () => {
     const N = 10;

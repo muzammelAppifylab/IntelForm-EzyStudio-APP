@@ -18,9 +18,10 @@ import {
   isEmailKeyViolation,
   MIN_FILL_MS,
   parseSubmit,
+  gateKeys,
+  gateRefusal,
   SUBMIT_BROWSER_LIMIT,
-  SUBMIT_IP_LIMIT,
-  submitRateKeys,
+  tokenKey,
   uncappedInsertSql,
   type InsertParams,
   type SubmitContext,
@@ -87,6 +88,13 @@ interface State {
   /** The form's form_caps row exists (its `taken` is responseCount, as the triggers keep it). */
   capRow: boolean;
   sql: string[];
+  /** Render tokens that saved a response (their done-markers). */
+  usedTokens: Set<string>;
+  lastClaimed: boolean;
+  /** The caller's address is on the block list. */
+  blocked: boolean;
+  blocks: number;
+  siteLimit: number;
 }
 
 let state: State;
@@ -133,7 +141,15 @@ function makeDb() {
       const needsJobs = values[at + INSERT_COLS.length];
       const sid = row.submission_id as string | null;
       if (state.failInsert) throw state.failInsert;
+      // The page load's render token: claimed once (the done-marker), or nothing is inserted.
+      const used = values.find(v => typeof v === 'string' && v.startsWith('tok:')) as string | undefined;
+      if (used && state.usedTokens.has(used)) {
+        state.lastClaimed = false;
+        return null;
+      }
+      state.lastClaimed = true;
       if (sid && (state.saved.has(sid) || state.savedLate.has(sid))) return null; // ON CONFLICT DO NOTHING
+      if (used) state.usedTokens.add(used);
       const id = `00000000-0000-4000-8000-0000000000r${state.inserted.length + 1}`;
       state.inserted.push({form_id: FORM_ID, ...row});
       state.responseCount++;
@@ -161,7 +177,7 @@ function makeDb() {
         state.closedByCap = true;
         closedNow = true;
       }
-      return [{passed: true, capped: true, has_row: true, took: true, id, submitted_at: id ? new Date(NOW) : null, closed_now: closedNow, replay}];
+      return [{passed: true, capped: true, has_row: true, took: true, id, submitted_at: id ? new Date(NOW) : null, closed_now: closedNow, replay, claimed: state.lastClaimed}];
     }
     if (sql.includes('INSERT INTO form_caps')) {
       state.capRow = capOf() !== null;
@@ -173,24 +189,49 @@ function makeDb() {
       if (s.responseCap !== null) return [{passed: true, capped: true, id: null, submitted_at: null, closed_now: false, replay: false}];
       state.capRow = false;
       const id = insert();
-      return [{passed: true, capped: false, id, submitted_at: id ? new Date(NOW) : null, closed_now: false, replay: false}];
+      return [{passed: true, capped: false, id, submitted_at: id ? new Date(NOW) : null, closed_now: false, replay: false, claimed: state.lastClaimed}];
     }
-    // The gate: rate limits, with the password hash, the cap, its exact count and "saved".
-    if (sql.includes('INSERT INTO intelform_rate_limits')) {
+    // The gate: the block list, the limits, with the password hash, the cap, its exact count,
+    // "saved" and "this page load is used". Per-address keys come as (key, window, limit).
+    if (sql.includes('INSERT INTO intelform_rate_limits') && sql.includes('intelform_blocked_ips')) {
       const sid = values.find(v => typeof v === 'string' && v.startsWith('fill-')) as string | undefined;
-      const extra = {
-        found: true,
-        password_hash: state.settings.passwordHash,
-        cap: capOf(),
-        responses: capOf() === null ? 0 : state.responseCount,
-        saved: !!sid && state.saved.has(sid),
+      const used = values.find(v => typeof v === 'string' && v.startsWith('tok:')) as string | undefined;
+      const counts: Record<string, number> = {};
+      const bump = (key: string) => {
+        state.rate.set(key, (state.rate.get(key) ?? 0) + 1);
+        counts[key] = state.rate.get(key)!;
       };
-      return values
-        .filter((v): v is string => typeof v === 'string' && v.startsWith('respond'))
-        .map(key => {
-          state.rate.set(key, (state.rate.get(key) ?? 0) + 1);
-          return {key, count: state.rate.get(key), ...extra};
+      let over = false;
+      if (!state.blocked) {
+        values.forEach((v, i) => {
+          if (typeof v === 'string' && /^respond-[hdb]:/.test(v)) {
+            bump(v);
+            if (counts[v]! > Number(values[i + 2])) over = true;
+          }
         });
+        if (!over) for (const v of values) if (typeof v === 'string' && (v.startsWith('respond-f:') || v === 'respond-site')) bump(v);
+      }
+      if (over) for (const v of values) if (typeof v === 'string' && v.startsWith('strike:')) bump(v);
+      return [
+        {
+          blocked_until: state.blocked ? new Date(NOW + 3600_000) : null,
+          ip_over: over,
+          counts,
+          site_limit: state.siteLimit,
+          strikes: over ? (state.rate.get(values.find(v => typeof v === 'string' && v.startsWith('strike:')) as string) ?? 0) : null,
+          found: true,
+          password_hash: state.settings.passwordHash,
+          cap: capOf(),
+          responses: capOf() === null ? 0 : state.responseCount,
+          saved: !!sid && state.saved.has(sid),
+          token_used: !!used && state.usedTokens.has(used),
+        },
+      ];
+    }
+    if (sql.includes('INSERT INTO intelform_blocked_ips')) {
+      state.blocked = true;
+      state.blocks++;
+      return [{blocks: state.blocks, expires_at: new Date(NOW + 3600_000), was_active: false}];
     }
     if (sql.includes('AS seen')) return [{seen: state.settings.onePerBrowser && state.seenBrowser, taken: state.seenEmail}];
     if (sql.includes('FROM forms f LEFT JOIN form_versions')) {
@@ -245,7 +286,7 @@ async function body(answers: Record<string, unknown>, extra: Record<string, unkn
   return JSON.stringify({
     formVersionId: VERSION_ID,
     answers,
-    renderToken: await renderToken(SECRET, FORM_ID, NOW - 5000),
+    renderToken: await renderToken(SECRET, FORM_ID, NOW - 5000, 'k'),
     startedAt: NOW - 4000,
     ttc: {f_email: 1200, f_nope: 4},
     ...extra,
@@ -282,6 +323,11 @@ beforeEach(async () => {
     queued: [],
     capRow: false,
     sql: [],
+    usedTokens: new Set(),
+    lastClaimed: true,
+    blocked: false,
+    blocks: 0,
+    siteLimit: 300,
   };
   removed.length = 0;
   stores = 0;
@@ -343,8 +389,8 @@ describe('submit pipeline', () => {
 
   it('drops honeypot hits, too-fast and forged render tokens with a fake success', async () => {
     expect(await handleSubmit(ctx(), 'survey', await body(good(), {hp: 'spam'}))).toEqual({ok: true});
-    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: await renderToken(SECRET, FORM_ID, NOW - MIN_FILL_MS + 500)}))).toEqual({ok: true});
-    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: `${NOW}.forgedforgedforgedforgedforged12`}))).toEqual({ok: true});
+    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: await renderToken(SECRET, FORM_ID, NOW - MIN_FILL_MS + 500, 'k')}))).toEqual({ok: true});
+    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: `${NOW}.nonceNONCEnonce12.forgedforgedforgedforgedforged12.forgedforged1234`}))).toEqual({ok: true});
     expect(state.inserted).toHaveLength(0);
     expect(state.queued).toHaveLength(0);
   });
@@ -418,19 +464,86 @@ describe('submit pipeline', () => {
     expect(await handleSubmit(ctx(), 'survey', await body(good(), {unlockToken: token}))).toEqual({ok: true});
   });
 
-  it('rate limits 300 a minute per address and 10 per browser, in one upsert', async () => {
-    // A shared address (school Wi-Fi): the 11th person is fine.
-    state.rate.set(`respond:k:${FORM_ID}`, 10);
+  it('spam protection: per address an hour, per browser a minute, one statement', async () => {
+    // A form's own per-address limit (here raised for a class sharing one network).
+    state.settings = {...defaultFormSettings(), spamIpPerHour: 12, spamIpPerDay: 50};
+    state.rate.set(`respond-h:k:${FORM_ID}`, 11);
     expect(await handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b-new'}))).toEqual({ok: true});
-    expect(state.sql.filter(q => q.includes('intelform_rate_limits'))).toHaveLength(1);
-    state.rate.set(`respond:k:${FORM_ID}`, SUBMIT_IP_LIMIT);
-    expect(await fails(handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b-other'})))).toMatchObject({status: 429, code: 'rate_limited'});
+    const err = await fails(handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b-other'})));
+    expect(err).toMatchObject({status: 429, code: 'rate_limited'});
+    expect(Number(err.headers?.['Retry-After'])).toBeGreaterThan(60);
 
     state.rate.clear();
     for (let i = 0; i < SUBMIT_BROWSER_LIMIT; i++) await handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b1'}));
-    const err = await fails(handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b1'})));
-    expect(err).toMatchObject({status: 429, code: 'rate_limited'});
-    expect(err.headers?.['Retry-After']).toBeTruthy();
+    const browser = await fails(handleSubmit(ctx(), 'survey', await body(good(), {browserToken: 'b1'})));
+    expect(browser).toMatchObject({status: 429, code: 'rate_limited'});
+    expect(browser.headers?.['Retry-After']).toBeTruthy();
+  });
+
+  it('spam protection defaults: 5 an hour from one network, then refused, then blocked; nothing is saved', async () => {
+    const statuses: (number | 'ok')[] = [];
+    for (let i = 0; i < 9; i++) {
+      try {
+        await handleSubmit(ctx(), 'survey', await body(good()));
+        statuses.push('ok');
+      } catch (err) {
+        statuses.push((err as RespondentError).status);
+      }
+    }
+    expect(statuses).toEqual(['ok', 'ok', 'ok', 'ok', 'ok', 429, 429, 429, 429]);
+    expect(state.inserted).toHaveLength(5);
+    // The third refusal in the hour blocks the address; after that, one probe refuses it.
+    expect(state.blocks).toBe(1);
+    expect(state.blocked).toBe(true);
+    const events: unknown[] = [];
+    const blocked = await fails(handleSubmit({...ctx(), abuse: e => void events.push(e)}, 'survey', await body(good())));
+    expect(blocked).toMatchObject({status: 429});
+    expect(blocked.message).toMatch(/paused/);
+  });
+
+  it('spam protection: the form and the site per minute; refused attempts never reach the insert', async () => {
+    const events: {kind: string; scope?: string}[] = [];
+    const c = () => ({...ctx(), abuse: (e: {kind: string}) => void events.push(e)});
+    state.settings = {...defaultFormSettings(), spamFormPerMinute: 2};
+    expect(await handleSubmit(c(), 'survey', await body(good()))).toEqual({ok: true});
+    expect(await handleSubmit(c(), 'survey', await body(good()))).toEqual({ok: true});
+    expect(await fails(handleSubmit(c(), 'survey', await body(good())))).toMatchObject({status: 429, code: 'rate_limited'});
+    expect(events).toEqual([{kind: 'limit', formId: FORM_ID, scope: 'form'}]);
+    expect(state.inserted).toHaveLength(2);
+
+    state.rate.clear();
+    state.settings = defaultFormSettings();
+    state.siteLimit = 1;
+    expect(await handleSubmit(c(), 'survey', await body(good()))).toEqual({ok: true});
+    expect(await fails(handleSubmit(c(), 'survey', await body(good())))).toMatchObject({status: 429});
+    expect(events.at(-1)).toEqual({kind: 'limit', formId: FORM_ID, scope: 'site'});
+  });
+
+  it('a render token saves ONE response: a second fill from the same page load is asked to reload', async () => {
+    const token = await renderToken(SECRET, FORM_ID, NOW - 5000, 'k');
+    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: token, submissionId: SID}))).toEqual({ok: true});
+    // The same fill again (a lost answer): success, nothing new.
+    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: token, submissionId: SID}))).toEqual({ok: true});
+    expect(state.inserted).toHaveLength(1);
+    // Another fill with the same page load (a bot replaying it): refused, nothing saved.
+    const err = await fails(handleSubmit(ctx(), 'survey', await body(good(), {renderToken: token, submissionId: 'fill-0002-abcdefghijklmnop'})));
+    expect(err).toMatchObject({status: 409, code: 'page_expired'});
+    expect(state.inserted).toHaveLength(1);
+    // A token handed to another address: the visitor's network changed, reload (answers kept).
+    const elsewhere = await renderToken(SECRET, FORM_ID, NOW - 5000, 'other-network');
+    expect(await fails(handleSubmit(ctx(), 'survey', await body(good(), {renderToken: elsewhere})))).toMatchObject({status: 409, code: 'page_expired'});
+    // The minimum time counts from THIS page load.
+    const fresh = await renderToken(SECRET, FORM_ID, NOW - 500, 'k');
+    expect(await handleSubmit(ctx(), 'survey', await body(good(), {renderToken: fresh}))).toEqual({ok: true});
+    expect(state.inserted).toHaveLength(1);
+  });
+
+  it('a capped form: refused and blocked attempts take no slot, so a flood cannot close it', async () => {
+    state.settings = {...defaultFormSettings(), responseCap: 10};
+    for (let i = 0; i < 30; i++) await handleSubmit(ctx(), 'survey', await body(good())).catch(() => undefined);
+    expect(state.inserted).toHaveLength(5);
+    expect(state.status).toBe('live');
+    expect(state.closedByCap).toBe(false);
   });
 
   it('a retried fill is answered like the first time and saved once', async () => {
@@ -538,14 +651,31 @@ describe('submit helpers', () => {
     }
   });
 
-  it('rate-limit keys: the address always, the browser when it sent its token', () => {
-    expect(submitRateKeys('ip1', FORM_ID, null)).toEqual([{key: `respond:ip1:${FORM_ID}`, limit: SUBMIT_IP_LIMIT}]);
-    expect(submitRateKeys('ip1', FORM_ID, 'h1')).toEqual([
-      {key: `respond:ip1:${FORM_ID}`, limit: SUBMIT_IP_LIMIT},
-      {key: `respond-b:h1:${FORM_ID}`, limit: SUBMIT_BROWSER_LIMIT},
-    ]);
-    expect(SUBMIT_IP_LIMIT).toBe(300);
+  it('gate keys: per address an hour and a day, the browser when it sent its token, the form, the site', () => {
+    const limits = {spamIpPerHour: 5, spamIpPerDay: 20, spamFormPerMinute: 60};
+    expect(gateKeys('ip1', FORM_ID, null, limits)).toEqual({
+      perAddress: [
+        {key: `respond-h:ip1:${FORM_ID}`, window: 3600, limit: 5},
+        {key: `respond-d:ip1:${FORM_ID}`, window: 86_400, limit: 20},
+      ],
+      perForm: {key: `respond-f:${FORM_ID}`, window: 60, limit: 60},
+      perSite: {key: 'respond-site', window: 60},
+      strike: 'strike:ip1',
+    });
+    expect(gateKeys('ip1', FORM_ID, 'h1', limits).perAddress[2]).toEqual({key: `respond-b:h1:${FORM_ID}`, window: 60, limit: SUBMIT_BROWSER_LIMIT});
     expect(SUBMIT_BROWSER_LIMIT).toBe(10);
+    expect(tokenKey(FORM_ID, 'abc')).toBe(`tok:${FORM_ID}:abc`);
+  });
+
+  it('gateRefusal: the block first, then the address, the form, the site', () => {
+    const keys = gateKeys('ip1', FORM_ID, null, {spamIpPerHour: 5, spamIpPerDay: 20, spamFormPerMinute: 60});
+    const row = {blocked_until: null, ip_over: false, counts: {}, site_limit: 300, strikes: null, found: true, password_hash: null, cap: null, responses: 0, saved: false, token_used: false};
+    expect(gateRefusal(row, keys)).toBeNull();
+    expect(gateRefusal({...row, blocked_until: new Date(NOW)}, keys)).toEqual({kind: 'blocked', until: new Date(NOW)});
+    expect(gateRefusal({...row, counts: {[`respond-h:ip1:${FORM_ID}`]: 6}, strikes: 2}, keys)).toEqual({kind: 'address', window: 3600, strikes: 2});
+    expect(gateRefusal({...row, counts: {[`respond-d:ip1:${FORM_ID}`]: 21}, strikes: 1}, keys)).toEqual({kind: 'address', window: 86_400, strikes: 1});
+    expect(gateRefusal({...row, counts: {[`respond-f:${FORM_ID}`]: 61}}, keys)).toEqual({kind: 'form'});
+    expect(gateRefusal({...row, counts: JSON.stringify({'respond-site': 301})}, keys)).toEqual({kind: 'site'});
   });
 
   const params = (extra: Partial<InsertParams> = {}): InsertParams => ({
@@ -574,7 +704,9 @@ describe('submit helpers', () => {
     expect(sql).toContain('uncapped AS (SELECT f.id FROM f WHERE NOT f.capped)');
     // A row left from a removed cap goes, so the count trigger never makes a burst queue on it.
     expect(sql).toContain('DELETE FROM form_caps WHERE form_id IN (SELECT id FROM uncapped)');
-    expect(sql).toContain('FROM uncapped AS src ON CONFLICT (form_id, submission_id) WHERE submission_id IS NOT NULL DO NOTHING');
+    expect(sql).toContain(
+      'FROM uncapped AS src WHERE NOT EXISTS (SELECT 1 FROM want WHERE want.key IS NOT NULL) OR EXISTS (SELECT 1 FROM tok) ON CONFLICT (form_id, submission_id) WHERE submission_id IS NOT NULL DO NOTHING'
+    );
     expect(sql).toContain('INSERT INTO intelform_notify_queue (response_id) SELECT id FROM ins WHERE ?::boolean');
   });
 
@@ -583,7 +715,9 @@ describe('submit helpers', () => {
     // The cap re-checked on the row's newest version (EvalPlanQual); a retry never takes a slot.
     expect(sql).toContain('UPDATE form_caps fc SET cap = f.cap FROM f WHERE fc.form_id = f.id AND f.cap IS NOT NULL AND fc.taken < f.cap AND NOT EXISTS (SELECT 1 FROM dup)');
     expect(sql).toContain('dup AS ( SELECT 1 FROM responses r WHERE r.form_id = ?::uuid AND r.submission_id = ?::text LIMIT 1 )');
-    expect(sql).toContain('FROM c AS src ON CONFLICT (form_id, submission_id) WHERE submission_id IS NOT NULL DO NOTHING');
+    expect(sql).toContain(
+      'FROM c AS src WHERE NOT EXISTS (SELECT 1 FROM want WHERE want.key IS NOT NULL) OR EXISTS (SELECT 1 FROM tok) ON CONFLICT (form_id, submission_id) WHERE submission_id IS NOT NULL DO NOTHING'
+    );
     expect(sql).toContain("UPDATE forms SET status = 'closed', updated_at = now() FROM c WHERE forms.id = c.id AND c.taken + 1 >= c.cap AND EXISTS (SELECT 1 FROM ins)");
     expect(sql).toContain('INSERT INTO intelform_notify_queue');
     // taken is the triggers' to keep: the statement never adds to it.
@@ -594,13 +728,31 @@ describe('submit helpers', () => {
     expect(init).toContain('ON CONFLICT (form_id) DO NOTHING');
   });
 
-  it('the gate: the rate-limit upsert and the form reads in one statement', () => {
-    const sql = text(gateSql(submitRateKeys('k', FORM_ID, 'h'), FORM_ID, SID));
+  it('the gate: the block list, the limits and the form reads in one statement', () => {
+    const keys = gateKeys('k', FORM_ID, 'h', {spamIpPerHour: 5, spamIpPerDay: 20, spamFormPerMinute: 60});
+    const sql = text(gateSql('k', keys, FORM_ID, SID, tokenKey(FORM_ID, 'tid')));
+    expect(sql).toContain('SELECT expires_at FROM intelform_blocked_ips WHERE ip_key = ? AND expires_at > now()');
     expect(sql).toContain('INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)');
+    // A blocked address writes nothing; the form and site keys count only an address within its limits.
+    expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM blk) AND NOT (SELECT over FROM ip_over)');
+    expect(sql).toContain('WHERE (SELECT over FROM ip_over)');
+    expect(sql).toContain("FROM (SELECT 1) AS one LEFT JOIN intelform_settings s ON s.id = 1");
     expect(sql).toContain("f.settings->>'passwordHash' AS password_hash");
     expect(sql).toContain("CASE WHEN jsonb_typeof(f.settings->'responseCap') = 'number' THEN (SELECT GREATEST(COALESCE(sum(fc.responses), 0), 0)::int FROM form_counts fc WHERE fc.form_id = f.id) ELSE 0 END AS responses");
     expect(sql).toContain('EXISTS (SELECT 1 FROM responses r WHERE r.form_id = ?::uuid AND r.submission_id = ?)');
-    expect(text(gateSql(submitRateKeys('k', FORM_ID, null), FORM_ID, null))).toContain('false AS saved');
+    expect(sql).toContain('EXISTS (SELECT 1 FROM intelform_done_markers m WHERE m.key = ? AND m.expires_at > now()) AS token_used');
+    const none = text(gateSql('k', keys, FORM_ID, null, null));
+    expect(none).toContain('false AS saved');
+    expect(none).toContain('false AS token_used');
+  });
+
+  it('the insert claims the page load and counts confirmations per address in the same statement', () => {
+    const sql = text(uncappedInsertSql(params({usedKey: tokenKey(FORM_ID, 'tid'), confirmIpKey: 'confirm-ip:k'})));
+    expect(sql).toContain('INSERT INTO intelform_done_markers (key, expires_at) SELECT want.key');
+    expect(sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM want WHERE want.key IS NOT NULL) OR EXISTS (SELECT 1 FROM tok)');
+    expect(sql).toContain('EXISTS (SELECT 1 FROM tok) AS claimed');
+    expect(sql).toContain('FROM ins, cip WHERE cip.count > ?::int');
+    expect(insertOutcome({passed: true, capped: false, id: null, submitted_at: null, closed_now: false, replay: false, claimed: false})).toEqual({kind: 'token'});
   });
 
   it('insertOutcome reads the statement row', () => {

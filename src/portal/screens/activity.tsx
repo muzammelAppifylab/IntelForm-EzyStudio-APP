@@ -60,6 +60,7 @@ const CATEGORY_TONE: Record<ActivityCategory, Tone> = {
   forms: "brand",
   responses: "success",
   settings: "neutral",
+  spam: "warning",
 };
 
 const EXPORT_KINDS: Record<string, string> = {
@@ -75,6 +76,14 @@ const SETTINGS_SECTIONS: Record<string, string> = {
   data: "Data",
   site: "Website",
   legal: "Legal pages",
+  spam: "Spam protection",
+};
+
+const CONFIRM_SKIPPED: Record<string, string> = {
+  ip: "one network asked for too many this hour",
+  form: "the form reached its hourly limit",
+  recipient: "that address already had one today",
+  site: "the site reached its daily limit",
 };
 
 const text = (value: unknown) =>
@@ -435,6 +444,45 @@ function describe(event: ActivityRow): Line {
         detail: sections.length ? sections.join(", ") : undefined,
       };
     }
+
+    // Spam protection
+    case "visitor_blocked":
+      return meta.automatic === false
+        ? { what: "Blocked a visitor’s network", icon: "ban", tone: "warning" }
+        : {
+            what: (
+              <>
+                Blocked a network that kept going over the limits of <FormName event={event} />
+              </>
+            ),
+            icon: "ban",
+            tone: "warning",
+            detail: typeof meta.strikes === "number" ? `${meta.strikes} refused responses` : undefined,
+          };
+    case "visitor_unblocked":
+      return { what: "Unblocked a visitor’s network", icon: "lock-open" };
+    case "spam_limit_reached":
+      return {
+        what: (
+          <>
+            Spam protection turned responses away from <FormName event={event} />
+          </>
+        ),
+        icon: "shield",
+        tone: "warning",
+        detail: meta.limit === "site" ? "The site’s per-minute limit" : "The form’s per-minute limit",
+      };
+    case "confirmation_skipped":
+      return {
+        what: (
+          <>
+            Skipped confirmation emails for <FormName event={event} />
+          </>
+        ),
+        icon: "mail",
+        tone: "warning",
+        detail: CONFIRM_SKIPPED[text(meta.reason) ?? ""] ?? undefined,
+      };
 
     default:
       return {

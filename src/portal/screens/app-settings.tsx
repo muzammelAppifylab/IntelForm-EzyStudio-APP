@@ -7,16 +7,18 @@ import {DataGroup} from '../intelform/settings/data';
 import {NotificationsGroup} from '../intelform/settings/delivery';
 import {BrandingGroup, GeneralGroup} from '../intelform/settings/general';
 import {SiteGroup} from '../intelform/settings/site';
+import {SpamGroup} from '../intelform/settings/spam';
 import type {AppSettingsResponse} from '../../server/intelform/settings/view';
 import {EmptyState, ErrorNote, LoadingBlock, PageHeader, Tabs} from '../ui';
 
-type TabKey = 'general' | 'branding' | 'site' | 'notifications' | 'data';
+type TabKey = 'general' | 'branding' | 'site' | 'notifications' | 'spam' | 'data';
 
 const TABS: {value: TabKey; label: string; Group: (props: {view: AppSettingsResponse}) => React.JSX.Element}[] = [
   {value: 'general', label: 'General', Group: GeneralGroup},
   {value: 'branding', label: 'Branding', Group: BrandingGroup},
   {value: 'site', label: 'Public site', Group: SiteGroup},
   {value: 'notifications', label: 'Notifications', Group: NotificationsGroup},
+  {value: 'spam', label: 'Spam protection', Group: SpamGroup},
   {value: 'data', label: 'Data', Group: DataGroup},
 ];
 

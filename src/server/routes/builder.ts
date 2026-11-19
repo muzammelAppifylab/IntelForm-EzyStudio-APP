@@ -10,7 +10,7 @@ import {
   type WebhookSendResult,
 } from '../../lib/intelform/api-builder';
 import {formDefinition} from '../../lib/intelform/form/definition';
-import {webhookSettings, type WebhookSettings} from '../../lib/intelform/form/settings';
+import {webhookSettingsInput, type WebhookSettings} from '../../lib/intelform/form/settings';
 import {config} from '../../platform/config';
 import {storageUsage} from '../../platform/files';
 import type {PrismaClient} from '../../platform/db';
@@ -32,6 +32,7 @@ import type {Viewer} from '../../platform/types';
 import {grants} from '../../platform/auth/codenames';
 import {logActivity} from '../activity';
 import {PERMISSIONS} from '../permissions';
+import {isDemoViewer} from '../demo-role';
 
 /** `can()` takes a plain viewer context; a route with a json validator has a wider one. */
 type ViewerContext = Context<{Variables: {viewer: Viewer}}>;
@@ -168,8 +169,9 @@ export const builderRoutes = new Hono()
     async c => {
       const formId = uuidOrNull(c.req.param('id'));
       if (!formId) return c.json(notFound, 404);
-      // Viewers can't edit, so they never raise the "someone else is editing" banner for others.
-      const touch = await can(c as unknown as ViewerContext, PERMISSIONS.FORM_WRITE);
+      // Viewers can't edit, so they never raise the "someone else is editing" banner for others;
+      // the read-only demo is never written down either (it sees who edits, nobody sees it).
+      const touch = (await can(c as unknown as ViewerContext, PERMISSIONS.FORM_WRITE)) && !(await isDemoViewer(c));
       const answer = await pollPresence(c.var.db, {formId, tabId: c.req.valid('json').tabId, userId: c.var.viewer.id!, touch});
       if (!answer) return c.json(notFound, 404);
       return c.json<PresenceResponse>(answer);
@@ -200,7 +202,7 @@ export const builderRoutes = new Hono()
   })
   .put(
     '/forms/:id/webhook',
-    zodJson(webhookSettings.partial().strict(), 'Check the webhook settings.'),
+    zodJson(webhookSettingsInput.partial().strict(), 'Check the webhook settings.'),
     withViewer,
     requireAuth,
     requirePermission(PERMISSIONS.FORM_WRITE), requirePermission(PERMISSIONS.RESPONSE_READ),

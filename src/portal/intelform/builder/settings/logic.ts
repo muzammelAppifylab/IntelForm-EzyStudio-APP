@@ -1,5 +1,5 @@
 import {isSafeUrl} from '../../../../lib/intelform/form/safe-url';
-import {webhookHeader, type FormSettingsPatch} from '../../../../lib/intelform/form/settings';
+import {webhookHeaderInput, type FormSettingsPatch} from '../../../../lib/intelform/form/settings';
 import type {FieldMessages} from '../../lib/api';
 
 /**
@@ -57,14 +57,14 @@ export interface WebhookHeader {
 /** The message for one header row, or null (an empty row is fine: it is dropped on save). */
 export function headerError(h: WebhookHeader): string | null {
   if (!h.key && !h.value) return null;
-  const r = webhookHeader.safeParse(h);
+  const r = webhookHeaderInput.safeParse(h);
   return r.success ? null : (r.error.issues[0]?.message ?? 'Check this header');
 }
 
 /** The headers to save, or null while any row is wrong (nothing is saved then). */
 export function headersToSave(rows: WebhookHeader[]): WebhookHeader[] | null {
   const kept = rows.filter(h => h.key.trim());
-  if (!kept.every(h => webhookHeader.safeParse(h).success)) return null;
+  if (!kept.every(h => webhookHeaderInput.safeParse(h).success)) return null;
   return kept.map(h => ({key: h.key.trim(), value: h.value}));
 }
 
