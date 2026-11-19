@@ -128,6 +128,8 @@ export function Contacts() {
   const strip = overview.data?.strip;
   const facets = overview.data?.facets;
   const exporter = useExport();
+  // Starting an export needs its own permission (the store's read-only demo has none).
+  const canExport = useCan('exportResponses');
   const data = list.data;
   const rows = data?.contacts;
   const settled = !!data && !list.isPlaceholderData;
@@ -321,6 +323,7 @@ export function Contacts() {
               icon="download"
               pending={exporter.pending}
               pendingLabel="Exporting…"
+              disabled={!canExport}
               onClick={() => void exporter.run({kind: 'contacts', query: contactsExportQuery(state)})}>
               Export CSV
             </Button>
@@ -484,6 +487,7 @@ export function Contacts() {
                 icon="download"
                 pending={exporter.pending}
                 pendingLabel="Exporting…"
+                disabled={!canExport}
                 onClick={() => exportKeys([...selected.keys()])}>
                 Export CSV
               </Button>

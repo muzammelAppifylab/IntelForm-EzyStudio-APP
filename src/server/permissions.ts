@@ -73,6 +73,19 @@ export const CATALOGUE = definePermissions({
     ability: 'viewResponses',
     roles: ['admin', 'editor', 'viewer'],
   },
+  /**
+   * Start an export (a responses CSV, a contacts CSV, every response as a ZIP): a write, because it
+   * starts a background job and stores a file. Whoever could export before (they read responses)
+   * gets it once, when this entry reaches the database; the store's read-only demo role never does.
+   */
+  RESPONSE_EXPORT: {
+    codename: 'site:response:export',
+    title: 'Export responses and contacts',
+    description: 'Download responses and contacts as CSV or ZIP files.',
+    group: 'Responses',
+    ability: 'exportResponses',
+    roles: ['admin', 'editor', 'viewer'],
+  },
   /** Delete single responses or many at once. */
   RESPONSE_DELETE: {
     codename: 'site:response:delete',
