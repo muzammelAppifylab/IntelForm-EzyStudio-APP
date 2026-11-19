@@ -6,66 +6,68 @@ import {Prisma, type PrismaClient} from '../../../generated/prisma/client';
  * (the events route, same) never queue on one row. Deletes subtract from shard 0, so a shard may
  * be negative; the SUM over a form's shards is exact.
  *
- * `forms.response_count`, `starts_total` and `last_response_at` are a COPY, refreshed every
- * minute by `syncFormCounts` (the every-minute job). Read the copy where a minute stale is fine
+ * `forms.response_count`, `starts_total` and `last_response_at` are a COPY, refreshed by
+ * `syncFormCounts` for the forms marked dirty: by the notify job a submit wakes (about a minute
+ * after it) and by the 15-minute run (start beacons, deletes). Read the copy where a few minutes stale is fine
  * (lists, sorts, the dashboard strip); read the exact sum with the helpers below, inside the
  * caller's own query, where a person compares the number right after a change (the responses
  * table and Summary totals, the form header, close / reopen against a response cap).
  */
 
-/** Forms refreshed per run at most; a bigger backlog finishes on the next minutes' runs. */
+/** Forms refreshed per run at most; a bigger backlog finishes on the next runs. */
 export const SYNC_BATCH = 1000;
+/**
+ * A minute's marker is dropped once the minute ended this long ago (a submit that began in the
+ * minute has committed by then), so a submit's change is never lost between a run and its delete.
+ */
+export const MARKER_SETTLE = "interval '90 seconds'";
 
 /**
- * Copies the exact counters onto `forms` for every form whose copy differs (IS DISTINCT FROM),
- * so an idle site reads a few hundred small rows and writes nothing. ONE statement, at most
- * SYNC_BATCH forms written.
+ * Copies the exact counters onto `forms` for the forms marked dirty (`intelform_dirty_forms`,
+ * kind `c`: the responses insert and delete triggers and the start beacon add one row per form
+ * and minute), never for every form: an idle site reads one empty index range and writes
+ * nothing. ONE statement: up to SYNC_BATCH marked forms, their copies written only where they
+ * differ (IS DISTINCT FROM), and their markers of minutes that ended MARKER_SETTLE ago deleted
+ * (a marker of the current minute stays for the next run).
  *
  * last_response_at is the newest response that still exists (one probe of the responses
  * (form_id, submitted_at DESC) index), not the shards' max: deletes never lower the shards'
- * last_response_at, but a delete changes the count, so the form is picked up and its
- * last_response_at moves back here (the delete paths used to do that themselves). A form whose
- * count is unchanged but got a newer response (deletes and submits that cancel out) is picked up
- * by the shards' max being past the copy. The probe runs only for those forms; a form whose
- * shards' max stays past the copy after a delete is probed each run but written only on change.
- *
- * Shards are never folded: a form has at most 16 rows, and folding would race the triggers.
- * Returns how many forms were updated.
+ * last_response_at, but a delete marks the form, so its last_response_at moves back here.
+ * Markers of deleted forms are dropped too. Returns how many forms were updated.
  */
-export async function syncFormCounts(db: Pick<PrismaClient, '$executeRaw'>): Promise<number> {
-  return db.$executeRaw`
-    WITH sums AS (
-      SELECT form_id, sum(responses)::int AS responses, sum(starts)::int AS starts, max(last_response_at) AS last_at
-      FROM form_counts GROUP BY form_id
+export async function syncFormCounts(db: Pick<PrismaClient, '$queryRaw'>): Promise<number> {
+  const rows = await db.$queryRaw<{updated: number}[]>`
+    WITH marked AS (
+      SELECT DISTINCT form_id FROM intelform_dirty_forms WHERE kind = 'c'
+      ORDER BY form_id LIMIT ${SYNC_BATCH}
     ),
-    candidates AS (
-      SELECT f.id, f.last_response_at AS old_last,
-        GREATEST(s.responses, 0) AS responses, GREATEST(s.starts, 0) AS starts,
-        (f.response_count IS DISTINCT FROM GREATEST(s.responses, 0)) AS count_moved,
-        (f.starts_total IS DISTINCT FROM GREATEST(s.starts, 0)) AS starts_moved,
-        (s.last_at > COALESCE(f.last_response_at, '-infinity'::timestamptz)) AS maybe_newer
-      FROM sums s JOIN forms f ON f.id = s.form_id
+    sums AS (
+      SELECT m.form_id, GREATEST(coalesce(sum(fc.responses), 0), 0)::int AS responses,
+        GREATEST(coalesce(sum(fc.starts), 0), 0)::int AS starts
+      FROM marked m LEFT JOIN form_counts fc ON fc.form_id = m.form_id
+      GROUP BY m.form_id
     ),
     changed AS (
-      SELECT c.id, c.responses, c.starts, l.last_at
-      FROM candidates c
-      CROSS JOIN LATERAL (
-        -- The index probe runs only for a form whose responses changed (CASE evaluates lazily).
-        SELECT CASE WHEN c.count_moved OR c.maybe_newer
-          THEN (SELECT r.submitted_at FROM responses r WHERE r.form_id = c.id ORDER BY r.submitted_at DESC LIMIT 1)
-          ELSE c.old_last END AS last_at
-      ) l
-      WHERE c.count_moved OR c.starts_moved OR l.last_at IS DISTINCT FROM c.old_last
-      ORDER BY c.id
-      LIMIT ${SYNC_BATCH}
+      SELECT f.id, s.responses, s.starts,
+        (SELECT r.submitted_at FROM responses r WHERE r.form_id = f.id ORDER BY r.submitted_at DESC LIMIT 1) AS last_at,
+        f.response_count, f.starts_total, f.last_response_at
+      FROM sums s JOIN forms f ON f.id = s.form_id
+    ),
+    upd AS (
+      UPDATE forms f SET response_count = c.responses, starts_total = c.starts, last_response_at = c.last_at
+      FROM changed c
+      WHERE f.id = c.id AND (c.response_count IS DISTINCT FROM c.responses OR c.starts_total IS DISTINCT FROM c.starts
+        OR c.last_response_at IS DISTINCT FROM c.last_at)
+      RETURNING 1
+    ),
+    cleared AS (
+      DELETE FROM intelform_dirty_forms d USING marked m
+      WHERE d.kind = 'c' AND d.form_id = m.form_id AND d.bucket < now() - interval '1 minute' - ${Prisma.raw(MARKER_SETTLE)}
+      RETURNING 1
     )
-    UPDATE forms f SET
-      response_count = c.responses,
-      starts_total = c.starts,
-      last_response_at = c.last_at
-    FROM changed c
-    WHERE f.id = c.id
+    SELECT (SELECT count(*)::int FROM upd) AS updated, (SELECT count(*)::int FROM cleared) AS cleared
   `;
+  return Number(rows[0]?.updated ?? 0);
 }
 
 /**

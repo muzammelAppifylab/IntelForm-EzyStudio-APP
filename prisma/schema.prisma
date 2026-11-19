@@ -592,12 +592,9 @@ model Response {
   webhookDeliveries WebhookDelivery[]
   notifyQueue       IntelformNotifyQueue?
 
+  /// Also the scan window of the table's unindexed sorts (answers, completion time, device,
+  /// browser, country): every index here costs every submit, so those have none of their own.
   @@index([formId, submittedAt(sort: Desc), id(sort: Desc)])
-  /// Table sorts by completion time, device, browser and country (keyset, NULLS LAST in SQL).
-  @@index([formId, durationMs, id])
-  @@index([formId, device, id])
-  @@index([formId, browser, id])
-  @@index([formId, country, id])
   @@index([formVersionId])
   @@index([submittedAt])
   /// Substring search (ILIKE) on search_text. Needs pg_trgm (created in the migration).
@@ -763,10 +760,17 @@ model IntelformExport {
   @@map("intelform_exports")
 }
 
+/// One file of an export, kept in the platform's file storage (private): only its id is here.
+/// Deleting a row puts its file in intelform_file_trash (a trigger), so the 24-hour sweep, a
+/// failed export and a deleted form all remove the stored file too.
 model IntelformExportPart {
-  exportId String @map("export_id") @db.Uuid
+  exportId String   @map("export_id") @db.Uuid
   seq      Int
-  data     Bytes
+  fileId   String   @map("file_id") @db.VarChar(64)
+  size     Int      @default(0)
+  /// False from the upload grant until the platform confirmed the stored file.
+  ready    Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   export IntelformExport @relation(fields: [exportId], references: [id], onDelete: Cascade)
 
@@ -1050,4 +1054,35 @@ model IntelformDoneMarker {
 
   @@index([expiresAt])
   @@map("intelform_done_markers")
+}
+
+/// Forms whose counters or Summary rollups may be out of date, one row per kind, minute and
+/// form (`c` counts, `s` responses for the Summary, `e` funnel events for the Summary). Written
+/// by the responses triggers and the events beacon with ON CONFLICT DO NOTHING (no row lock on a
+/// busy form); the jobs read only these forms and delete the markers of closed minutes they did.
+/// No foreign key: a submit pays no extra check, and markers of deleted forms are dropped by the jobs.
+model IntelformDirtyForm {
+  kind   String   @db.Char(1)
+  bucket DateTime @db.Timestamptz(0)
+  formId String   @map("form_id") @db.Uuid
+
+  @@id([kind, bucket, formId])
+  @@map("intelform_dirty_forms")
+}
+
+/// Contact rollups still to apply (the insert trigger writes one row per new response with a
+/// contact; intelform_contacts_apply folds them into `contacts` in batches). A new row per
+/// response, so a burst from one address never waits on that contact's row lock.
+model IntelformContactQueue {
+  id          BigInt   @id @default(autoincrement())
+  key         String   @db.VarChar(260)
+  formId      String   @map("form_id") @db.Uuid
+  submittedAt DateTime @map("submitted_at") @db.Timestamptz(3)
+  email       String?  @db.VarChar(254)
+  name        String?  @db.VarChar(200)
+  phone       String?  @db.VarChar(20)
+  country     String?  @db.VarChar(2)
+
+  @@index([key, id])
+  @@map("intelform_contact_queue")
 }

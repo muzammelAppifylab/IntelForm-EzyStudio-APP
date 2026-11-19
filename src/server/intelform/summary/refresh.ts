@@ -5,8 +5,8 @@ import {getAppSettings} from '../settings/settings';
 import {fieldClasses, summaryZone} from './math';
 
 /**
- * Keeps form_summary_days up to date, OFF the submit path (the every-minute job calls
- * `refreshSummaryRollups`). Per form, responses are added up in (submitted_at, id) order from
+ * Keeps form_summary_days up to date, OFF the submit path (the 15-minute job calls
+ * `refreshSummaryRollups` for the forms marked dirty). Per form, responses are added up in (submitted_at, id) order from
  * the form's watermark, a bounded batch per statement, so a form with a million responses is
  * backfilled from its oldest response over a few runs and then only adds what came in since.
  *
@@ -26,7 +26,7 @@ const sql = Prisma.sql;
 
 /** Responses newer than this are left to the live read. */
 const LAG = "interval '2 minutes'";
-/** Forms looked at per run (least recently refreshed first). */
+/** Marked forms looked at per run (oldest marker first). */
 const FORMS_PER_RUN = 25;
 /** Answer values (responses × fields) per batch statement: about a second of work. */
 const VALUES_PER_BATCH = 300_000;
@@ -60,41 +60,70 @@ export function batchSize(fieldCount: number): number {
 }
 
 /**
+ * Marked minutes old enough to add up: responses older than LAG (and a submit that began in the
+ * minute has committed), funnel events in a 15-minute bucket the fold can take (eventCutoff).
+ */
+const RESPONSES_SETTLED = "interval '4 minutes'";
+const EVENTS_SETTLED = "interval '37 minutes'";
+
+/**
  * One run: up to `budgetMs` of work (a step already started may finish a little after it).
- * Signature kept stable for the every-minute job (src/server/background.ts).
+ * Only forms marked in intelform_dirty_forms (`s`: responses came in, `e`: funnel events; the
+ * responses trigger and the events beacon add them, settings mark every form when the app's time
+ * zone changes) are looked at, never every form: an idle site costs one empty index read. A form
+ * whose work is done loses the markers this run covered; one that still has work keeps them.
+ * Signature kept stable for the scheduled job (src/server/background.ts).
  */
 export async function refreshSummaryRollups(db: PrismaClient, opts: {budgetMs: number}): Promise<RefreshResult> {
   const started = Date.now();
   const left = () => opts.budgetMs - (Date.now() - started);
+  const marked = await db.$queryRaw<{id: string}[]>`
+    SELECT form_id::text AS id FROM intelform_dirty_forms
+    WHERE (kind = 's' AND bucket < now() - ${Prisma.raw(RESPONSES_SETTLED)}) OR (kind = 'e' AND bucket < now() - ${Prisma.raw(EVENTS_SETTLED)})
+    GROUP BY form_id ORDER BY min(bucket), form_id
+    LIMIT ${FORMS_PER_RUN}
+  `;
+  if (!marked.length) return {rows: 0, more: false};
+  const ids = marked.map(m => m.id);
   const tz = summaryZone((await getAppSettings(db)).timezone);
   const todo = await db.$queryRaw<FormTodo[]>`
     SELECT f.id::text AS id, f.published_version_id::text AS pv, s.tz, s.gen, s.fields_version::text AS fv,
       (s.fields <> '{}'::jsonb) AS fields_set,
       coalesce(jsonb_array_length(s.fields->'all'), 0)::int AS fields_n
     FROM forms f LEFT JOIN form_summary_state s ON s.form_id = f.id
-    WHERE s.form_id IS NULL OR s.tz <> ${tz}
+    WHERE f.id = ANY(${ids}::uuid[]) AND (s.form_id IS NULL OR s.tz <> ${tz}
       OR EXISTS (SELECT 1 FROM responses r WHERE r.form_id = f.id
         AND r.submitted_at >= coalesce(s.wm_at, '-infinity'::timestamptz) AND r.submitted_at < now() - ${Prisma.raw(LAG)}
         AND (s.wm_at IS NULL OR r.submitted_at > s.wm_at OR r.id > s.wm_id))
       OR EXISTS (SELECT 1 FROM form_event_counts e WHERE e.form_id = f.id
         AND e.bucket >= coalesce(s.ev_wm, '-infinity'::timestamptz) AND e.bucket < ${eventCutoff()})
-      OR EXISTS (SELECT 1 FROM form_summary_days d WHERE d.form_id = f.id AND d.gen < s.gen)
+      OR EXISTS (SELECT 1 FROM form_summary_days d WHERE d.form_id = f.id AND d.gen < s.gen))
     ORDER BY s.updated_at ASC NULLS FIRST, f.id
-    LIMIT ${FORMS_PER_RUN}
   `;
   let rows = 0;
-  let more = todo.length === FORMS_PER_RUN;
+  let more = marked.length === FORMS_PER_RUN;
+  const unfinished = new Set<string>();
   // Round robin: one step per form in turn, so one big backfill never starves the others.
   const queue = todo.map(f => ({...f, events: true}));
   while (queue.length) {
     if (left() <= 0) {
       more = true;
+      for (const f of queue) unfinished.add(f.id);
       break;
     }
     const form = queue.shift()!;
     const step = await stepForm(db, form, tz);
     rows += step.rows;
     if (step.more) queue.push({...form, ...step.state, events: false});
+  }
+  // Done forms (and marked forms with nothing to do, or deleted): their settled markers go.
+  const done = ids.filter(id => !unfinished.has(id));
+  if (done.length) {
+    await db.$executeRaw`
+      DELETE FROM intelform_dirty_forms
+      WHERE form_id = ANY(${done}::uuid[])
+        AND ((kind = 's' AND bucket < now() - ${Prisma.raw(RESPONSES_SETTLED)}) OR (kind = 'e' AND bucket < now() - ${Prisma.raw(EVENTS_SETTLED)}))
+    `;
   }
   return {rows, more};
 }

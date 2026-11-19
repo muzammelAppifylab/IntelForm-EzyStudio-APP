@@ -12,19 +12,18 @@ import {retryAfter, tooMany} from './rate-limit';
  * rollup (form_event_counts) and, for a start, the form's all-time starts (form_counts) are bumped
  * in the same statement only for rows actually inserted, each in ONE random shard of 16
  * (src/server/intelform/forms/counts.ts) so a burst never queues on one row; forms.starts_total
- * is a copy refreshed every minute by syncFormCounts. ONE round trip per beacon: one statement
- * counts the IP's hit, finds the form by slug, decides whether it is open (live, close date,
- * response cap against the exact count), counts the per IP and form hit and writes the event
- * under both limits. Completions are the responses
- * themselves (form_counts via the responses triggers, and responses.submitted_at), so they need
- * no event.
+ * is a copy refreshed by syncFormCounts for the forms marked dirty. ONE statement per beacon:
+ * the IP's window, the form by slug, whether it is open (live, close date, response cap against
+ * the exact count), then the event, its rollup, the start count and the dirty markers (`e` for
+ * the Summary, `c` for a start; ON CONFLICT DO NOTHING, so no write when the minute's marker is
+ * there). Completions are the responses themselves (form_counts via the responses triggers, and
+ * responses.submitted_at), so they need no event.
  *
- * The per-IP limits are generous ceilings, not a cap on real traffic: a school or office behind
- * one shared address sends a view and a start per person, and counting fewer would undercount
- * the funnel. They only stop one machine flooding the tables.
+ * One rate-limit window per IP per minute, across forms (the per IP and form window was a second
+ * row written on every beacon and is gone): a generous ceiling, not a cap on real traffic. A
+ * school or office behind one shared address sends a view and a start per person, and counting
+ * fewer would undercount the funnel. It only stops one machine flooding the tables.
  */
-/** Events per IP per form per minute (a whole class or office behind one NAT opening one form). */
-export const EVENTS_RATE_LIMIT = 600;
 /** Events per IP per minute across all forms (a page sends a view and a start per form). */
 export const EVENTS_IP_RATE_LIMIT = 1200;
 
@@ -52,10 +51,9 @@ export async function handleEvent(db: Pick<PrismaClient, '$queryRaw'>, slug: str
   const clean = slug.toLowerCase();
   if (!SLUG_RE.test(clean)) throw notFound();
   // ONE statement: the per IP window (never a key per attacker-chosen slug); the form (drafts,
-  // unknown and old slugs: 404) only under it; the per IP and form window; then, on an open form
-  // under both, the event, its 15-minute rollup and, for a start, the form's all-time starts,
-  // both in one random shard.
-  const rows = await db.$queryRaw<{ip_count: number; found: boolean; count: number | null}[]>`
+  // unknown and old slugs: 404) only under it; then, on an open form, the event, its 15-minute
+  // rollup and, for a start, the form's all-time starts, both in one random shard, and the markers.
+  const rows = await db.$queryRaw<{ip_count: number; found: boolean}[]>`
     WITH ipl AS (
       INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
       VALUES (${`events:ip:${ipKey}`}, date_bin(make_interval(secs => 60), now(), 'epoch'), 60, 1)
@@ -68,17 +66,10 @@ export async function handleEvent(db: Pick<PrismaClient, '$queryRaw'>, slug: str
       WHERE f.slug = ${clean} AND f.published_version_id IS NOT NULL AND f.status <> 'draft'
         AND (SELECT count FROM ipl) <= ${EVENTS_IP_RATE_LIMIT}::int
     ),
-    rl AS (
-      INSERT INTO intelform_rate_limits (key, window_start, window_seconds, count)
-      SELECT ${`events:${ipKey}:`} || f.id::text, date_bin(make_interval(secs => 60), now(), 'epoch'), 60, 1
-      FROM f
-      ON CONFLICT (key, window_start) DO UPDATE SET count = intelform_rate_limits.count + 1
-      RETURNING count
-    ),
     ins AS (
       INSERT INTO form_events (form_id, type, session_token)
       SELECT f.id, ${type}, ${session}
-      FROM f WHERE f.open AND (SELECT count FROM rl) <= ${EVENTS_RATE_LIMIT}::int
+      FROM f WHERE f.open
       ON CONFLICT DO NOTHING
       RETURNING form_id, type, created_at
     ),
@@ -98,12 +89,18 @@ export async function handleEvent(db: Pick<PrismaClient, '$queryRaw'>, slug: str
       SELECT ins.form_id, s.shard, 1 FROM ins, s WHERE ins.type = 'start'
       ON CONFLICT (form_id, shard) DO UPDATE SET starts = fc.starts + 1
       RETURNING 1
+    ),
+    marked AS (
+      INSERT INTO intelform_dirty_forms (kind, bucket, form_id)
+      SELECT k.kind, date_trunc('minute', now()), ins.form_id
+      FROM ins CROSS JOIN LATERAL (SELECT 'e' AS kind UNION ALL SELECT 'c' WHERE ins.type = 'start') k
+      ON CONFLICT DO NOTHING
+      RETURNING 1
     )
-    SELECT (SELECT count FROM ipl)::int AS ip_count, EXISTS (SELECT 1 FROM f) AS found, (SELECT count FROM rl)::int AS count,
-      (SELECT count(*) FROM counted) + (SELECT count(*) FROM started) AS written
+    SELECT (SELECT count FROM ipl)::int AS ip_count, EXISTS (SELECT 1 FROM f) AS found,
+      (SELECT count(*) FROM counted) + (SELECT count(*) FROM started) + (SELECT count(*) FROM marked) AS written
   `;
   const row = rows[0];
   if (Number(row?.ip_count ?? 0) > EVENTS_IP_RATE_LIMIT) throw tooMany(retryAfter(60));
   if (!row?.found) throw notFound();
-  if (Number(row.count ?? 0) > EVENTS_RATE_LIMIT) throw tooMany(retryAfter(60));
 }

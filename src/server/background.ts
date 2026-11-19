@@ -12,6 +12,8 @@ import { clearSummaryCache } from './intelform/responses/summary'
 import { refreshSummaryRollups } from './intelform/summary'
 import { clearContactsOverview } from './intelform/contacts/query'
 import { syncFormCounts } from './intelform/forms/counts'
+import { applyContactQueue } from './intelform/contacts/apply'
+import { NOTIFY_LIST, wakeNotifyAt } from './intelform/notify/wake'
 import { foldEventCounts, runSteps, sweepFormEvents, sweepResponseHours, type Step } from './intelform/housekeeping'
 
 /**
@@ -27,11 +29,16 @@ import { foldEventCounts, runSteps, sweepFormEvents, sweepResponseHours, type St
  *
  * IntelForm's lists (every run stays inside the 60 s a run has; every sweep is on an index range,
  * in short statements, with its own time budget: ./intelform/housekeeping.ts):
- *   intelform-every-minute     every minute: the forms list's counts, the Summary rollups, then
- *                              intelform_notify_queue (team notification, respondent confirmation,
- *                              webhook) and ended rate-limit windows. ONE scheduled job a minute
- *                              however many responses arrive; a backlog adds up to 3 keyed
- *                              continuations a minute (the platform takes 10 new jobs a minute)
+ *   intelform-notify           woken by submits, never on a timetable: ONE keyed job a minute
+ *                              however many responses arrive (notify/wake.ts), two minutes on. It
+ *                              folds queued contacts, refreshes the counters of forms that got
+ *                              responses, drains intelform_notify_queue (team notification,
+ *                              respondent confirmation, webhook) and sweeps ended rate-limit
+ *                              windows; a backlog adds up to 3 keyed continuations a minute (the
+ *                              platform takes 10 new jobs a minute), a retry wakes it for its minute
+ *   intelform-quarter          every 15 minutes: one statement says what waits (an idle site stops
+ *                              there); the Summary rollups and counters of marked forms, exports and
+ *                              notifications whose send was refused, queued contacts
  *   intelform-response-notify  older per-response jobs still waiting on the live site (none sent now)
  *   intelform-webhook-deliver  older webhook retry jobs still waiting (none sent now)
  *   intelform-webhooks         the builder's "Send test" / "Resend" (one attempt, logged)
@@ -73,63 +80,69 @@ function stepOf(data: unknown, name = 'step'): number {
 }
 
 // ---------------------------------------------------------------------------
-// Every minute
+// The notify job (woken by submits) and the 15-minute run
 // ---------------------------------------------------------------------------
 
-/** What one every-minute run may spend (a run has 60 s). */
-export const EVERY_MINUTE_BUDGET_MS = 50_000
-/** The Summary rollups' share, before the notifications. */
-export const ROLLUPS_BUDGET_MS = 8_000
+/** What one notify run may spend (a run has 60 s). */
+export const NOTIFY_RUN_BUDGET_MS = 50_000
+/** The contacts rollup's share, before the notifications. */
+export const CONTACTS_BUDGET_MS = 5_000
 /** Ended rate-limit windows: a minute's worth is a few thousand rows. */
 export const MINUTE_SWEEP_BUDGET_MS = 3_000
 /** The drain always gets at least this. */
 const MIN_DRAIN_MS = 10_000
 /**
- * Extra runs a minute while the queue has a backlog: keyed `every-minute-<minute>-<k>`, so never
- * more than this many a minute, whatever runs at once. With retention's one and the file
- * cleanup's one, the site stays inside the platform's 10 added jobs a minute.
+ * Extra runs a minute while the queue has a backlog: keyed `notify-<minute>-<k>`, so never
+ * more than this many a minute, whatever runs at once. With the submit's one, retention's one and
+ * the file cleanup's one, the site stays inside the platform's 10 added jobs a minute.
  */
 export const MAX_MINUTE_CONTINUATIONS = 3
+/** The 15-minute run's Summary share. */
+export const ROLLUPS_BUDGET_MS = 20_000
 
-export interface EveryMinuteDeps {
+export interface NotifyRunDeps {
   now?: () => number
+  contacts?: typeof applyContactQueue
   sync?: typeof syncFormCounts
-  rollups?: typeof refreshSummaryRollups
-  exports?: typeof resendPendingExports
   drain?: typeof drainNotifyQueue
   sweep?: typeof sweepRateLimits
   send?: typeof sendKeyed
+  /** When the next queued retry is due (ms), or null: none queued. */
+  nextDue?: (client: PrismaClient) => Promise<number | null>
+  wakeAt?: typeof wakeNotifyAt
+}
+
+/** The earliest `next_at` in the notify queue (its index), or null when it is empty. */
+async function nextNotifyDue(client: PrismaClient): Promise<number | null> {
+  const [row] = await client.$queryRaw<{at: Date | null}[]>`SELECT min(next_at) AS at FROM intelform_notify_queue`
+  return row?.at ? new Date(row.at).getTime() : null
 }
 
 /**
- * One every-minute run. The scheduled run (k = 0) refreshes the forms list's counts and the Summary
- * rollups, each in its own try/catch so neither skips the notifications; every run then drains the
- * notify queue with the rest of the budget. When the drain says more, the next continuation is
- * sent (k + 1 ≤ MAX_MINUTE_CONTINUATIONS). Continuations only drain: the list runs up to 5 at
- * once, and the queue's claims (FOR UPDATE SKIP LOCKED) keep them apart.
+ * One notify run, woken by the submits of a minute (`wakeNotifyJob`, ./intelform/notify/wake.ts),
+ * never on a timetable: an idle site runs none. The first run of a minute (k = 0) folds the queued
+ * contacts into `contacts` and refreshes the counters of the forms that got responses, each in its
+ * own try/catch so neither skips the notifications; every run then drains the notify queue with
+ * the rest of the budget. When the drain says more, the next continuation is sent
+ * (k + 1 ≤ MAX_MINUTE_CONTINUATIONS; they only drain, and the queue's claims keep them apart).
+ * When it is done but a failed response waits for its back-off, the job is woken for that minute.
  */
-export async function everyMinute(client: PrismaClient, data: unknown, deps: EveryMinuteDeps = {}): Promise<{ k: number; continued: boolean }> {
+export async function notifyRun(client: PrismaClient, data: unknown, deps: NotifyRunDeps = {}): Promise<{ k: number; continued: boolean; woke: boolean }> {
   const now = deps.now ?? Date.now
   const started = now()
-  const left = () => EVERY_MINUTE_BUDGET_MS - (now() - started)
+  const left = () => NOTIFY_RUN_BUDGET_MS - (now() - started)
   const k = Math.min(stepOf(data, 'k'), MAX_MINUTE_CONTINUATIONS)
 
   if (k === 0) {
     try {
+      await (deps.contacts ?? applyContactQueue)(client, { budgetMs: CONTACTS_BUDGET_MS, now })
+    } catch (err) {
+      console.error(`[intelform] contacts not rolled up (${err instanceof Error ? err.name : 'error'})`)
+    }
+    try {
       await (deps.sync ?? syncFormCounts)(client)
     } catch (err) {
       console.error(`[intelform] form counts not refreshed (${err instanceof Error ? err.name : 'error'})`)
-    }
-    // Exports whose next part's job couldn't be sent (agent C1's resend).
-    try {
-      await (deps.exports ?? resendPendingExports)(client, jobRequestUrl())
-    } catch (err) {
-      console.error(`[intelform] pending exports not resent (${err instanceof Error ? err.name : 'error'})`)
-    }
-    try {
-      await (deps.rollups ?? refreshSummaryRollups)(client, { budgetMs: Math.max(1_000, Math.min(ROLLUPS_BUDGET_MS, left() - MIN_DRAIN_MS)) })
-    } catch (err) {
-      console.error(`[intelform] summary rollups not refreshed (${err instanceof Error ? err.name : 'error'})`)
     }
   }
   // The drain's budget counts from the start of the run, so the steps before never push it past
@@ -144,19 +157,86 @@ export async function everyMinute(client: PrismaClient, data: unknown, deps: Eve
     }
   }
   let continued = false
+  let woke = false
   if (drained.more && k < MAX_MINUTE_CONTINUATIONS) {
     const next = k + 1
-    continued = await (deps.send ?? sendKeyed)('intelform-every-minute', { k: next }, {
-      key: `every-minute-${minuteOf(now())}-${next}`,
+    continued = await (deps.send ?? sendKeyed)(NOTIFY_LIST, { k: next }, {
+      key: `notify-${minuteOf(now())}-${next}`,
       label: `IntelForm: catch up on notifications, part ${next + 1}`,
     })
   }
-  return { k, continued }
+  if (!continued) {
+    // Left in the queue (a retry after its back-off, or a backlog past this minute's runs): the
+    // job for that minute. One indexed read; the 15-minute run is the safety net.
+    const due = await (deps.nextDue ?? nextNotifyDue)(client).catch(() => null)
+    if (due !== null) woke = await (deps.wakeAt ?? wakeNotifyAt)(jobRequestUrl(), due, now())
+  }
+  return { k, continued, woke }
+}
+
+export interface QuarterDeps {
+  now?: () => number
+  contacts?: typeof applyContactQueue
+  sync?: typeof syncFormCounts
+  exports?: typeof resendPendingExports
+  rollups?: typeof refreshSummaryRollups
+  drain?: typeof drainNotifyQueue
+}
+
+interface QuarterTodo {
+  contacts: boolean
+  counts: boolean
+  summary: boolean
+  exports: boolean
+  notify: boolean
+}
+
+/** What the 15-minute run has to do: ONE statement of index probes (an idle site stops here). */
+export async function quarterTodo(client: Pick<PrismaClient, '$queryRaw'>): Promise<QuarterTodo> {
+  const [row] = await client.$queryRaw<QuarterTodo[]>`
+    SELECT
+      EXISTS (SELECT 1 FROM intelform_contact_queue) AS contacts,
+      EXISTS (SELECT 1 FROM intelform_dirty_forms WHERE kind = 'c') AS counts,
+      EXISTS (SELECT 1 FROM intelform_dirty_forms WHERE kind IN ('s', 'e')) AS summary,
+      EXISTS (SELECT 1 FROM intelform_exports WHERE status = 'running' AND send_pending) AS exports,
+      EXISTS (SELECT 1 FROM intelform_notify_queue WHERE next_at <= now()) AS notify
+  `
+  return row ?? { contacts: false, counts: false, summary: false, exports: false, notify: false }
+}
+
+/**
+ * Every 15 minutes (`intelform-quarter`): the work no submit wakes, and a safety net for what a
+ * refused send left. One statement says what is waiting; each step runs only when it has work,
+ * each in its own try/catch: the Summary rollups of marked forms (responses older than a few
+ * minutes, funnel events), the counters of forms that only got starts or deletes, exports whose
+ * next part couldn't be sent, notifications whose wake-up was refused, queued contacts.
+ */
+export async function quarterRun(client: PrismaClient, deps: QuarterDeps = {}): Promise<QuarterTodo> {
+  const now = deps.now ?? Date.now
+  const started = now()
+  const left = () => NOTIFY_RUN_BUDGET_MS - (now() - started)
+  const todo = await quarterTodo(client)
+  const step = async (name: string, run: () => Promise<unknown>) => {
+    try {
+      await run()
+    } catch (err) {
+      console.error(`[intelform] ${name} not done (${err instanceof Error ? err.name : 'error'})`)
+    }
+  }
+  if (todo.contacts) await step('contacts rollup', () => (deps.contacts ?? applyContactQueue)(client, { budgetMs: CONTACTS_BUDGET_MS, now }))
+  if (todo.counts) await step('form counts', () => (deps.sync ?? syncFormCounts)(client))
+  if (todo.exports) await step('pending exports', () => (deps.exports ?? resendPendingExports)(client, jobRequestUrl()))
+  if (todo.notify) await step('notify drain', () => (deps.drain ?? drainNotifyQueue)(client, jobRequestUrl(), { budgetMs: Math.max(MIN_DRAIN_MS, Math.min(25_000, left() - ROLLUPS_BUDGET_MS)) }))
+  if (todo.summary) await step('summary rollups', () => (deps.rollups ?? refreshSummaryRollups)(client, { budgetMs: Math.max(1_000, Math.min(ROLLUPS_BUDGET_MS, left() - 2_000)) }))
+  return todo
 }
 
 export const background = defineBackground({
-  'intelform-every-minute': async (data) => {
-    await everyMinute(db(), data)
+  'intelform-notify': async (data) => {
+    await notifyRun(db(), data)
+  },
+  'intelform-quarter': async () => {
+    await quarterRun(db())
   },
   'intelform-response-notify': async (data) => {
     await runResponseNotify(db(), data)
@@ -207,8 +287,8 @@ async function clearRetentionCaches(): Promise<void> {
  * Deletes responses older than IntelForm settings `retentionDays` (null = keep forever), in
  * batches, oldest first (the submitted_at index), until the batches come back short or
  * RETENTION_BUDGET_MS is spent. Each batch is ONE statement: the responses delete trigger takes
- * the rows off form_counts and form_response_hours, and the every-minute `syncFormCounts` refreshes
- * forms.response_count and last_response_at (no form row is locked here).
+ * the rows off form_counts and form_response_hours, and `syncFormCounts` (notify and 15-minute runs) refreshes
+ * forms.response_count and last_response_at for the forms the delete marked (no form row is locked here).
  * Webhook log rows go with them (ON DELETE CASCADE); their signature files go to the file
  * trash (the delete trigger) for the cleanup job, and exports that may hold them stop (the
  * exports trigger). When responses went, the cached Summary and contacts strip are cleared, as

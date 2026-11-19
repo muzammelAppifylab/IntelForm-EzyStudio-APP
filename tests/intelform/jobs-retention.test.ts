@@ -6,15 +6,15 @@ vi.mock('../../src/server/intelform/summary', () => ({ refreshSummaryRollups: vi
 import {
   applyRetention,
   background,
-  everyMinute,
-  EVERY_MINUTE_BUDGET_MS,
   hourlyMaintenance,
   MAX_MINUTE_CONTINUATIONS,
+  NOTIFY_RUN_BUDGET_MS,
+  notifyRun,
+  quarterRun,
   RETENTION_BATCH,
   RETENTION_BUDGET_MS,
   RETENTION_MAX_CONTINUATIONS,
   retentionRun,
-  ROLLUPS_BUDGET_MS,
 } from '../../src/server/background'
 import { cache } from '../../src/platform/cache'
 import { OVERVIEW_KEY } from '../../src/server/intelform/contacts/query'
@@ -28,10 +28,11 @@ describe('background lists', () => {
     const needed = new Set([...Object.keys(manifest.lists), ...Object.entries(manifest.schedules).map(([n, s]) => s.list ?? n)])
     for (const list of needed) expect(background.handlers[list], list).toBeTypeOf('function')
     expect(Object.keys(background.handlers).sort()).toEqual([
-      'intelform-every-minute',
       'intelform-exports',
       'intelform-file-cleanup',
       'intelform-maintenance',
+      'intelform-notify',
+      'intelform-quarter',
       'intelform-response-notify',
       'intelform-retention',
       'intelform-webhook-deliver',
@@ -138,49 +139,61 @@ describe('retentionRun', () => {
   })
 })
 
-describe('everyMinute', () => {
+describe('notifyRun (woken by submits, never on a timetable)', () => {
   const T = Date.parse('2026-11-19T10:15:20Z')
   const deps = (more: boolean) => ({
     now: () => T,
+    contacts: vi.fn(async () => ({ rows: 0, more: false })),
     sync: vi.fn(async () => 0),
-    rollups: vi.fn(async () => ({ rows: 0, more: false })),
-    exports: vi.fn(async () => 0),
     drain: vi.fn(async () => ({ more }) as never),
     sweep: vi.fn(async () => ({ rows: 0, more: false })),
     send: vi.fn(async () => true),
+    nextDue: vi.fn(async () => null as number | null),
+    wakeAt: vi.fn(async () => true),
   })
 
-  it('the scheduled run refreshes counts and rollups, drains, sweeps windows, and sends continuation 1 when the drain has more', async () => {
+  it('the first run folds contacts, refreshes marked counts, drains, sweeps windows, and sends continuation 1 when the drain has more', async () => {
     const d = deps(true)
-    expect(await everyMinute({} as never, null, d)).toEqual({ k: 0, continued: true })
+    expect(await notifyRun({} as never, {}, d)).toEqual({ k: 0, continued: true, woke: false })
+    expect(d.contacts).toHaveBeenCalledTimes(1)
     expect(d.sync).toHaveBeenCalledTimes(1)
-    expect(d.rollups).toHaveBeenCalledWith({}, { budgetMs: ROLLUPS_BUDGET_MS })
     expect(d.sweep).toHaveBeenCalledTimes(1)
     const drainBudget = (d.drain.mock.calls[0] as unknown[])[2] as { budgetMs: number }
-    expect(drainBudget.budgetMs).toBe(EVERY_MINUTE_BUDGET_MS - 3_000)
-    expect(d.send).toHaveBeenCalledWith('intelform-every-minute', { k: 1 }, expect.objectContaining({ key: 'every-minute-2026-11-19T10:15-1' }))
+    expect(drainBudget.budgetMs).toBe(NOTIFY_RUN_BUDGET_MS - 3_000)
+    expect(d.send).toHaveBeenCalledWith('intelform-notify', { k: 1 }, expect.objectContaining({ key: 'notify-2026-11-19T10:15-1' }))
+    expect(d.nextDue).not.toHaveBeenCalled()
   })
 
-  it('a failing sync or rollup never skips the drain', async () => {
+  it('a failing contacts fold or sync never skips the drain', async () => {
     const d = deps(false)
-    d.sync.mockRejectedValueOnce(new Error('x'))
-    d.rollups.mockRejectedValueOnce(new Error('y'))
+    d.contacts.mockRejectedValueOnce(new Error('x'))
+    d.sync.mockRejectedValueOnce(new Error('y'))
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(await everyMinute({} as never, {}, d)).toEqual({ k: 0, continued: false })
+    expect(await notifyRun({} as never, {}, d)).toEqual({ k: 0, continued: false, woke: false })
     expect(d.drain).toHaveBeenCalledTimes(1)
     err.mockRestore()
   })
 
   it('continuations only drain, and stop at the third', async () => {
     const d = deps(true)
-    await everyMinute({} as never, { k: 2 }, d)
+    await notifyRun({} as never, { k: 2 }, d)
+    expect(d.contacts).not.toHaveBeenCalled()
     expect(d.sync).not.toHaveBeenCalled()
-    expect(d.rollups).not.toHaveBeenCalled()
     expect(d.sweep).not.toHaveBeenCalled()
-    expect(d.send).toHaveBeenCalledWith('intelform-every-minute', { k: 3 }, expect.objectContaining({ key: 'every-minute-2026-11-19T10:15-3' }))
+    expect(d.send).toHaveBeenCalledWith('intelform-notify', { k: 3 }, expect.objectContaining({ key: 'notify-2026-11-19T10:15-3' }))
     d.send.mockClear()
-    expect(await everyMinute({} as never, { k: MAX_MINUTE_CONTINUATIONS }, d)).toEqual({ k: 3, continued: false })
+    expect((await notifyRun({} as never, { k: MAX_MINUTE_CONTINUATIONS }, d)).continued).toBe(false)
     expect(d.send).not.toHaveBeenCalled()
+  })
+
+  it('a retry waiting for its back-off wakes the job for its minute; an empty queue wakes nothing', async () => {
+    const d = deps(false)
+    expect((await notifyRun({} as never, {}, d)).woke).toBe(false)
+    expect(d.wakeAt).not.toHaveBeenCalled()
+    const due = T + 5 * 60_000
+    d.nextDue.mockResolvedValueOnce(due)
+    expect((await notifyRun({} as never, {}, d)).woke).toBe(true)
+    expect(d.wakeAt).toHaveBeenCalledWith(expect.any(String), due, T)
   })
 
   it('the drain keeps its minimum when the steps before were slow', async () => {
@@ -191,8 +204,41 @@ describe('everyMinute', () => {
       t += 45_000
       return 0
     })
-    await everyMinute({} as never, null, d)
+    await notifyRun({} as never, null, d)
     expect(((d.drain.mock.calls[0] as unknown[])[2] as { budgetMs: number }).budgetMs).toBe(10_000)
+  })
+})
+
+describe('quarterRun (every 15 minutes)', () => {
+  const todoDb = (todo: Record<string, boolean>) => ({ $queryRaw: vi.fn(async () => [todo]) })
+  const deps = () => ({
+    contacts: vi.fn(async () => ({ rows: 0, more: false })),
+    sync: vi.fn(async () => 0),
+    exports: vi.fn(async () => 0),
+    rollups: vi.fn(async () => ({ rows: 0, more: false })),
+    drain: vi.fn(async () => ({ done: 0, failed: 0, more: false })),
+  })
+
+  it('an idle site: ONE statement, and no step runs', async () => {
+    const db = todoDb({ contacts: false, counts: false, summary: false, exports: false, notify: false })
+    const d = deps()
+    await quarterRun(db as never, d)
+    expect(db.$queryRaw).toHaveBeenCalledTimes(1)
+    for (const step of Object.values(d)) expect(step).not.toHaveBeenCalled()
+  })
+
+  it('runs only the steps with work, and one failing step never skips the others', async () => {
+    const db = todoDb({ contacts: true, counts: false, summary: true, exports: true, notify: false })
+    const d = deps()
+    d.exports.mockRejectedValueOnce(new Error('x'))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await quarterRun(db as never, d)
+    err.mockRestore()
+    expect(d.contacts).toHaveBeenCalledTimes(1)
+    expect(d.exports).toHaveBeenCalledTimes(1)
+    expect(d.rollups).toHaveBeenCalledTimes(1)
+    expect(d.sync).not.toHaveBeenCalled()
+    expect(d.drain).not.toHaveBeenCalled()
   })
 })
 
