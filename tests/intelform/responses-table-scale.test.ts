@@ -74,9 +74,12 @@ describe('scan window', () => {
     expect(scanWindow(big, filters({q: 'abc'}))).toEqual({size: SEARCH_WINDOW, reason: 'search'});
     expect(scanWindow(big, filters({q: 'abc', sort: 'f_nps00001'}))).toEqual({size: ANSWER_SORT_WINDOW, reason: 'sort'});
     expect(scanWindow(catalog(ANSWER_SORT_WINDOW + 1), filters({sort: 'f_nps00001'}))).toEqual({size: ANSWER_SORT_WINDOW, reason: 'sort'});
-    // Date ranges, choice filters and the indexed sorts never need it.
-    for (const sort of ['submitted_at', 'duration', 'device', 'browser', 'country']) {
-      expect(scanWindow(big, filters({sort, from: '2026-01-01'}))).toBeNull();
+    // Date ranges, choice filters and the indexed sort (submitted_at) never need it.
+    expect(scanWindow(big, filters({sort: 'submitted_at', from: '2026-01-01'}))).toBeNull();
+    // The metadata sorts have no index of their own (every submit would pay for it): the window.
+    for (const sort of ['duration', 'device', 'browser', 'country']) {
+      expect(scanWindow(big, filters({sort}))).toEqual({size: ANSWER_SORT_WINDOW, reason: 'sort'});
+      expect(scanWindow(catalog(ANSWER_SORT_WINDOW), filters({sort}))).toBeNull();
     }
     expect(scanWindow(big, filters({filter: ['f_nps00001:9']}))).toBeNull();
   });
@@ -99,40 +102,20 @@ describe('keyset pages', () => {
   const where = Prisma.sql`form_id = ${FORM_ID}::uuid`;
   const cols = Prisma.sql`id`;
 
-  it("runs the metadata sorts' tie-breaker with the key, so one index walk serves them", () => {
+  it('sorts the metadata columns like answers: NULLS LAST, the CASE keyset, no index of their own', () => {
     for (const sort of ['duration', 'device', 'browser', 'country']) {
-      expect(sortSpec(cat, sort, 'asc')).toMatchObject({indexed: true, notNull: false, tie: 'asc'});
-      expect(sortSpec(cat, sort, 'desc')).toMatchObject({indexed: true, notNull: false, tie: 'desc'});
+      expect(sortSpec(cat, sort, 'asc')).toMatchObject({notNull: false, tie: 'asc'});
+      expect(sortSpec(cat, sort, 'desc')).toMatchObject({notNull: false, tie: 'desc'});
     }
-    expect(sortSpec(cat, 'f_nps00001', 'asc')).toMatchObject({indexed: false, tie: 'desc'});
-  });
-
-  it('pages answered rows by a row comparison, then unanswered ones by id', () => {
     const s = sortSpec(cat, 'duration', 'desc');
     const first = flat(pageQuery(s, where, cols, {kind: 'first'}, 51));
-    expect(first).toContain('duration_ms IS NOT NULL ORDER BY duration_ms DESC, id DESC LIMIT ?');
-    expect(first).toContain('duration_ms IS NULL ORDER BY duration_ms DESC, id DESC LIMIT ?');
-    expect(first).toContain('UNION ALL');
-    expect(first).toContain('ORDER BY ph ASC, sk DESC, id DESC LIMIT ?');
-    expect(first).not.toMatch(/\bOR\b/);
+    expect(first).toContain('ORDER BY duration_ms DESC NULLS LAST, id DESC LIMIT ?');
+    expect(first).not.toContain('UNION');
     const after = flat(pageQuery(s, where, cols, {kind: 'after', cur: {k: '10', id: ID}}, 51));
     expect(after).toContain('WITH cur AS (SELECT ?::int AS k');
-    expect(after).toContain('(duration_ms, id) < (cur.k, cur.kid)');
-    expect(after).not.toContain('CASE');
-    // After an unanswered row only unanswered rows are left: one part.
-    const afterNull = flat(pageQuery(s, where, cols, {kind: 'after', cur: {k: null, id: ID}}, 51));
-    expect(afterNull).not.toContain('IS NOT NULL');
-    expect(afterNull).toContain('duration_ms IS NULL AND id < cur.kid');
-    // Before an answered row: answered rows only, read in reverse.
+    expect(after).toContain('CASE WHEN cur.k IS NULL');
     const before = flat(pageQuery(s, where, cols, {kind: 'before', cur: {k: '10', id: ID}}, 51));
-    expect(before).toContain('(duration_ms, id) > (cur.k, cur.kid) ORDER BY duration_ms ASC, id ASC');
-    expect(before).not.toContain('IS NULL ORDER');
-    expect(before).toContain('ORDER BY ph DESC, sk ASC, id ASC');
-    // The last page: unanswered rows first (reversed), then answered.
-    const last = flat(pageQuery(s, where, cols, {kind: 'last'}, 51));
-    expect(last).toContain('ORDER BY ph DESC');
-    const asc = flat(pageQuery(sortSpec(cat, 'country', 'asc'), where, cols, {kind: 'after', cur: {k: 'DE', id: ID}}, 51));
-    expect(asc).toContain('(country, id) > (cur.k, cur.kid) ORDER BY country ASC, id ASC');
+    expect(before).toContain('ORDER BY duration_ms ASC NULLS FIRST, id ASC');
   });
 
   it('keeps the row comparison for submitted_at and the CASE keyset for answers', () => {

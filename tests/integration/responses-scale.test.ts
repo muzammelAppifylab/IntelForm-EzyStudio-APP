@@ -133,38 +133,19 @@ describe.skipIf(!DATABASE_URL)('responses table at scale (integration, real Post
     }
   }, 120_000);
 
-  it('serves the metadata sorts from their (form_id, column, id) index', async () => {
+  it('sorts the metadata columns within the newest rows only, through the submitted_at index (no index of their own)', async () => {
     const cols = sql`id, submitted_at, (duration_ms)::text AS sort_key`;
-    for (const [sort, column] of Object.entries(META)) {
+    // No per-column index is left: every submit writes four index entries less.
+    const left = await db.$queryRaw<{indexname: string}[]>`SELECT indexname FROM pg_indexes WHERE tablename = 'responses'`;
+    for (const column of Object.values(META)) expect(left.map(i => i.indexname)).not.toContain(`responses_form_id_${column}_id_idx`);
+    for (const sort of Object.keys(META)) {
       for (const dir of ['asc', 'desc'] as const) {
         const s = sortSpec(big, sort, dir);
-        const where = whereFragment(big, filters({sort, dir}), 'UTC');
+        const where = sql`${whereFragment(big, filters({sort, dir}), 'UTC')} AND ${windowFragment(BIG, 4_990)}`;
         const first = await plan(pageQuery(s, where, cols, {kind: 'first'}, 51));
-        expect(first, `${sort} ${dir}`).toContain(`responses_form_id_${column}_id_idx`);
+        // An index range on submitted_at that stops at the window's boundary, then a bounded sort.
+        expect(first, `${sort} ${dir}`).toMatch(/Index Cond: .*submitted_at/);
         expect(first).not.toContain('Seq Scan');
-        // The unanswered part walks the same index (by id), not the primary key.
-        expect(first).not.toContain('responses_pkey');
-        // A cursor in the middle: still an index walk that starts at the cursor.
-        const [mid] = await db.$queryRaw<{k: string; id: string}[]>(
-          sql`SELECT (${s.expr})::text AS k, id FROM responses WHERE form_id = ${BIG}::uuid AND ${s.expr} IS NOT NULL ORDER BY id LIMIT 1`
-        );
-        for (const kind of ['after', 'before'] as const) {
-          const from: PageFrom = {kind, cur: {k: mid!.k, id: mid!.id}};
-          const p = await plan(pageQuery(s, where, cols, from, 51));
-          expect(p, `${sort} ${dir} ${kind}`).toContain(`responses_form_id_${column}_id_idx`);
-          expect(p).toMatch(/Index Cond: .*ROW\(/);
-          expect(p).not.toContain('Seq Scan');
-        }
-        // A cursor on an unanswered row: the unanswered part starts at its id.
-        const [none] = await db.$queryRaw<{id: string}[]>(
-          sql`SELECT id FROM responses WHERE form_id = ${BIG}::uuid AND ${s.expr} IS NULL ORDER BY id LIMIT 1 OFFSET 10`
-        );
-        for (const kind of ['after', 'before'] as const) {
-          const p = await plan(pageQuery(s, where, cols, {kind, cur: {k: null, id: none!.id}}, 51));
-          expect(p, `${sort} ${dir} ${kind} null`).toMatch(new RegExp(`Index Cond: .*${column} IS NULL\\) AND \\(id [<>]`));
-          expect(p).not.toContain('Seq Scan');
-          expect(p).not.toContain('responses_pkey');
-        }
       }
     }
   });
