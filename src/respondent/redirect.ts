@@ -3,6 +3,21 @@ export interface RedirectWindow {
   location: { assign(url: string): void }
   parent: { postMessage(message: unknown, targetOrigin: string): void }
   top: { location: { href: string } } | null
+  /** Where the no-referrer policy goes before a redirect that carries answers (absent in tests). */
+  document?: { head: { appendChild(node: unknown): unknown }; createElement(tag: 'meta'): { name: string; content: string } }
+}
+
+/**
+ * Answers in the link: the navigation sends no `Referer` (Referrer-Policy: no-referrer for this
+ * page from now on), so the answers' page isn't named to anyone the next page loads from.
+ */
+function noReferrer(win: RedirectWindow): void {
+  const doc = win.document
+  if (!doc) return
+  const meta = doc.createElement('meta')
+  meta.name = 'referrer'
+  meta.content = 'no-referrer'
+  doc.head.appendChild(meta)
 }
 
 /**
@@ -27,6 +42,7 @@ export function withoutAnswers(url: string, fieldIds: readonly string[]): string
  */
 export function redirectAfterSubmit(url: string, fieldIds: readonly string[], embedded: boolean, win: RedirectWindow = window): void {
   if (!/^https?:\/\//i.test(url)) return
+  if (withoutAnswers(url, fieldIds) !== null) noReferrer(win)
   if (!embedded || win.parent === (win as unknown)) {
     win.location.assign(url)
     return

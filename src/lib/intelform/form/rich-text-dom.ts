@@ -1,4 +1,4 @@
-import { escapeHtml, safeLinkHref, sanitizeRichText } from './rich-text'
+import { escapeHtml, safeLinkHref, sanitizeRichTextLite as sanitizeRichText } from './rich-text-core'
 
 /**
  * Browser-only half of rich text: turns what a contentEditable holds (whatever the browser or a

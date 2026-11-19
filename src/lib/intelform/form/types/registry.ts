@@ -6,6 +6,7 @@ import { dropdown, multiple_choice, picture_choice, single_choice, yes_no } from
 import type { FieldTypeCore } from './common'
 import { address, country, email, name, phone } from './contact'
 import { nps, rating } from './rating'
+import { coreRegistry, registerFieldTypes } from './registry-store'
 
 export type { AnswerContext, AnswerValidators, ChoiceAnswer, CoreField, FieldTypeCore } from './common'
 export { configureValidators, isChoiceAnswer } from './common'
@@ -47,8 +48,9 @@ export const typedRegistry = {
   section_break,
 } satisfies { [K in FieldType]: FieldTypeCore<K, z.ZodMiniType> }
 
-/** The pure (server-safe) half of every field type, keyed by type. */
-export const coreRegistry: Record<FieldType, FieldTypeCore> = typedRegistry
+/** The pure (server-safe) half of every field type, keyed by type: all of them, once this file loads. */
+registerFieldTypes(typedRegistry)
+export { coreRegistry }
 
 export type TypedRegistry = typeof typedRegistry
 /** Props of one field type, e.g. PropsOf<'rating'>. */

@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 
 import {contactsCsvQuery, contactsListQuery, deleteContactsInput} from '../../src/lib/intelform/api-contacts';
-import {contentDisposition, CSV_BOM, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
+import {CSV_BOM, csvEscape, csvRow} from '../../src/server/intelform/responses/csv-text';
 import {CSV_KEYS, LIST_KEYS, parseWith, rawQuery} from '../../src/server/intelform/contacts/input';
 import {
   clearContactsOverview,
@@ -234,9 +234,8 @@ describe('contacts csv', () => {
     expect(csvRow(['a', 1, null])).toBe('a,1,\r\n');
   });
 
-  it('names the download with an ASCII fallback', () => {
+  it('names the download', () => {
     expect(contactsCsvFilename('2026-11-16')).toBe('Contacts 2026-11-16.csv');
-    expect(contentDisposition('Kontakte é.csv')).toBe(`attachment; filename="Kontakte _.csv"; filename*=UTF-8''Kontakte%20%C3%A9.csv`);
   });
 });
 

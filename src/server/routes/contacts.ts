@@ -12,6 +12,7 @@ import {
 } from '../../lib/intelform/api-contacts';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {LIST_KEYS, parseWith, rawQuery} from '../intelform/contacts/input';
+import {applyContactBatch} from '../intelform/contacts/apply';
 import {clearContactsOverview, contactDetail, contactsOverview, deleteContacts, listContacts} from '../intelform/contacts/query';
 import {safeTz} from '../intelform/contacts/tz';
 import {clearSummaryCache} from '../intelform/responses/summary';
@@ -61,7 +62,8 @@ export const contactsRoutes = new Hono()
     withDb,
     async c => {
       const q = c.req.valid('query');
-      const tz = await safeTz(c.var.db, q.tz);
+      // Responses since the last notify run go into `contacts` first (one statement; nothing queued: an empty read).
+      const [tz] = await Promise.all([safeTz(c.var.db, q.tz), applyContactBatch(c.var.db)]);
       return c.json<ContactsListResponse>(await listContacts(c.var.db, q, tz));
     }
   )
@@ -72,6 +74,7 @@ export const contactsRoutes = new Hono()
     // A malformed key can't match anyone: the same 404 as an unknown one.
     const parsed = contactDetailQuery.safeParse({key: c.req.query('key') ?? ''});
     if (!parsed.success) return c.json(problem('not_found', UNKNOWN), 404);
+    await applyContactBatch(c.var.db);
     const detail = await contactDetail(c.var.db, parsed.data.key);
     if (!detail) return c.json(problem('not_found', UNKNOWN), 404);
     return c.json<ContactDetailResponse>(detail);

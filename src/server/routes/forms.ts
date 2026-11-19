@@ -53,6 +53,7 @@ import {clearSummaryCache} from '../intelform/responses/summary';
 import {clearContactsOverview} from '../intelform/contacts/query';
 import {logActivity, titleMeta} from '../activity';
 import {PERMISSIONS} from '../permissions';
+import {isDemoViewer} from '../demo-role';
 
 /**
  * `/site-api/forms/*`: IntelForm's dashboard forms (ported from IntelForm's server/routes/forms.ts).
@@ -144,6 +145,8 @@ export const formsRoutes = new Hono()
     async c => {
       const {view} = c.req.valid('json');
       const userId = c.var.viewer.id!;
+      // The read-only demo: the list keeps the view for this visit, nothing is stored.
+      if (await isDemoViewer(c)) return c.json<FormsViewResponse>({view});
       await c.var.db.userPref.upsert({
         where: {userId_key: {userId, key: 'forms.view'}},
         create: {userId, key: 'forms.view', value: view},
@@ -175,7 +178,7 @@ export const formsRoutes = new Hono()
       let title = input.title ?? 'Untitled form';
       let draft: FormDefinition = blankDefinition();
       let theme: FormTheme = appDefaults.theme;
-      let settings: FormSettings = {...defaultFormSettings(), timezone: appDefaults.timezone};
+      let settings: FormSettings = {...defaultFormSettings(), timezone: appDefaults.timezone, ...appDefaults.limits};
 
       if (wantsTemplate) {
         const tpl = builtin ?? saved;
@@ -188,6 +191,8 @@ export const formsRoutes = new Hono()
           copyableSettings(readSettings(tpl.settings), true)
         ));
         if (!settings.closeAt) settings = {...settings, timezone: appDefaults.timezone};
+        // A template carries its own content, never another site's spam limits.
+        settings = {...settings, ...appDefaults.limits};
       }
 
       const created = await insertForm(db, {title, draft, theme, settings, userId: c.var.viewer.id!});
@@ -224,7 +229,11 @@ export const formsRoutes = new Hono()
           updatedBy: {select: {id: true, name: true}},
         },
       }),
-      permissionScope(c, PERMISSIONS.FORM_WRITE).then(scope => scope === 'all'),
+      // Like the webhook routes: the URL and header values are secrets that carry responses, so
+      // seeing them needs both editing forms and reading responses.
+      Promise.all([permissionScope(c, PERMISSIONS.FORM_WRITE), permissionScope(c, PERMISSIONS.RESPONSE_READ)]).then(
+        ([write, read]) => write === 'all' && read === 'all'
+      ),
     ]);
     if (!row) return fail(c, notFound());
 

@@ -12,3 +12,7 @@
 # The form embed loader (src/respondent/embed.ts docs): short cache so fixes reach sites soon.
 /embed.js
   Cache-Control: public, max-age=300
+
+# Self-hosted fonts: a year, immutable. A changed font file must get a new file name.
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -7,7 +7,7 @@ import '../../src/server/background';
 import {CATALOGUE, PERMISSIONS} from '../../src/server/permissions';
 import {encodeContactCursor} from '../../src/server/intelform/contacts/sql';
 import {syncFormCounts} from '../../src/server/intelform/forms/counts';
-import {type Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
+import {type Browser, configureEnv, DATABASE_URL, db, downloadExport, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
  * The Contacts API (`/site-api/contacts`) against a real Postgres: the trigger fills the contact
@@ -168,10 +168,11 @@ describe.skipIf(!DATABASE_URL)('contacts (integration, real Postgres)', () => {
     expect(job).toMatchObject({status: 'ready', rows: 1});
     // Someone else's export is not theirs to see.
     expect((await editor.get(`/site-api/exports/${job.id}`)).status).toBe(404);
-    const res = await viewer.get(`/site-api/exports/${job.id}/download`);
+    expect((await editor.get(`/site-api/exports/${job.id}/files`)).status).toBe(404);
+    const res = await downloadExport(viewer, job.id);
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/csv');
-    const text = String((res.json as {text?: string}).text ?? '');
+    expect(res.files[0]!.contentType).toContain('text/csv');
+    const text = res.files[0]!.text;
     const lines = text.replace(/^﻿/, '').trim().split('\r\n');
     expect(lines[0]).toBe('Name,Email,Phone,Country,Responses,Forms,First seen,Last active');
     expect(lines).toHaveLength(2);

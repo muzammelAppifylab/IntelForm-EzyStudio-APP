@@ -1,4 +1,5 @@
 import {Prisma, type PrismaClient} from '../../../generated/prisma/client';
+import {readSpamSettings, type FormLimits} from '../../../lib/intelform/spam';
 import type {
   CreatedForm,
   FormListItem,
@@ -53,8 +54,16 @@ const json = (v: unknown) => JSON.stringify(v);
  * App settings for a new form: "Default theme for new forms" (a built-in preset id or a saved
  * theme's uuid; a deleted theme falls back to the built-in default) and the default timezone.
  */
-export async function newFormDefaults(db: Db): Promise<{theme: FormTheme; timezone: string}> {
-  const row = await db.intelformSettings.findUnique({where: {id: 1}, select: {timezone: true, defaultThemeId: true}});
+export async function newFormDefaults(db: Db): Promise<{theme: FormTheme; timezone: string; limits: FormLimits}> {
+  const row = await db.intelformSettings.findUnique({where: {id: 1}, select: {timezone: true, defaultThemeId: true, spamLimits: true}});
+  // Spam protection: a new form starts with the site's defaults (Settings → Spam protection).
+  const spam = readSpamSettings(row?.spamLimits);
+  const limits: FormLimits = {
+    spamIpPerHour: spam.spamIpPerHour,
+    spamIpPerDay: spam.spamIpPerDay,
+    spamFormPerMinute: spam.spamFormPerMinute,
+    confirmPerHour: spam.confirmPerHour,
+  };
   const timezone = row?.timezone || 'UTC';
   let theme = defaultTheme();
   const themeId = row?.defaultThemeId;
@@ -66,7 +75,7 @@ export async function newFormDefaults(db: Db): Promise<{theme: FormTheme; timezo
       if (saved) theme = readTheme(saved.settings);
     }
   }
-  return {theme, timezone};
+  return {theme, timezone, limits};
 }
 
 // ---------------------------------------------------------------------------

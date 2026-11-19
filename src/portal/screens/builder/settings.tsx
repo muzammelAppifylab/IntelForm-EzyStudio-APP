@@ -1,10 +1,12 @@
 import {AccessSection, AfterSubmitSection, NotificationsSection, SoundsSection} from '../../intelform/builder/settings/sections';
+import {SpamSection} from '../../intelform/builder/settings/SpamSection';
 import {WebhookSection} from '../../intelform/builder/settings/WebhookSection';
 import {useBuilder} from '../../intelform/builder/store';
 import {Notice} from '../../ui';
 
 const NAV = [
   {id: 'access', label: 'Access and limits'},
+  {id: 'spam', label: 'Spam protection'},
   {id: 'after-submit', label: 'After submit'},
   {id: 'sounds', label: 'Sounds'},
   {id: 'notifications', label: 'Notifications'},
@@ -45,6 +47,7 @@ export function SettingsTab() {
         </nav>
         <div className="if-settings-stack">
           <AccessSection />
+          <SpamSection />
           <AfterSubmitSection />
           <SoundsSection />
           <NotificationsSection />

@@ -150,7 +150,7 @@ export function AccessSection() {
 
       <Switch
         label="One response per browser"
-        description="A soft limit: stops repeat answers from the same browser, not a determined person."
+        description="A soft limit: stops repeat answers from the same browser (or, without one, the same network), not a determined person."
         checked={settings.onePerBrowser}
         disabled={readOnly}
         onChange={v => void save({onePerBrowser: v})}
@@ -346,6 +346,13 @@ export function AfterSubmitSection() {
             disabled={readOnly || pending}
             onChange={v => void save({redirectAppendAnswers: v})}
           />
+          {settings.redirectAppendAnswers && (
+            <Notice tone="warning">
+              Answers in a link can be seen by others: they stay in the browser’s history, in the other site’s logs, and in
+              anything that page loads. Use this only for answers that aren’t private, and never for passwords, health or money
+              details. We ask browsers not to pass this link on, but the page you send people to decides what it does with it.
+            </Notice>
+          )}
         </>
       )}
     </SettingsCard>
@@ -488,8 +495,8 @@ export function NotificationsSection() {
             {capped > 0 && (
               <Notice tone="warning">
                 {capped.toLocaleString()} confirmation{capped === 1 ? '' : 's'} weren’t sent in the last 24 h because of the
-                hourly limit ({(stats.data?.confirmLimit ?? 0).toLocaleString()} a form an hour, so a form can’t be used to send
-                bulk email).
+                hourly limit ({(stats.data?.confirmLimit ?? 0).toLocaleString()} an hour for this form, so it can’t be used to send
+                bulk email). You can change it under Spam protection.
               </Notice>
             )}
             {confirmFieldMissing && (
@@ -507,7 +514,14 @@ export function NotificationsSection() {
               error={errors.confirmationEmailFieldId}
               onChange={v => void save({confirmationEmailFieldId: v})}
             />
-            <TextRow label="Subject" maxLength={200} disabled={readOnly} error={errors.confirmationSubject} {...subject} />
+            <TextRow
+              label="Subject"
+              maxLength={200}
+              disabled={readOnly}
+              hint="Answers are never added to the subject. Empty: the form’s title."
+              error={errors.confirmationSubject}
+              {...subject}
+            />
             <div className="if-pipe-field">
               <span className="if-row-label" id="if-confirmation-body">
                 Message

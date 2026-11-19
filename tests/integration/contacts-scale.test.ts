@@ -7,6 +7,7 @@ import {defaultFormSettings} from '../../src/lib/intelform/form/settings';
 import {defaultTheme} from '../../src/lib/intelform/form/theme';
 import {clearContactsOverview, contactDetail, contactsCsvBatch, contactsOverview, listContacts} from '../../src/server/intelform/contacts/query';
 import {CONTACT_COLUMNS, pageSql, type ContactCursor} from '../../src/server/intelform/contacts/sql';
+import {applyContactBatch, applyContactQueue} from '../../src/server/intelform/contacts/apply';
 import {configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /**
@@ -43,6 +44,12 @@ async function makeForm(i: number) {
 }
 
 /** Contacts rows that differ from a full re-aggregate of responses (0 = exact). */
+/** What the notify job does after submits: the queued contacts into `contacts`. */
+async function fold(): Promise<void> {
+  const out = await applyContactQueue(db, {budgetMs: 600_000, batch: 5_000});
+  expect(out.more).toBe(false);
+}
+
 async function drift(): Promise<number> {
   const [row] = await db.$queryRaw<{bad: number}[]>`
     WITH e AS (
@@ -102,6 +109,12 @@ describe.skipIf(!DATABASE_URL)('contacts at scale (integration, real Postgres)',
         now() - make_interval(secs => i * 11), CASE WHEN i % 3 = 0 THEN 'NL' END
       FROM generate_series(1, 3000) AS i
     `;
+    // The submits only queued their contacts (no contact row is written per submit)…
+    const [{queued}] = (await db.$queryRaw<{queued: number}[]>`SELECT count(*)::int AS queued FROM intelform_contact_queue`) as [{queued: number}];
+    expect(queued).toBe(63_000);
+    expect(Number((await db.$queryRaw<{n: number}[]>`SELECT count(*)::int AS n FROM contacts`)[0]!.n)).toBe(0);
+    // …the notify job folds them in, a batch at a time.
+    await fold();
     await db.$executeRaw`ANALYZE contacts`;
     await db.$executeRaw`ANALYZE responses`;
   }, 300_000);
@@ -190,6 +203,11 @@ describe.skipIf(!DATABASE_URL)('contacts at scale (integration, real Postgres)',
     const started = Date.now();
     await Promise.all(Array.from({length: 400}, (_, i) => insert(i % 2 ? 'hot@x.io' : `other${i}@x.io`)));
     expect(Date.now() - started).toBeLessThan(30_000);
+    // No submit waited on the hot contact's row: none of them touched it.
+    const still = await db.$queryRaw<{n: number}[]>`SELECT n FROM contacts WHERE key = 'e:hot@x.io'`;
+    expect(Number(still[0]?.n ?? 0)).toBe(Number(before));
+    // The contacts screen folds the queue before it reads (one batch): the list is right at once.
+    expect(await applyContactBatch(db)).toBe(400);
     const [hot] = await db.$queryRaw<{n: number}[]>`SELECT n FROM contacts WHERE key = 'e:hot@x.io'`;
     expect(Number(hot!.n)).toBe(Number(before) + 200);
     const [shards] = await db.$queryRaw<{n: number}[]>`SELECT sum(responses)::int AS n FROM form_counts WHERE form_id = ${f.id}::uuid`;
@@ -219,6 +237,22 @@ describe.skipIf(!DATABASE_URL)('contacts at scale (integration, real Postgres)',
     await db.$executeRaw`UPDATE responses SET answers = answers || '{"f_email": "moved@x.io"}' WHERE id = (SELECT id FROM responses WHERE contact_key = 'e:u3@x.io' LIMIT 1)`;
     expect(await drift()).toBe(0);
 
+    // Responses not folded in yet, then deleted with others of the same contacts: the delete
+    // folds their queued rows first, so nothing is subtracted that wasn't added.
+    await db.$executeRaw`
+      INSERT INTO responses (form_id, form_version_id, answers, submitted_at)
+      SELECT ${forms[1]!.id}::uuid, ${forms[1]!.versionId}::uuid, jsonb_build_object('f_email', 'u' || (i % 4 + 10) || '@x.io'), now() - make_interval(secs => i)
+      FROM generate_series(1, 40) AS i`;
+    await db.$executeRaw`DELETE FROM responses WHERE id IN (
+      SELECT id FROM responses WHERE contact_key IN ('e:u10@x.io', 'e:u11@x.io') ORDER BY submitted_at DESC LIMIT 15)`;
+    // Every queued row of the deleted keys was applied; only the other two keys still wait.
+    const waiting = await db.$queryRaw<{key: string}[]>`SELECT DISTINCT key FROM intelform_contact_queue ORDER BY key`;
+    expect(waiting.map(w => w.key)).toEqual(['e:u12@x.io', 'e:u13@x.io']);
+    // An answer update of a key with queued rows rebuilds it and drops them (never counted twice).
+    await db.$executeRaw`UPDATE responses SET answers = answers || '{"f_note": "x"}' WHERE id = (SELECT id FROM responses WHERE contact_key = 'e:u12@x.io' LIMIT 1)`;
+    await fold();
+    expect(await drift()).toBe(0);
+
     // A whole form (cascade).
     await db.$executeRaw`DELETE FROM forms WHERE id = ${forms[2]!.id}::uuid`;
     expect(await drift()).toBe(0);
@@ -229,6 +263,7 @@ describe.skipIf(!DATABASE_URL)('contacts at scale (integration, real Postgres)',
       INSERT INTO responses (form_id, form_version_id, answers, submitted_at)
       SELECT ${forms[0]!.id}::uuid, ${forms[0]!.versionId}::uuid, '{"f_email": "big@x.io"}', now() - make_interval(secs => i)
       FROM generate_series(1, 1500) AS i`;
+    await fold();
     const d = await contactDetail(db, BIG);
     expect(d!.forms.map(f => f.id)[0]).toBe(forms[0]!.id);
     expect(d!.forms[0]!.responses).toBe(1001);

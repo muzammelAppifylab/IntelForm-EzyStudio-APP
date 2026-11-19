@@ -27,9 +27,3 @@ export function csvEscape(value: CsvCell): string {
 export function csvRow(cells: readonly CsvCell[]): string {
   return cells.map(csvEscape).join(',') + CSV_EOL;
 }
-
-/** `Content-Disposition` for a download, with an ASCII fallback and the UTF-8 name. */
-export function contentDisposition(filename: string): string {
-  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
-}

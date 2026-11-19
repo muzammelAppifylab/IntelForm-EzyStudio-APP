@@ -26,6 +26,8 @@ import {
   type MailProvider,
 } from '../../src/server/intelform/notify'
 import { postmarkProvider, resendProvider } from '../../src/server/intelform/notify/mailer'
+import { confirmationSubject } from '../../src/server/intelform/notify/notify'
+import { env } from '../integration/support/cloudflare-workers'
 
 // ---------------------------------------------------------------------------
 // Link stripping (legacy lib.test.ts cases)
@@ -321,7 +323,8 @@ describe('runResponseNotify', () => {
     const mail = fakeMail()
     const out = await runResponseNotify(w.db, { responseId: RID }, { relay: relayOk(), mail })
     expect(out.confirmation).toBe('sent')
-    expect(mail.sent).toEqual([{ to: 'ada@example.com', subject: 'Thanks ada@example.com Bcc: x', text: 'You wrote: See. Visit https://acme.test', replyTo: 'help@acme.test' }])
+    // The subject never carries an answer (a piped one shows its fallback or nothing), nor a line break.
+    expect(mail.sent).toEqual([{ to: 'ada@example.com', subject: 'Thanks Bcc: x', text: 'You wrote: See. Visit https://acme.test', replyTo: 'help@acme.test' }])
     await runResponseNotify(w.db, { responseId: RID }, { relay: relayOk(), mail })
     expect(mail.sent).toHaveLength(1)
   })
@@ -338,6 +341,53 @@ describe('runResponseNotify', () => {
     expect((await runResponseNotify(capped.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('capped')
     expect(mail.sent).toHaveLength(0)
     warn.mockRestore()
+  })
+
+  it('confirmation caps: per address block (marked at submit), per form an hour, per recipient a day, per site a day', async () => {
+    const s = { confirmationEmail: true, confirmationEmailFieldId: 'f_email1' }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    env.JWT_SECRET = 'unit-test-secret-0123456789-abcdefghijklmnopqrstuvwxyz'
+    try {
+      // The submit marked this response: its network asked for over 3 this hour.
+      const ip = world(s)
+      ip.markers.add(`job:confirm-skip-ip:${RID}`)
+      const mail = fakeMail()
+      expect((await runResponseNotify(ip.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('capped')
+      expect(mail.sent).toHaveLength(0)
+      // Logged once for the form and the hour (the activity log), and the owner alert is counted once.
+      expect(ip.windows.get(`abuse-log:confirm-skipped:ip:${FORM}`)).toBe(1)
+      expect(ip.windows.get(`abuse-alert:mail:${FORM}`)).toBe(1)
+
+      // The form's own hourly limit (its Spam protection setting, 100 by default).
+      expect(readNotifySettings({ confirmPerHour: 7 }).confirmPerHour).toBe(7)
+      expect(readNotifySettings({ confirmPerHour: 0 }).confirmPerHour).toBe(100)
+      const form = world({ ...s, confirmPerHour: 2 })
+      form.hours.set(FORM, { notified: 0, digest_pending: 0, digest_sent: 0, confirmed: 2, confirm_capped: 0 })
+      expect((await runResponseNotify(form.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('capped')
+
+      // One address: once a day from one form (a second response with it gets none).
+      const twice = world(s, { ids: [RID, '11111111-2222-4333-8444-666666666666'] })
+      expect((await runResponseNotify(twice.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('sent')
+      expect((await runResponseNotify(twice.db, { responseId: '11111111-2222-4333-8444-666666666666' }, { relay: relayOk(), mail })).confirmation).toBe('capped')
+      expect(mail.sent).toHaveLength(1)
+
+      // The site's day across every form (1,000 by default).
+      const site = world(s)
+      site.windows.set('confirm-site', 1000)
+      expect((await runResponseNotify(site.db, { responseId: RID }, { relay: relayOk(), mail })).confirmation).toBe('capped')
+      expect(mail.sent).toHaveLength(1)
+    } finally {
+      delete env.JWT_SECRET
+      warn.mockRestore()
+    }
+  })
+
+  it('the confirmation subject never carries an answer', () => {
+    const def = DEF
+    expect(confirmationSubject('Thanks {f_text01}', def, 'Contact us')).toBe('Thanks')
+    expect(confirmationSubject('{f_text01}', def, 'Contact us')).toBe('Contact us')
+    expect(confirmationSubject('Hi {f_text01|there}', def, 'Contact us')).toBe('Hi there')
+    expect(confirmationSubject('', def, 'Contact us')).toBe('Contact us')
   })
 
   it('throws after the other steps when a provider error is worth retrying', async () => {

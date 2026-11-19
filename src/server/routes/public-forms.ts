@@ -6,7 +6,8 @@ import {cache} from '../../platform/cache';
 import {withDb} from '../../platform/guards';
 import {UNLOCK_HEADER, unlockInput, type UnlockResponse} from '../../lib/intelform/api-public';
 import {SYSTEM_LABELS} from '../../lib/intelform/form/labels';
-import {ipKeyFor, requireSecret, respondentIp} from '../intelform/respondent/crypto';
+import {ipBlockOf, ipKeyFor, requireSecret, respondentIp} from '../intelform/respondent/crypto';
+import {recordAbuse} from '../intelform/abuse/alert';
 import {notFound, RespondentError, respondentError} from '../intelform/respondent/errors';
 import {handleEvent} from '../intelform/respondent/events';
 import {publicPayload, requireForm, SLUG_RE} from '../intelform/respondent/load';
@@ -14,7 +15,7 @@ import {limitedPayload, PUBLIC_GET_MESSAGE} from '../intelform/respondent/page';
 import {hit, peek, rateLimit, release, tooMany} from '../intelform/respondent/rate-limit';
 import {requestMeta} from '../intelform/respondent/request-meta';
 import {handleSubmit} from '../intelform/respondent/submit';
-import {readRenderToken, renderToken, unlockToken} from '../intelform/respondent/tokens';
+import {readRenderToken, RENDER_TOKEN_SHAPE, renderToken, unlockToken} from '../intelform/respondent/tokens';
 
 export {loadPublicForm, safeJson, type PublicFormPage} from '../intelform/respondent/page';
 
@@ -55,8 +56,8 @@ export {loadPublicForm, safeJson, type PublicFormPage} from '../intelform/respon
  *   checks its own body token (minimum fill time), the honeypot, validation and its limits.
  */
 export const RENDER_HEADER = 'x-intelform-render';
-/** `<ms>.<32 base64url>` (tokens.ts): anything else is refused without a lookup. */
-const RENDER_SHAPE = /^\d{10,16}\.[A-Za-z0-9_-]{32}$/;
+/** tokens.ts RENDER_TOKEN_SHAPE: anything else is refused without a lookup. */
+const RENDER_SHAPE = RENDER_TOKEN_SHAPE;
 /** The refusal for a missing, forged or other-form token (a reload hands out a fresh one). */
 const pageInvalid = () => new RespondentError(403, 'page_invalid', 'This form has expired. Reload the page and try again.');
 
@@ -126,6 +127,16 @@ async function callerKey(c: Context, secret: string): Promise<string> {
   return ipKeyFor(secret, respondentIp(c));
 }
 
+/** Runs `work` after the answer when the runtime allows it (tests and in-process calls: it simply runs on). */
+function afterResponse(c: Context, work: Promise<unknown>): void {
+  const guarded = work.catch(() => undefined);
+  try {
+    c.executionCtx.waitUntil(guarded);
+  } catch {
+    // No execution context.
+  }
+}
+
 async function readText(c: Context): Promise<string> {
   try {
     return await c.req.text();
@@ -147,13 +158,14 @@ export const publicFormsRoutes = new Hono()
       const unlock = c.req.header(UNLOCK_HEADER);
       // The form from the cache, then ONE statement for the limit (and, only when needed, the
       // exact count or password hash). A 429 wins over whatever the form read found.
-      const out = await limitedPayload(db, secret, await callerKey(c, secret), c.req.param('slug'), unlock && unlock.length <= 400 ? unlock : null);
+      const caller = await callerKey(c, secret);
+      const out = await limitedPayload(db, secret, caller, c.req.param('slug'), unlock && unlock.length <= 400 ? unlock : null);
       if (out.kind === 'limited') throw tooMany(out.retryAfter, PUBLIC_GET_MESSAGE);
       const payload = out.payload;
       if (!payload) throw notFound();
       // A locked form gets a render token too: its unlock POST must carry one. It opens nothing
       // (the definition comes only with a valid unlock token).
-      if (payload.status === 'locked') return c.json({...payload, renderToken: await renderToken(secret, payload.id)});
+      if (payload.status === 'locked') return c.json({...payload, renderToken: await renderToken(secret, payload.id, Date.now(), caller)});
       return c.json(payload);
     } catch (err) {
       return respondentError(c, err);
@@ -201,7 +213,7 @@ export const publicFormsRoutes = new Hono()
         await release(db, callerFailKey, UNLOCK_FAILURE_WINDOW);
       }
       const token = hash ? await unlockToken(secret, form.id, hash) : '';
-      const payload = await publicPayload(db, secret, form, token);
+      const payload = await publicPayload(db, secret, form, token, caller);
       if (payload.status === 'locked') throw new RespondentError(500, 'server_error', 'Something went wrong on our side. Try again.');
       return c.json({token, form: payload} satisfies UnlockResponse);
     } catch (err) {
@@ -225,17 +237,23 @@ export const publicFormsRoutes = new Hono()
       const secret = requireSecret();
       await requireRendered(c, c.var.db, secret, c.req.param('slug'));
       const ip = respondentIp(c);
+      const db = c.var.db;
       const result = await handleSubmit(
         {
-          db: c.var.db,
+          db,
           secret,
           requestUrl: c.req.url,
           ipKey: await ipKeyFor(secret, ip),
+          ipBlock: ip ? ipBlockOf(ip) : null,
           meta: () => requestMeta(c, secret),
+          // Spam protection's log and owner alert: after the answer, never in its way.
+          abuse: event => afterResponse(c, recordAbuse(db, event)),
         },
         c.req.param('slug'),
         await readText(c)
       );
+      // A redirect carrying answers: the next page is told not to pass this address on.
+      if (result.redirectUrl && result.redirectUrl.includes('?')) c.header('Referrer-Policy', 'no-referrer');
       return c.json(result);
     } catch (err) {
       return respondentError(c, err);

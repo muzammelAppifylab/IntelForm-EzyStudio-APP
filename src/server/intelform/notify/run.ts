@@ -6,6 +6,7 @@ import { readWebhookConfig, type WebhookFormRow } from '../webhooks'
 import { mailProvider, type MailProvider } from './mailer'
 import { doneKey, doneSet } from './markers'
 import { readNotifySettings } from './settings'
+import { readSpamSettings } from '../../../lib/intelform/spam'
 
 /**
  * One drain run's shared reads (the "per-run context"). The drain works up to a few hundred
@@ -77,6 +78,8 @@ export interface Loaded {
 export interface AppEmail {
   fromName: string
   replyTo: string | null
+  /** Confirmation emails a day across every form (spam protection, the site's ceiling). */
+  confirmPerDay: number
 }
 
 /** A chosen teammate: an address to email, the owner (reached through the relay), or neither. */
@@ -124,7 +127,7 @@ export function markerKeys(r: Loaded, team: Team | null): string[] {
     for (const u of team?.recipients ?? []) keys.push(doneKey('notify', r.id, `u${u.id}`))
   }
   if (s.confirmationEmail && s.confirmationEmailFieldId) {
-    keys.push(doneKey('confirm', r.id), doneKey('confirm-counted', r.id), doneKey('confirm-capped', r.id))
+    keys.push(doneKey('confirm', r.id), doneKey('confirm-counted', r.id), doneKey('confirm-capped', r.id), doneKey('confirm-skip-ip', r.id))
   }
   if (readWebhookConfig(r.settings).enabled) keys.push(doneKey('webhook', r.id))
   return keys
@@ -141,8 +144,12 @@ export function notifyRun(db: PrismaClient, opts: RunOptions): NotifyRun {
 
   const app = () =>
     (appP ??= db.intelformSettings
-      .findUnique({ where: { id: 1 }, select: { appName: true, emailFromName: true, emailReplyTo: true } })
-      .then((row) => ({ fromName: row?.emailFromName?.trim() || row?.appName || 'IntelForm', replyTo: row?.emailReplyTo ?? null }))
+      .findUnique({ where: { id: 1 }, select: { appName: true, emailFromName: true, emailReplyTo: true, spamLimits: true } })
+      .then((row) => ({
+        fromName: row?.emailFromName?.trim() || row?.appName || 'IntelForm',
+        replyTo: row?.emailReplyTo ?? null,
+        confirmPerDay: readSpamSettings(row?.spamLimits).confirmPerDay,
+      }))
       .catch((err) => {
         appP = null // a failed read is tried again by the next response, not remembered
         throw err

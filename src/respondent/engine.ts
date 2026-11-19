@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormDefinition, FormField } from '../lib/intelform/form/definition'
 import { SYSTEM_LABELS, errorMessage, type Labels } from '../lib/intelform/form/labels'
-import { computeVisibility, interpolate, interpolateHtml, pruneAnswers, validateField, type Answers } from '../lib/intelform/form/logic'
-import { descriptionToHtml, isBlankHtml, sanitizeRichText } from '../lib/intelform/form/rich-text'
+import { computeVisibility, interpolate, interpolateHtml, pruneAnswers, validateField, type Answers } from '../lib/intelform/form/logic-core'
+import { descriptionToHtml, isBlankHtml, sanitizeRichTextLite as sanitizeRichText } from '../lib/intelform/form/rich-text-core'
 import type { ChangeMeta } from './types'
 
 /**

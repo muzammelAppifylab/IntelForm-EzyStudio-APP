@@ -5,13 +5,14 @@ import type {
   PublicFormResponse,
 } from '../../../lib/intelform/api-public';
 import {SYSTEM_LABELS} from '../../../lib/intelform/form/labels';
+import {frameAncestors} from '../../../lib/intelform/spam';
 import {defaultTheme, type FormTheme} from '../../../lib/intelform/form/theme-core';
 import {type EmbedOptions, embedQuery} from '../../../respondent/embed';
 import {themeFontFiles} from '../../../respondent/fonts';
 import {styleHash, themeCss} from '../../../respondent/theme-css';
-import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
 import {SLUG_RE, type Db} from '../../../server/intelform/respondent/load';
-import {limitedPayload, PUBLIC_GET_RATE_LIMIT} from '../../../server/intelform/respondent/page';
+import {ipKeyFor} from '../../../server/intelform/respondent/crypto';
+import {limitedPayload} from '../../../server/intelform/respondent/page';
 
 /**
  * Server half of the public form page (src/pages/f/[slug].astro): which state the slug is in,
@@ -20,12 +21,6 @@ import {limitedPayload, PUBLIC_GET_RATE_LIMIT} from '../../../server/intelform/r
  *
  * Files under `src/pages/**` whose name starts with `_` are not routes.
  */
-
-/**
- * Page loads per caller per minute; the JSON read (/site-api/public/forms/:slug) shares the key
- * and the limit (src/server/intelform/respondent/page.ts).
- */
-export {PUBLIC_GET_RATE_LIMIT};
 
 export type FormPageState =
   | {kind: 'form'; payload: PublicFormLive | PublicFormLocked}
@@ -53,8 +48,9 @@ export async function loadFormPage({db, secret, slug, ip, now = Date.now()}: Loa
   if (!SLUG_RE.test(clean)) return {kind: 'missing'};
   if (!db || !secret) return {kind: 'unavailable'};
   try {
-    // The form from the Site Cache, then ONE statement: the limit's hit and, for a capped form,
-    // its exact count. A cache miss reads the form first (one more trip).
+    // The form from the Site Cache: no statement at all, none that writes; for a capped form, one
+    // read of its exact count. A cache miss reads the form first (one more trip).
+    // The render token in this page is bound to the caller's network (tokens.ts).
     const out = await limitedPayload(db, secret, await ipKeyFor(secret, ip), clean, null, now);
     if (out.kind === 'limited') return {kind: 'limited', retryAfter: out.retryAfter};
     return stateOf(out.payload);
@@ -150,14 +146,24 @@ export interface PageCsp {
 }
 
 /**
- * Any site may frame /f/* (the embed). A CSP `frame-ancestors` in the response header wins over
- * the template's `X-Frame-Options: DENY` in every current browser (CSP Level 2+: when
- * frame-ancestors is present, X-Frame-Options is ignored).
+ * Who may frame this /f/* page (the embed): any site, unless the form lists its "Allowed embedding
+ * sites" (then those origins and this site only). A CSP `frame-ancestors` in the response header
+ * wins over the template's `X-Frame-Options: DENY` in every current browser (CSP Level 2+: when
+ * frame-ancestors is present, X-Frame-Options is ignored). The origins were normalised on save
+ * and again here (`frameAncestors`): nothing but `scheme://host[:port]` reaches the header.
  */
-export function allowFraming(csp: PageCsp | undefined, headers?: Headers): void {
-  csp?.insertDirective('frame-ancestors *');
+export function allowFraming(csp: PageCsp | undefined, headers?: Headers, origins?: readonly string[] | null): void {
+  const value = frameAncestors(origins);
+  csp?.insertDirective(`frame-ancestors ${value}`);
   // Astro sends this page's CSP as a <meta> tag, and browsers IGNORE frame-ancestors in a meta
   // CSP, so the template's `X-Frame-Options: DENY` header would still block every embed. A real
   // CSP header carrying only frame-ancestors makes browsers ignore X-Frame-Options (CSP Level 2+).
-  headers?.set('Content-Security-Policy', 'frame-ancestors *');
+  headers?.set('Content-Security-Policy', `frame-ancestors ${value}`);
+}
+
+/** The allowed embedding sites of the form a page shows ([] = any site). */
+export function embedOriginsOf(state: FormPageState): string[] {
+  if (state.kind !== 'form' && state.kind !== 'closed') return [];
+  const list = (state.payload.settings as {embedOrigins?: unknown}).embedOrigins;
+  return Array.isArray(list) ? list.filter((o): o is string => typeof o === 'string') : [];
 }

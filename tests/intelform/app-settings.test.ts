@@ -114,11 +114,28 @@ describe('app settings: cached reads', () => {
   });
 });
 
-describe('app settings: no spam protection group', () => {
-  it('the view and the patch have no spam group', () => {
-    expect(viewOf(defaultSettingsRow())).not.toHaveProperty('spam');
-    const parsed = appSettingsPatch.safeParse({spam: {turnstileSiteKey: '0xNEW'}});
-    expect(parsed.success && parsed.data).toEqual({});
+describe('app settings: spam protection group', () => {
+  it('the view has the limits with their defaults; the old Turnstile key is refused', () => {
+    expect(viewOf(defaultSettingsRow()).spam).toEqual({
+      spamIpPerHour: 5,
+      spamIpPerDay: 20,
+      spamFormPerMinute: 60,
+      confirmPerHour: 100,
+      sitePerMinute: 300,
+      confirmPerDay: 1000,
+    });
+    expect(appSettingsPatch.safeParse({spam: {turnstileSiteKey: '0xNEW'}}).success).toBe(false);
+    expect(appSettingsPatch.safeParse({spam: {sitePerMinute: 500, spamIpPerHour: 50}}).success).toBe(true);
+    expect(appSettingsPatch.safeParse({spam: {spamIpPerHour: 0}}).success).toBe(false);
+    expect(appSettingsPatch.safeParse({spam: {spamIpPerHour: 1001}}).success).toBe(false);
+    expect(appSettingsPatch.safeParse({spam: {sitePerMinute: 9}}).success).toBe(false);
+  });
+  it('reads stored limits leniently: a bad value takes its default', () => {
+    expect(viewOf({...defaultSettingsRow(), spamLimits: {spamIpPerHour: 40, sitePerMinute: 'x', confirmPerDay: 10_000_000}}).spam).toMatchObject({
+      spamIpPerHour: 40,
+      sitePerMinute: 300,
+      confirmPerDay: 1000,
+    });
   });
 });
 

@@ -120,6 +120,8 @@ export function TableView({formId, state, update, openResponse, activeResponseId
     if (first.rows.length === 0 || (nav.before && !first.prevCursor)) setNav(FIRST_PAGE);
   }, [settled, first, nav]);
   const exporter = useExport();
+  // Starting an export needs its own permission (the store's read-only demo has none).
+  const canExport = useCan('exportResponses');
 
   const loadError = list.error ?? catalog.error;
   if (loadError && !first) return <ErrorNote error={loadError} title="Responses didn’t load" />;
@@ -257,6 +259,7 @@ export function TableView({formId, state, update, openResponse, activeResponseId
             icon="download"
             pending={exporter.pending}
             pendingLabel="Exporting…"
+            disabled={!canExport}
             onClick={() => void exporter.run({kind: 'responses', formId, query: exportQuery(state)})}>
             Export CSV
           </Button>
@@ -280,6 +283,7 @@ export function TableView({formId, state, update, openResponse, activeResponseId
             icon="download"
             pending={exporter.pending}
             pendingLabel="Exporting…"
+            disabled={!canExport}
             onClick={() => void exporter.run({kind: 'responses', formId, query: exportQuery(state, ids)})}>
             Export selected
           </Button>

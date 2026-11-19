@@ -4,6 +4,8 @@ import {resetOwnerSeatForTests} from '../../../src/platform/auth/owner-seat';
 import {PREVIEW_COOKIE_HEADER, PREVIEW_SET_COOKIE_HEADER} from '../../../src/platform/auth/preview-cookies';
 import {createDb, getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
+import {ipKeyFor} from '../../../src/server/intelform/respondent/crypto';
+import {renderToken} from '../../../src/server/intelform/respondent/tokens';
 import {env} from './cloudflare-workers';
 
 /**
@@ -104,6 +106,97 @@ export const ownerTickets = new Map<string, {ownerId: string}>();
 /** Who the fake platform says owns the site now (`POST /api/site/v1/owner-current`). Null: it can't be reached. Undefined: nobody. */
 export const platformOwner: {current: string | null | undefined} = {current: null};
 
+/**
+ * The platform's file storage (`src/platform/files.ts`, `files-browser.ts`), in memory: an upload
+ * grant whose URL is a direct PUT, complete (size checked), short links, delete. The test reads
+ * what was stored here.
+ */
+export interface StoredTestFile {
+  name: string;
+  contentType: string;
+  size: number;
+  bytes: Uint8Array | null;
+  ready: boolean;
+}
+export const storedFiles = new Map<string, StoredTestFile>();
+/** Set to a code (`E_STORAGE_NEEDS_PACK`…) to make the next upload grants fail. */
+export const storageFailure: {code: string | null} = {code: null};
+const STORE_PATH = '/__test-storage/';
+let fileSeq = 0;
+const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {status, headers: {'content-type': 'application/json'}});
+
+async function fakeStorage(url: string, init?: RequestInit): Promise<Response> {
+  const path = new URL(url).pathname;
+  const method = (init?.method ?? 'GET').toUpperCase();
+  if (path.startsWith(STORE_PATH)) {
+    const id = path.slice(STORE_PATH.length);
+    const file = storedFiles.get(id);
+    if (method === 'PUT') {
+      if (!file) return new Response('', {status: 403});
+      const bytes = new Uint8Array(await new Response(init?.body as BodyInit).arrayBuffer());
+      if (bytes.length !== file.size) return new Response('', {status: 403});
+      file.bytes = bytes;
+      return new Response('', {status: 200});
+    }
+    if (!file?.ready || !file.bytes) return new Response('', {status: 404});
+    return new Response(file.bytes as BodyInit, {status: 200, headers: {'content-type': file.contentType}});
+  }
+  const auth = new Headers(init?.headers).get('authorization');
+  if (auth !== `Bearer ${env.SITE_KEY}`) throw new Error('file storage call without the Site Key');
+  const rest = path.replace('/api/site/v1/files', '');
+  if (rest === '/uploads' && method === 'POST') {
+    if (storageFailure.code) return json({errors: [{code: storageFailure.code, message: 'No storage.'}]}, 402);
+    const body = JSON.parse(String(init?.body ?? '{}')) as {name: string; contentType: string; size: number};
+    const id = `file_${(fileSeq++).toString(36).padStart(26, '0')}`;
+    storedFiles.set(id, {name: body.name, contentType: body.contentType, size: body.size, bytes: null, ready: false});
+    const file = {id, name: body.name, contentType: body.contentType, size: body.size, visibility: 'private', status: 'pending'};
+    return json({data: {file, upload: {method: 'PUT', url: `${PLATFORM}${STORE_PATH}${id}`, headers: {'content-type': body.contentType}, expiresAt: '', direct: true, file}}}, 201);
+  }
+  const m = /^\/(file_[0-9a-z]{26})(\/[a-z]+)?$/.exec(rest);
+  const file = m ? storedFiles.get(m[1]!) : undefined;
+  if (!m || !file) return json({errors: [{code: 'E_FILE_NOT_FOUND', message: 'No such file.'}]}, 404);
+  if (m[2] === '/complete') {
+    if (!file.bytes) return json({errors: [{code: 'E_FILE_NOT_UPLOADED', message: 'Not uploaded.'}]}, 409);
+    file.ready = true;
+    return json({data: {file: {id: m[1], name: file.name, status: 'ready'}}});
+  }
+  if (m[2] === '/url') {
+    if (!file.ready) return json({errors: [{code: 'E_FILE_NOT_READY', message: 'Not ready.'}]}, 409);
+    return json({data: {url: `${PLATFORM}${STORE_PATH}${m[1]}`, expiresAt: ''}});
+  }
+  if (m[2] === '/delete') {
+    storedFiles.delete(m[1]!);
+    return json({data: {deleted: true}});
+  }
+  return json({errors: [{code: 'E_NOT_FOUND'}]}, 404);
+}
+
+/** A stored file's text, from its download link (what a browser gets). */
+export async function fetchText(url: string): Promise<string> {
+  const res = await globalThis.fetch(url);
+  if (!res.ok) throw new Error(`download ${res.status}`);
+  return new TextDecoder().decode(new Uint8Array(await res.arrayBuffer()));
+}
+
+/** A ready export's files, as the dashboard gets them: the links route, then each link. */
+export async function downloadExport(
+  browser: {get: (path: string) => Promise<{status: number; json: unknown}>},
+  id: string
+): Promise<{status: number; files: {name: string; contentType: string; bytes: Uint8Array; text: string}[]}> {
+  const res = await browser.get(`/site-api/exports/${id}/files`);
+  if (res.status !== 200) return {status: res.status, files: []};
+  const links = (res.json as {files: {name: string; url: string}[]}).files;
+  const files = await Promise.all(
+    links.map(async l => {
+      const r = await globalThis.fetch(l.url);
+      if (!r.ok) throw new Error(`download ${r.status}`);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      return {name: l.name, contentType: r.headers.get('content-type') ?? '', bytes, text: new TextDecoder().decode(bytes)};
+    })
+  );
+  return {status: res.status, files};
+}
+
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url === `${PLATFORM}/api/site/v1/owner-sign-in`) {
@@ -133,6 +226,7 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     emails.push(body);
     return new Response(JSON.stringify({data: {queued: true}}), {status: 202});
   }
+  if (url.startsWith(`${PLATFORM}/api/site/v1/files`) || url.startsWith(`${PLATFORM}${STORE_PATH}`)) return fakeStorage(url, init);
   if (url.startsWith(PLATFORM)) return new Response('{}', {status: 404});
   return realFetch(input, init);
 };
@@ -157,15 +251,35 @@ export const db = createDb(DATABASE_URL || 'postgresql://unused@localhost/unused
 
 export async function resetDatabase() {
   await db.$executeRawUnsafe(
-    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits", "intelform_done_markers", "idempotency_keys", "contacts", "intelform_file_trash", "intelform_exports" RESTART IDENTITY CASCADE'
+    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "jobs", "job_deliveries", "forms", "form_versions", "form_slugs_old", "responses", "form_events", "form_event_counts", "webhook_deliveries", "themes", "templates", "user_form_prefs", "user_prefs", "response_table_prefs", "form_presence", "intelform_rate_limits", "intelform_done_markers", "idempotency_keys", "contacts", "intelform_file_trash", "intelform_exports", "intelform_dirty_forms", "intelform_contact_queue", "intelform_blocked_ips" RESTART IDENTITY CASCADE'
   );
   // IntelForm's `editor` / `viewer` roles come from its migration: keep them (their grants too).
   await db.$executeRawUnsafe(`DELETE FROM "roles" WHERE NOT "is_system" AND "slug" NOT IN ('editor', 'viewer')`);
   await db.$executeRawUnsafe('UPDATE "auth_state" SET "owner_user_id" = NULL, "owner_env_id" = NULL');
+  // Spam protection's site limits back to the built-in defaults.
+  await db.$executeRawUnsafe(`UPDATE "intelform_settings" SET "spam_limits" = '{}'`);
   emails.length = 0;
+  storedFiles.clear();
+  storageFailure.code = null;
   ownerTickets.clear();
   platformOwner.current = null;
   resetOwnerSeatForTests();
+}
+
+/**
+ * Spam protection off the way for tests about something else (caps, bursts, publishing): the
+ * per-network and per-form limits raised to their highest. spam-protection.test.ts tests the defaults.
+ */
+export const LOOSE_LIMITS = {spamIpPerHour: 1000, spamIpPerDay: 10_000, spamFormPerMinute: 100_000} as const;
+
+/** The site's per-minute ceiling raised too (bursts across many forms or addresses). */
+export async function looseSiteLimits(): Promise<void> {
+  await db.$executeRawUnsafe(`UPDATE "intelform_settings" SET "spam_limits" = '{"sitePerMinute": 100000}'`);
+}
+
+/** A render token for one page load of `formId` by a browser at `ip` (tokens are bound to the address). */
+export async function renderTokenAt(secret: string, formId: string, ip = '203.0.113.10', at = Date.now() - 5000): Promise<string> {
+  return renderToken(secret, formId, at, await ipKeyFor(secret, ip));
 }
 
 type App = Pick<Hono, 'request'>;

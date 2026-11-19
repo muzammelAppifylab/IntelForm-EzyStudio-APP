@@ -129,7 +129,9 @@ export async function publicPayload(
   db: Db,
   secret: string,
   form: LoadedForm,
-  unlock?: string | null
+  unlock?: string | null,
+  /** The caller's address-block key (crypto.ts `ipKeyFor`): the render token is bound to it. */
+  ipKey?: string
 ): Promise<PublicFormLive | PublicFormClosed | PublicFormLocked> {
   const base = {
     id: form.id,
@@ -141,7 +143,7 @@ export async function publicPayload(
   if (isClosed(form)) return {...base, status: 'closed', message: form.settings.closedMessage || SYSTEM_LABELS.closed};
   const hash = form.settings.passwordHash;
   if (hash && !(await checkUnlockToken(secret, unlock, form.id, hash))) return {...base, status: 'locked'};
-  const token = await renderToken(secret, form.id);
+  const token = await renderToken(secret, form.id, Date.now(), ipKey);
   return {
     ...base,
     status: 'live',
@@ -193,7 +195,8 @@ export async function publishedPayload(
   secret: string,
   p: PublishedForm,
   unlock?: string | null,
-  state?: FormState | null
+  state?: FormState | null,
+  ipKey?: string
 ): Promise<PublicFormLive | PublicFormClosed | PublicFormLocked | null> {
   let known = state ?? null;
   if (!known && (needsCount(p) || needsHash(p, unlock))) {
@@ -203,7 +206,7 @@ export async function publishedPayload(
   const hash = known ? known.passwordHash : p.passwordHash;
   const passwordHash = hash === undefined ? (p.hasPassword ? HASH_NOT_READ : null) : hash;
   const responseCount = p.countExact ? p.form.responseCount : (known?.responses ?? 0);
-  return publicPayload(db, secret, {...p.form, responseCount, settings: {...p.form.settings, passwordHash}}, unlock);
+  return publicPayload(db, secret, {...p.form, responseCount, settings: {...p.form.settings, passwordHash}}, unlock, ipKey);
 }
 
 /**

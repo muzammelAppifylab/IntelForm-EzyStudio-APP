@@ -48,6 +48,22 @@ body.rf-page-embed {
 .rf-page-embed .rf-loading {
   min-height: 12rem;
 }
+/* The page's static first screen (src/pages/f/[slug].astro): shown until the form draws its own
+   shell, then hidden (no script needed). */
+.rf-root:has(.rf-theme:not(.rf-skeleton)) .rf-skeleton {
+  display: none;
+}
+.rf-skeleton-line {
+  height: 1rem;
+  max-width: 28rem;
+  margin-top: 1rem;
+  border-radius: 0.5rem;
+  background: currentColor;
+  opacity: 0.08;
+}
+.rf-skeleton-short {
+  max-width: 16rem;
+}
 
 /* ----------------------------------------------------------------- shell -- */
 

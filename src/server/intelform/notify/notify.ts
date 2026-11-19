@@ -13,6 +13,8 @@ import { MailError, normalizeMessage, type MailProvider } from './mailer'
 import { DONE_SECONDS, doneKey, hitWindow, markAllDone, markDone } from './markers'
 import { markerKeys, notifyRun, type Loaded, type NotifyRun, type Relay, type Team, type WebhookBreaker } from './run'
 import { readNotifySettings, type NotifySettings } from './settings'
+import { FIXED_LIMITS, FORM_LIMITS } from '../../../lib/intelform/spam'
+import { recordAbuse, type ConfirmSkipReason } from '../abuse/alert'
 
 export { WEBHOOK_BREAKER_THRESHOLD, webhookBreaker, type NotifyRun, type Relay, type WebhookBreaker } from './run'
 
@@ -47,17 +49,21 @@ export { WEBHOOK_BREAKER_THRESHOLD, webhookBreaker, type NotifyRun, type Relay, 
  */
 
 /**
- * Confirmation emails per form per hour: a form can't be turned into a bulk mailer. They go
+ * Confirmation emails per form per hour, by default (each form's Spam protection setting
+ * `confirmPerHour`, src/lib/intelform/spam.ts): a form can't be turned into a bulk mailer. They go
  * through the OWNER's own mail provider (Resend / Postmark, ./mailer.ts), never the platform's
- * relay, so the platform's relay limits don't apply; 1,000 an hour stays inside what those
- * providers accept from a normal account and keeps abuse small.
+ * relay. The other confirmation limits (spam.ts FIXED_LIMITS and the site's `confirmPerDay`):
+ *   - per address block: 3 an hour, every form together (counted by the submit's insert,
+ *     respondent/submit.ts, which marks the response `confirm-skip-ip`);
+ *   - per recipient: 1 a day from one form, 5 a day from every form together (the address is
+ *     keyed with the site secret, never stored);
+ *   - per site: `confirmPerDay` a day, every form together.
+ * A confirmation held back by any of them is skipped (the response is saved), logged once per
+ * form per hour with the reason, and the owner is told once an hour (../abuse/alert.ts).
  */
-export const CONFIRM_EMAIL_LIMIT = 1000
-/**
- * Confirmation emails to ONE address per day, every form together: a stranger's inbox can't be
- * flooded through someone's form (the address is keyed with the site secret, never stored).
- */
-export const CONFIRM_PER_RECIPIENT_PER_DAY = 5
+export const CONFIRM_EMAIL_LIMIT = FORM_LIMITS.confirmPerHour.default
+/** Confirmation emails to ONE address per day, every form together. */
+export const CONFIRM_PER_RECIPIENT_PER_DAY = FIXED_LIMITS.confirmPerRecipientPerDay
 /** Responses per form per hour whose team notification goes one by one; the rest are in the hourly digest. */
 export const NOTIFY_EMAILS_PER_HOUR = 10
 /** Owner emails relayed one by one per hour for the whole site (every form); the rest are in the digest. */
@@ -187,21 +193,21 @@ interface Counted {
  * (so a retry never counts it twice, and the outcome is kept: a digested or capped response stays
  * so). Only the steps asked for are counted.
  */
-async function countResponse(db: PrismaClient, r: Loaded, want: { notify: boolean; confirm: boolean }): Promise<Counted> {
+async function countResponse(db: PrismaClient, r: Loaded, want: { notify: boolean; confirm: boolean }, confirmLimit: number): Promise<Counted> {
   const n = want.notify ? 1 : 0
   const c = want.confirm ? 1 : 0
   const rows = await db.$queryRaw<{ notified: number; confirmed: number; confirm_capped: number }[]>`
     WITH h AS (
       INSERT INTO intelform_notify_hours AS t (form_id, hour, notified, digest_pending, confirmed, confirm_capped)
       VALUES (${r.formId}::uuid, date_trunc('hour', now()), ${n}::int, CASE WHEN ${n}::int > ${NOTIFY_EMAILS_PER_HOUR}::int THEN 1 ELSE 0 END,
-        ${c}::int, CASE WHEN ${c}::int > ${CONFIRM_EMAIL_LIMIT}::int THEN 1 ELSE 0 END)
+        ${c}::int, CASE WHEN ${c}::int > ${confirmLimit}::int THEN 1 ELSE 0 END)
       ON CONFLICT (form_id, hour) DO UPDATE SET
         notified = t.notified + EXCLUDED.notified,
         digest_pending = t.digest_pending
           + CASE WHEN EXCLUDED.notified > 0 AND t.notified + EXCLUDED.notified > ${NOTIFY_EMAILS_PER_HOUR}::int THEN 1 ELSE 0 END,
         confirmed = t.confirmed + EXCLUDED.confirmed,
         confirm_capped = t.confirm_capped
-          + CASE WHEN EXCLUDED.confirmed > 0 AND t.confirmed + EXCLUDED.confirmed > ${CONFIRM_EMAIL_LIMIT}::int THEN 1 ELSE 0 END
+          + CASE WHEN EXCLUDED.confirmed > 0 AND t.confirmed + EXCLUDED.confirmed > ${confirmLimit}::int THEN 1 ELSE 0 END
       RETURNING notified, confirmed, confirm_capped
     ),
     k AS (
@@ -209,7 +215,7 @@ async function countResponse(db: PrismaClient, r: Loaded, want: { notify: boolea
       SELECT v.key, now() + make_interval(secs => ${DONE_SECONDS}::int)
       FROM h, LATERAL (VALUES
         (CASE WHEN ${n}::int = 1 THEN CASE WHEN h.notified > ${NOTIFY_EMAILS_PER_HOUR}::int THEN ${doneKey('notify-digest', r.id)} ELSE ${doneKey('notify-counted', r.id)} END END),
-        (CASE WHEN ${c}::int = 1 THEN CASE WHEN h.confirmed > ${CONFIRM_EMAIL_LIMIT}::int THEN ${doneKey('confirm-capped', r.id)} ELSE ${doneKey('confirm-counted', r.id)} END END)
+        (CASE WHEN ${c}::int = 1 THEN CASE WHEN h.confirmed > ${confirmLimit}::int THEN ${doneKey('confirm-capped', r.id)} ELSE ${doneKey('confirm-counted', r.id)} END END)
       ) AS v(key)
       WHERE v.key IS NOT NULL
       ON CONFLICT (key) DO UPDATE SET expires_at = EXCLUDED.expires_at
@@ -219,11 +225,11 @@ async function countResponse(db: PrismaClient, r: Loaded, want: { notify: boolea
   const row = rows[0]
   const out: Counted = {
     digest: !!n && Number(row?.notified ?? 0) > NOTIFY_EMAILS_PER_HOUR,
-    capped: !!c && Number(row?.confirmed ?? 0) > CONFIRM_EMAIL_LIMIT,
+    capped: !!c && Number(row?.confirmed ?? 0) > confirmLimit,
   }
   // Logged once per form per hour (the first one held back), never per response.
   if (out.capped && Number(row?.confirm_capped ?? 0) === 1) {
-    console.warn(`[intelform] confirmation emails: form ${r.formId} reached its hourly limit (${CONFIRM_EMAIL_LIMIT}); the rest of this hour's are not sent`)
+    console.warn(`[intelform] confirmation emails: form ${r.formId} reached its hourly limit (${confirmLimit}); the rest of this hour's are not sent`)
   }
   return out
 }
@@ -288,17 +294,33 @@ export async function runResponseNotify(db: PrismaClient, data: unknown, deps: N
     !done.has(doneKey('confirm', resp.id)) &&
     !done.has(doneKey('confirm-counted', resp.id)) &&
     !done.has(doneKey('confirm-capped', resp.id))
-  const counted = countNotify || countConfirm ? await countResponse(db, resp, { notify: countNotify, confirm: countConfirm }) : { digest: false, capped: false }
+  // Held back at submit: the address block asked for too many confirmations this hour.
+  const skippedAtSubmit = wantConfirm && done.has(doneKey('confirm-skip-ip', resp.id)) && !done.has(doneKey('confirm', resp.id))
+  const countConfirmNow = countConfirm && !skippedAtSubmit
+  const counted =
+    countNotify || countConfirmNow
+      ? await countResponse(db, resp, { notify: countNotify, confirm: countConfirmNow }, settings.confirmPerHour)
+      : { digest: false, capped: false }
   const digest = done.has(doneKey('notify-digest', resp.id)) || (countNotify && counted.digest)
-  let capped = done.has(doneKey('confirm-capped', resp.id)) || (countConfirm && counted.capped)
+  let capped = skippedAtSubmit || done.has(doneKey('confirm-capped', resp.id)) || (countConfirmNow && counted.capped)
+  let skipReason: ConfirmSkipReason | null = skippedAtSubmit ? 'ip' : countConfirmNow && counted.capped ? 'form' : null
   // Counted once per response, like the hourly cap (a retry finds 'confirm-counted' and skips this).
-  if (countConfirm && !capped && config.jwtSecret && typeof to === 'string') {
-    const who = await hmacHex(config.jwtSecret, 'confirm-recipient', to.trim().toLowerCase())
-    if ((await hitWindow(db, `confirm-to:${who.slice(0, 40)}`, 86_400)) > CONFIRM_PER_RECIPIENT_PER_DAY) {
+  if (countConfirmNow && !capped && config.jwtSecret && typeof to === 'string') {
+    const who = (await hmacHex(config.jwtSecret, 'confirm-recipient', to.trim().toLowerCase())).slice(0, 40)
+    const app = await run.app()
+    // One address: once a day from this form, a few times a day from every form; then the site's day.
+    const [fromForm, fromAll] = await Promise.all([
+      hitWindow(db, `confirm-to:${resp.formId}:${who}`, 86_400),
+      hitWindow(db, `confirm-to:${who}`, 86_400),
+    ])
+    if (fromForm > FIXED_LIMITS.confirmPerRecipientPerFormPerDay || fromAll > CONFIRM_PER_RECIPIENT_PER_DAY) skipReason = 'recipient'
+    else if ((await hitWindow(db, 'confirm-site', 86_400)) > app.confirmPerDay) skipReason = 'site'
+    if (skipReason) {
       await markDone(db, doneKey('confirm-capped', resp.id))
       capped = true
     }
   }
+  if (skipReason) await recordAbuse(db, { kind: 'confirm-skipped', formId: resp.formId, reason: skipReason }, { run })
 
   const errors: Error[] = []
   let deferred = false
@@ -427,6 +449,16 @@ async function notifyTeam(
   return { notified, teamEmails: teamSent }
 }
 
+/**
+ * The confirmation's subject: the owner's own words or, when they are empty, the form's title.
+ * Never a respondent's answer: a piped answer (`{field}`) shows its fallback or nothing, so a
+ * stranger can't put their text in the subject line of an email sent from the owner's address.
+ */
+export function confirmationSubject(template: string, def: Parameters<typeof interpolate>[1], title: string): string {
+  const own = interpolate(template, def, {}).replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+  return (own || title).slice(0, 200)
+}
+
 async function confirmRespondent(
   db: PrismaClient,
   r: Loaded,
@@ -438,9 +470,9 @@ async function confirmRespondent(
   replyTo: string | null,
 ): Promise<NotifyOutcome['confirmation']> {
   const key = doneKey('confirm', r.id)
-  // Answers lose every link before they're piped into the owner's text.
+  // Answers lose every link before they're piped into the owner's text (the body only).
   const piped = withoutLinks(answers) as Record<string, unknown>
-  const subject = interpolate(settings.confirmationSubject, def, piped).replace(/[\r\n]+/g, ' ').trim() || r.title
+  const subject = confirmationSubject(settings.confirmationSubject, def, r.title)
   const text = interpolate(settings.confirmationBody, def, piped)
   const m = normalizeMessage({ to, subject, text, replyTo })
   if (!m) return 'invalid'

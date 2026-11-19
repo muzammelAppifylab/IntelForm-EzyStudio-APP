@@ -1,4 +1,4 @@
-import {isIsoDate, type DateFormat} from '../../lib/intelform/form/types/basic';
+import {isIsoDate, type DateFormat} from '../../lib/intelform/form/types/formats';
 
 /** Date text helpers for the date field (pure; unit tested). */
 

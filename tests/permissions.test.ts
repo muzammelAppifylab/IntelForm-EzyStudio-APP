@@ -27,6 +27,7 @@ describe('the permission catalogue', () => {
     expect(PERMISSIONS.FORM_DELETE).toBe('site:form:delete');
     expect(PERMISSIONS.RESPONSE_READ).toBe('site:response:read');
     expect(PERMISSIONS.RESPONSE_DELETE).toBe('site:response:delete');
+    expect(PERMISSIONS.RESPONSE_EXPORT).toBe('site:response:export');
     expect(PERMISSIONS.CONTACT_READ).toBe('site:contact:read');
     expect(PERMISSIONS.CONTACT_WRITE).toBe('site:contact:write');
     expect(PERMISSIONS.APP_SETTINGS).toBe('site:intelform:settings');
@@ -43,6 +44,7 @@ describe('the permission catalogue', () => {
         'editForms',
         'deleteForms',
         'viewResponses',
+        'exportResponses',
         'deleteResponses',
         'viewContacts',
         'editContacts',
@@ -82,6 +84,8 @@ describe('the permission catalogue', () => {
       deleteForms: true,
       viewResponses: true,
       deleteResponses: true,
+      // Granted to admins by its catalogue entry when it first reaches the database (not in this set).
+      exportResponses: false,
       viewContacts: true,
       editContacts: true,
       manageAppSettings: true,
@@ -98,6 +102,8 @@ describe('the permission catalogue', () => {
     expect(CATALOGUE.FORM_READ.roles).toEqual(['admin', 'editor', 'viewer']);
     expect(CATALOGUE.FORM_WRITE.roles).toEqual(['admin', 'editor']);
     expect(CATALOGUE.APP_SETTINGS.roles).toEqual(['admin']);
+    // Whoever could export before; never the store's read-only demo role.
+    expect(CATALOGUE.RESPONSE_EXPORT.roles).toEqual(['admin', 'editor', 'viewer']);
     expect(CATALOGUE.USER_INVITE.roles).toEqual(['admin']);
     expect(CATALOGUE.USER_INVITE.roles).toEqual(['admin']);
     // The type is exact: a key nobody declared does not exist.

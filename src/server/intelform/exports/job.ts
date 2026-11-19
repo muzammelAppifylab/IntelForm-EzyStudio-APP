@@ -1,7 +1,8 @@
 import {DontRetry, JobRejected, sendJob} from '../../../platform/background';
 import type {PrismaClient} from '../../../platform/db';
 import type {ExportKind, ExportStatus} from '../../../lib/intelform/api-exports';
-import {buildPart, MAX_EXPORT_BYTES, type BuildContext, type BuildState} from './builders';
+import {buildPart, closeFile, MAX_EXPORT_BYTES, openFile, type BuildContext, type BuildState} from './builders';
+import {platformStore, type ExportFileStore} from './storage';
 import {ExportError} from './errors';
 
 export {ExportError, MAX_EXPORT_BYTES};
@@ -9,28 +10,34 @@ export {ExportError, MAX_EXPORT_BYTES};
 /**
  * Exports run in the `intelform-exports` background job (docs/agent/background-jobs.md), never
  * in a request: a big CSV or ZIP is CPU and many queries, and a Worker request has neither the
- * CPU nor the time. One run builds bounded batches for up to RUN_BUDGET_MS; each time what it
- * built passes PART_BYTES it appends it to the export as one more part (`intelform_export_parts`)
- * and saves its progress in the same statement, so a run fills its time budget (about 30 s, a
- * few parts) and memory stays at about one part. Then it sends the next run. A run that repeats
- * (at-least-once) or retries starts from the saved progress: a part is written exactly once (its
- * seq is the parts count it saw).
+ * CPU nor the time. ONE run builds ONE file: bounded batches until it holds PART_ROWS rows or
+ * PART_BYTES bytes, or the export is done. Its size is capped by rows and bytes built, never by
+ * the clock (a deployed Worker's clock does not move during CPU work, so a time budget never
+ * fires there). The file goes to the platform's file storage (private: exports/storage.ts, the
+ * server's own createUpload, PUT and completeUpload); `intelform_export_parts` keeps its id,
+ * never its bytes, and the progress is saved in the same statement that marks it stored. Then the
+ * run sends the next one. A run that repeats (at-least-once) or retries starts from the saved
+ * progress: a file is kept exactly once (its seq is the parts count it saw), and a file a stopped
+ * run left behind is replaced and goes to the file trash.
  *
+ * A big export is several files, each complete on its own (builders.ts `openFile`/`closeFile`).
  * A refused send (the site's jobs-per-minute limit, the platform busy) never fails the export:
- * it is marked `send_pending` and the every-minute job sends it again (`resendPendingExports`).
- * When the file is complete the export is `ready`; the dashboard downloads it
- * (GET /site-api/exports/:id/download streams the parts, no CPU work) and the hourly maintenance
- * sweeps exports a day old.
+ * it is marked `send_pending` and the 15-minute job sends it again (`resendPendingExports`).
+ * When the last file is stored the export is `ready`; the dashboard asks for its files
+ * (GET /site-api/exports/:id/files: the owner and permission checks, then 5-minute links) and
+ * the hourly maintenance sweeps exports a day old. A deleted part (the sweep, a failed export, a
+ * deleted form) puts its stored file in intelform_file_trash (a trigger), and the file cleanup
+ * removes it from storage.
  */
 
 export const EXPORTS_LIST = 'intelform-exports';
-/** Time one run builds for (a run has 60 s; the rest is the write and the next send). */
-const RUN_BUDGET_MS = 30_000;
-/** A part is written when the built bytes pass this (bounded memory: about one part per run). */
-export const PART_BYTES = 8 * 1024 * 1024;
+/** Rows one run (one file) holds at most. */
+export const PART_ROWS = 50_000;
+/** Bytes one run (one file) holds at most: the run's memory is about this, once. */
+export const PART_BYTES = 16 * 1024 * 1024;
 /** An export whose next run couldn't be queued for this long has stopped (it is marked failed). */
 export const PENDING_SEND_MINUTES = 120;
-/** Exports the every-minute job sends again per run (each send counts toward the jobs-per-minute limit). */
+/** Exports the 15-minute job sends again per run (each send counts toward the jobs-per-minute limit). */
 const RESEND_PER_MINUTE = 3;
 const TOO_LARGE = 'This export is too large for one file. Narrow it with filters, or export fewer forms.';
 /** Exports are kept this long (hours) after they are started. */
@@ -63,12 +70,15 @@ export interface ExportRow {
   updated_at: Date;
 }
 
-export function statusOf(row: Pick<ExportRow, 'id' | 'kind' | 'status' | 'rows' | 'file_name' | 'error' | 'created_at'>): ExportStatus {
+export function statusOf(
+  row: Pick<ExportRow, 'id' | 'kind' | 'status' | 'rows' | 'file_name' | 'error' | 'created_at'> & {parts?: number}
+): ExportStatus {
   return {
     id: row.id,
     kind: row.kind,
     status: row.status,
     rows: Number(row.rows),
+    files: row.status === 'ready' ? Number(row.parts ?? 0) : 0,
     fileName: row.file_name,
     error: row.status === 'failed' ? (row.error ?? UNFINISHED) : null,
     createdAt: (row.created_at instanceof Date ? row.created_at : new Date(row.created_at)).toISOString(),
@@ -92,7 +102,7 @@ export async function sendExportRun(requestUrl: string, id: string, step: number
 }
 
 /**
- * The next run wasn't queued: the every-minute job sends it (`resendPendingExports`). Also for
+ * The next run wasn't queued: the 15-minute job sends it (`resendPendingExports`). Also for
  * the start route when its first send is refused (`runs` 0).
  */
 export async function markSendPending(db: Db, id: string, runs: number): Promise<void> {
@@ -103,7 +113,7 @@ export async function markSendPending(db: Db, id: string, runs: number): Promise
 }
 
 /**
- * The every-minute job: sends again the runs of exports whose send was refused (oldest first,
+ * The 15-minute job: sends again the runs of exports whose send was refused (oldest first,
  * RESEND_PER_MINUTE a minute; a refusal stops until next minute). The job key is the run's
  * number, so a send that did reach the platform before is not run twice. Returns how many went.
  */
@@ -165,16 +175,21 @@ export async function failStaleExports(db: Db, id?: string): Promise<number> {
   return stale.length;
 }
 
+export interface ExportJobDeps {
+  send?: typeof sendExportRun;
+  lastTry?: boolean;
+  /** Where the files go (tests: a stand-in; default the platform's storage). */
+  store?: ExportFileStore;
+  /** Tests: smaller files. */
+  partRows?: number;
+  partBytes?: number;
+}
+
 /**
  * The job handler: `{exportId}`. `lastTry` (the platform's last attempt): a run that fails then
  * marks the export failed, so it never shows "running" with nothing left to run it.
  */
-export async function runExportJob(
-  db: Db,
-  requestUrl: string,
-  data: unknown,
-  deps: {now?: () => number; send?: typeof sendExportRun; lastTry?: boolean} = {}
-): Promise<void> {
+export async function runExportJob(db: Db, requestUrl: string, data: unknown, deps: ExportJobDeps = {}): Promise<void> {
   const id = String((data as {exportId?: unknown} | null)?.exportId ?? '');
   if (!UUID.test(id)) throw new DontRetry('This export job has no export id.');
   try {
@@ -185,116 +200,180 @@ export async function runExportJob(
   }
 }
 
-async function runExport(
-  db: Db,
-  requestUrl: string,
-  id: string,
-  deps: {now?: () => number; send?: typeof sendExportRun}
-): Promise<void> {
-  const now = deps.now ?? Date.now;
-  const started = now();
+/** The stored file's name: the export's own when it is one file, else "<name> part <n>". */
+export function partName(fileName: string, seq: number, only: boolean): string {
+  if (only) return fileName;
+  const dot = fileName.lastIndexOf('.');
+  const [base, ext] = dot > 0 ? [fileName.slice(0, dot), fileName.slice(dot)] : [fileName, ''];
+  return `${base} part ${seq + 1}${ext}`;
+}
+
+/** The storage's type for an export's Content-Type (`text/csv; charset=utf-8` is a CSV). */
+const storedType = (contentType: string) => (contentType.startsWith('application/zip') ? 'application/zip' : 'text/csv');
+
+async function runExport(db: Db, requestUrl: string, id: string, deps: ExportJobDeps): Promise<void> {
   const row = await loadExport(db, id);
   // Gone (its form was deleted, swept) or already finished: nothing to do.
   if (!row || row.status !== 'running') return;
 
-  let parts = Number(row.parts);
-  let written = Number(row.bytes);
+  const seq = Number(row.parts);
+  const written = Number(row.bytes);
   const ctx: BuildContext = {db: db as PrismaClient, kind: row.kind, formId: row.form_id, params: row.params, written};
   let state: BuildState = row.state ?? {};
   let done = false;
-  for (;;) {
-    // Build one part: until it passes PART_BYTES, the run's time is up or the file is done.
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    let rows = 0;
-    try {
-      while (!done && size < PART_BYTES && now() - started < RUN_BUDGET_MS) {
-        ctx.written = written + size;
-        const part = await buildPart(ctx, state);
-        if (part.bytes.length) {
-          chunks.push(part.bytes);
-          size += part.bytes.length;
-        }
-        rows += part.rows;
-        state = part.state;
-        done = part.done;
-        if (written + size > MAX_EXPORT_BYTES) throw new ExportError(TOO_LARGE);
-      }
-    } catch (err) {
-      if (err instanceof ExportError) {
-        await fail(db, id, err.message);
-        return;
-      }
-      throw err; // tried again later, from the saved progress
+  let empty = false;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let rows = 0;
+  try {
+    // A later file starts with its own header; written once the file gets content of its own.
+    let head: Uint8Array | null = null;
+    if (seq > 0) {
+      const opened = await openFile(ctx, state);
+      head = opened.head.length ? opened.head : null;
+      state = opened.state;
     }
-    const last = done || size < PART_BYTES || now() - started >= RUN_BUDGET_MS;
-    const saved = await savePart(db, id, {parts, chunks, size, rows, state: done ? {} : state, done, endRun: last});
-    if (!saved) return;
-    if (size > 0) parts++;
-    written += size;
-    if (last) break;
+    // ONE file: until it holds PART_ROWS rows or PART_BYTES bytes, or the export is done.
+    const maxBytes = deps.partBytes ?? PART_BYTES;
+    const maxRows = deps.partRows ?? PART_ROWS;
+    while (!done && size < maxBytes && rows < maxRows) {
+      ctx.written = written + size;
+      ctx.rowsLeft = maxRows - rows;
+      const part = await buildPart(ctx, state);
+      if (part.bytes.length) {
+        if (head) {
+          chunks.push(head);
+          size += head.length;
+          head = null;
+        }
+        chunks.push(part.bytes);
+        size += part.bytes.length;
+      }
+      rows += part.rows;
+      state = part.state;
+      done = part.done;
+      empty = !!part.empty;
+      if (written + size > MAX_EXPORT_BYTES) throw new ExportError(TOO_LARGE);
+    }
+    if (!done) {
+      const closed = closeFile(ctx, state);
+      if (closed.tail.length) {
+        chunks.push(closed.tail);
+        size += closed.tail.length;
+      }
+      state = closed.state;
+    }
+  } catch (err) {
+    if (err instanceof ExportError) {
+      await fail(db, id, err.message);
+      return;
+    }
+    throw err; // tried again later, from the saved progress
   }
-  if (done) return;
+
+  // An export that ended exactly where the last file did: nothing more to keep.
+  const keep = size > 0 && !(done && empty && seq > 0);
+  if (keep) {
+    const stored = await storeFile(db, deps.store ?? platformStore(requestUrl), row, seq, chunks, size, done);
+    chunks.length = 0;
+    if (stored === 'failed' || stored === 'gone') return;
+  }
+  const saved = await saveProgress(db, id, {seq, kept: keep, size, rows, state: done ? {} : state, done});
+  if (!saved || done) return;
 
   const step = Number(row.runs) + 1;
   try {
     await (deps.send ?? sendExportRun)(requestUrl, id, step);
   } catch (err) {
     // Refused (busy, the jobs-per-minute limit) or unreachable: never a failed export. The
-    // every-minute job sends it (resendPendingExports).
+    // 15-minute job sends it (resendPendingExports).
     console.warn(`[intelform] next export run not queued (${err instanceof JobRejected ? err.code : err instanceof Error ? err.name : 'error'})`);
     await markSendPending(db, id, step);
   }
 }
 
 /**
- * ONE statement: the part (seq = the parts count this run saw) and the progress. A run that
- * repeats finds the part there (ON CONFLICT) and the parts count moved: it changes nothing. An
- * export that stopped meanwhile (failed: responses in it were deleted, or it went stale) gets no
- * part. `endRun` counts the run (the next run's job key). False when nothing was saved.
+ * Stores one file: the upload grant first, its id written as part `seq` (not ready) only while
+ * the export still runs at this seq, so a file never exists without a row that leads the sweep
+ * to it; then the bytes and the platform's check, then the row is ready. A repeat run replaces a
+ * part that never got ready (its file goes to the trash, a trigger); a ready one is kept and this
+ * run's file removed. 'stored' | 'gone' (the export stopped, or another run stored it) |
+ * 'failed' (storage can't take it: the export failed with words for people). Throws to retry.
  */
-async function savePart(
+async function storeFile(
+  db: Db,
+  store: ExportFileStore,
+  row: ExportRow,
+  seq: number,
+  chunks: Uint8Array[],
+  size: number,
+  done: boolean
+): Promise<'stored' | 'gone' | 'failed'> {
+  const name = partName(row.file_name, seq, done && seq === 0);
+  const begun = await store.begin(name, storedType(row.content_type), size);
+  if (!begun.ok) {
+    if (begun.retry) throw new Error(`Storage refused the export file (${begun.code}).`);
+    await fail(db, row.id, begun.message);
+    return 'failed';
+  }
+  const claimed = await db.$queryRaw<{seq: number}[]>`
+    INSERT INTO intelform_export_parts AS p (export_id, seq, file_id, size)
+    SELECT ${row.id}::uuid, ${seq}::int, ${begun.fileId}, ${size}::int
+    WHERE EXISTS (SELECT 1 FROM intelform_exports WHERE id = ${row.id}::uuid AND status = 'running' AND parts = ${seq}::int)
+    ON CONFLICT (export_id, seq) DO UPDATE SET file_id = EXCLUDED.file_id, size = EXCLUDED.size, ready = false, created_at = now()
+      WHERE NOT p.ready
+    RETURNING seq
+  `;
+  if (!claimed.length) {
+    await store.remove(begun.fileId);
+    return 'gone';
+  }
+  const finished = await store.finish(begun.fileId, begun.upload, new Blob(chunks as BlobPart[]));
+  if (!finished.ok) {
+    if (finished.retry) throw new Error(`The export file was not stored (${finished.code}).`);
+    await fail(db, row.id, finished.message);
+    return 'failed';
+  }
+  const ready = await db.$executeRaw`
+    UPDATE intelform_export_parts SET ready = true
+    WHERE export_id = ${row.id}::uuid AND seq = ${seq}::int AND file_id = ${begun.fileId}
+  `;
+  return ready ? 'stored' : 'gone';
+}
+
+/**
+ * ONE statement: the progress after a file (seq = the parts count this run saw). Only while the
+ * export runs at this seq and, when a file was kept, its part is ready with that seq: a run that
+ * repeats finds the parts count moved and changes nothing. False when nothing was saved.
+ */
+async function saveProgress(
   db: Db,
   id: string,
-  p: {parts: number; chunks: Uint8Array[]; size: number; rows: number; state: BuildState; done: boolean; endRun: boolean}
+  p: {seq: number; kept: boolean; size: number; rows: number; state: BuildState; done: boolean}
 ): Promise<boolean> {
-  const bytes = new Uint8Array(p.size);
-  let at = 0;
-  for (const c of p.chunks) {
-    bytes.set(c, at);
-    at += c.length;
-  }
-  p.chunks.length = 0;
   const saved = await db.$queryRaw<{id: string}[]>`
-    WITH p AS (
-      INSERT INTO intelform_export_parts (export_id, seq, data)
-      SELECT ${id}::uuid, ${p.parts}::int, ${bytes}
-      WHERE ${p.size}::int > 0
-        AND EXISTS (SELECT 1 FROM intelform_exports WHERE id = ${id}::uuid AND status = 'running' AND parts = ${p.parts}::int)
-      ON CONFLICT (export_id, seq) DO NOTHING
-      RETURNING 1
-    )
     UPDATE intelform_exports SET
       state = ${JSON.stringify(p.state)}::jsonb,
       rows = rows + ${p.rows}::int,
-      bytes = bytes + ${p.size}::bigint,
-      parts = parts + (SELECT count(*)::int FROM p),
-      runs = runs + ${p.endRun ? 1 : 0}::int,
+      bytes = bytes + ${p.kept ? p.size : 0}::bigint,
+      parts = parts + ${p.kept ? 1 : 0}::int,
+      runs = runs + 1,
       send_pending = false,
       status = ${p.done ? 'ready' : 'running'},
       updated_at = now()
-    WHERE id = ${id}::uuid AND status = 'running' AND parts = ${p.parts}::int
-      AND (${p.size}::int = 0 OR EXISTS (SELECT 1 FROM p))
+    WHERE id = ${id}::uuid AND status = 'running' AND parts = ${p.seq}::int
+      AND (NOT ${p.kept}::boolean OR EXISTS (
+        SELECT 1 FROM intelform_export_parts WHERE export_id = ${id}::uuid AND seq = ${p.seq}::int AND ready))
     RETURNING id::text AS id
   `;
-  if (saved.length) return true;
-  // Stopped while this run built (a delete committed while this statement ran): no part of a
-  // stopped export stays behind.
-  await db.$executeRaw`
-    DELETE FROM intelform_export_parts p USING intelform_exports e
-    WHERE p.export_id = e.id AND e.id = ${id}::uuid AND e.status <> 'running'
+  return saved.length > 0;
+}
+
+/** The stored files of a ready export, in order (the route checks who asks first). */
+export async function exportFiles(db: Db, id: string): Promise<{seq: number; file_id: string; size: number}[]> {
+  return db.$queryRaw<{seq: number; file_id: string; size: number}[]>`
+    SELECT seq, file_id, size FROM intelform_export_parts WHERE export_id = ${id}::uuid AND ready ORDER BY seq LIMIT 1000
   `;
-  return false;
 }
 
 /** Exports started more than KEEP_HOURS ago go (their parts with them). */

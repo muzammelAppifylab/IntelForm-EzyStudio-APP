@@ -3,6 +3,7 @@ import {useState} from 'react';
 import {dataSettingsInput} from '../../../lib/intelform/settings-app';
 import type {AppSettingsResponse} from '../../../server/intelform/settings/view';
 import {Button, Checkbox, Field, useToast} from '../../ui';
+import {useCan} from '../lib/can';
 import {useExport} from '../lib/exports';
 import {useFormErrors} from '../lib/form-errors';
 import {useSaveAppSettings} from '../queries/app-settings';
@@ -18,6 +19,8 @@ export function retentionValue(on: boolean, days: string): number | null | 'miss
 /** Settings → Data → Export: one CSV per form, in a ZIP file, built by a background job. */
 function ExportAll() {
   const exporter = useExport();
+  // Starting an export needs its own permission (the store's read-only demo has none).
+  const canExport = useCan('exportResponses');
   return (
     <div className="form-stack settings-export" aria-labelledby="as-export-label" role="group">
       <p className="settings-note">
@@ -30,6 +33,7 @@ function ExportAll() {
           icon="download"
           pending={exporter.pending}
           pendingLabel="Preparing export…"
+          disabled={!canExport}
           onClick={() => void exporter.run({kind: 'all'})}>
           Export all responses (ZIP)
         </Button>

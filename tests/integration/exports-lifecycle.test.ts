@@ -4,7 +4,8 @@ import {app} from '../../src/server/app';
 // Registers the job handlers: locally an export job runs as soon as it is sent.
 import {applyRetention, hourlyMaintenance} from '../../src/server/background';
 import {runExportJob, STALE_MINUTES} from '../../src/server/intelform/exports/job';
-import {type Browser, configureEnv, DATABASE_URL, db, ownerAccountId, ownerSignedIn, resetDatabase} from './support/harness';
+import {unzip} from '../intelform/unzip';
+import {type Browser, configureEnv, DATABASE_URL, db, downloadExport, fetchText, ownerAccountId, ownerSignedIn, resetDatabase, storageFailure, storedFiles} from './support/harness';
 
 /**
  * Exports never outlive the responses in them (F-010), and an export whose job stopped says so
@@ -61,8 +62,11 @@ describe.skipIf(!DATABASE_URL)('exports lifecycle (integration, real Postgres)',
   }
 
   async function download(id: string) {
-    const res = await owner.get(`/site-api/exports/${id}/download`);
-    return {status: res.status, text: String((res.json as {text?: string} | null)?.text ?? '')};
+    const res = await owner.get(`/site-api/exports/${id}/files`);
+    if (res.status !== 200) return {status: res.status, text: ''};
+    const files = (res.json as {files: {url: string}[]}).files;
+    const texts = await Promise.all(files.map(f => fetchText(f.url)));
+    return {status: res.status, text: texts.join('')};
   }
 
   async function expectStopped(id: string) {
@@ -176,7 +180,7 @@ describe.skipIf(!DATABASE_URL)('exports lifecycle (integration, real Postgres)',
         VALUES (${userId}, 'contacts', '{}'::jsonb, 'c.csv', 'text/csv', 'running',
           now() - make_interval(mins => ${minutesAgo}::int), now() - make_interval(mins => ${minutesAgo}::int))
         RETURNING id::text AS id`;
-      await db.$executeRaw`INSERT INTO intelform_export_parts (export_id, seq, data) VALUES (${row!.id}::uuid, 0, ${new Uint8Array([1, 2])})`;
+      await db.$executeRaw`INSERT INTO intelform_export_parts (export_id, seq, file_id, size, ready) VALUES (${row!.id}::uuid, 0, ${`file_${row!.id.replace(/-/g, '').slice(0, 26)}`}, 2, true)`;
       return row!.id;
     };
     const stale = await insert(STALE_MINUTES + 5);
@@ -214,5 +218,92 @@ describe.skipIf(!DATABASE_URL)('exports lifecycle (integration, real Postgres)',
     // …the last try marks it failed.
     await expect(run(true)).rejects.toThrow('database busy');
     expect((await owner.get(`/site-api/exports/${id}`)).json).toMatchObject({status: 'failed', error: 'The export didn’t finish. Try again.'});
+  });
+  it('keeps the export in file storage (ids in the database, never bytes); the 24-hour sweep removes the stored files', async () => {
+    await respond(survey, 'ada@example.com');
+    const id = await startExport({kind: 'responses', formId: survey.id, query: {tz: 'UTC'}});
+    const [part] = await db.$queryRaw<{file_id: string; size: number; ready: boolean}[]>`
+      SELECT file_id, size, ready FROM intelform_export_parts WHERE export_id = ${id}::uuid`;
+    expect(part).toMatchObject({ready: true});
+    const cols = await db.$queryRaw<{column_name: string}[]>`SELECT column_name FROM information_schema.columns WHERE table_name = 'intelform_export_parts'`;
+    expect(cols.map(c => c.column_name)).not.toContain('data');
+    const stored = storedFiles.get(part!.file_id)!;
+    expect(stored).toMatchObject({ready: true, size: part!.size, contentType: 'text/csv'});
+    expect((await download(id)).text).toContain('ada@example.com');
+    // A day later: the sweep deletes the export, its part goes, its file goes to the trash and
+    // the same hourly run removes it from storage.
+    await db.$executeRaw`UPDATE intelform_exports SET created_at = now() - interval '25 hours' WHERE id = ${id}::uuid`;
+    const out = await hourlyMaintenance(db as never);
+    expect(out.exports).toBe(1);
+    expect(out.files).toBeGreaterThanOrEqual(1);
+    expect(storedFiles.has(part!.file_id)).toBe(false);
+    expect((await owner.get(`/site-api/exports/${id}/files`)).status).toBe(404);
+  });
+
+  it('a stopped export leaves no stored file behind (its parts go to the file trash)', async () => {
+    await respond(survey, 'ada@example.com');
+    const id = await startExport({kind: 'responses', formId: survey.id, query: {tz: 'UTC'}});
+    const [part] = await db.$queryRaw<{file_id: string}[]>`SELECT file_id FROM intelform_export_parts WHERE export_id = ${id}::uuid`;
+    await db.$executeRaw`DELETE FROM responses WHERE form_id = ${survey.id}::uuid`;
+    await expectStopped(id);
+    const trash = await db.$queryRaw<{file_id: string}[]>`SELECT file_id FROM intelform_file_trash`;
+    expect(trash.map(t => t.file_id)).toContain(part!.file_id);
+  });
+
+  it('without storage the export fails in words that say how to fix it', async () => {
+    await respond(survey, 'ada@example.com');
+    storageFailure.code = 'E_STORAGE_NEEDS_PACK';
+    const res = await owner.post('/site-api/exports', {kind: 'responses', formId: survey.id, query: {tz: 'UTC'}});
+    expect(res.json).toMatchObject({status: 'failed'});
+    expect(String((res.json as {error: string}).error)).toMatch(/Storage page/);
+    expect(storedFiles.size).toBe(0);
+  });
+
+  it('a big export is several files, one per run, each complete: CSVs with their header, ZIPs with their directory', async () => {
+    for (let i = 0; i < 5; i++) await respond(survey, `p${i}@example.com`);
+    for (let i = 0; i < 3; i++) await respond(other, `q${i}@example.com`);
+    const userId = await ownerAccountId();
+    const make = async (kind: string, formId: string | null, fileName: string, contentType: string) => {
+      const [row] = await db.$queryRaw<{id: string}[]>`
+        INSERT INTO intelform_exports (user_id, kind, form_id, params, file_name, content_type)
+        VALUES (${userId}, ${kind}, ${formId}::uuid, ${JSON.stringify({query: {}, tz: 'UTC', origin: null})}::jsonb, ${fileName}, ${contentType})
+        RETURNING id::text AS id`;
+      return row!.id;
+    };
+    const runAll = async (id: string, partRows: number) => {
+      for (let i = 0; i < 40; i++) {
+        const [r] = await db.$queryRaw<{status: string}[]>`SELECT status FROM intelform_exports WHERE id = ${id}::uuid`;
+        if (r!.status !== 'running') return r!.status;
+        await runExportJob(db as never, 'https://shop.example.test/x', {exportId: id}, {send: async () => undefined, partRows});
+      }
+      return 'stuck';
+    };
+
+    const csv = await make('responses', survey.id, 'survey.csv', 'text/csv; charset=utf-8');
+    expect(await runAll(csv, 2)).toBe('ready');
+    const got = await downloadExport(owner, csv);
+    expect(got.files.map(f => f.name)).toEqual(['survey part 1.csv', 'survey part 2.csv', 'survey part 3.csv']);
+    const emails = got.files.flatMap(f => {
+      const [head, ...rows] = f.text.replace(/^\uFEFF/, '').split('\r\n').filter(Boolean);
+      expect(head).toContain('email');
+      return rows.map(r => r.match(/p\d@example\.com/)?.[0]);
+    });
+    expect(emails.sort()).toEqual(['p0@example.com', 'p1@example.com', 'p2@example.com', 'p3@example.com', 'p4@example.com']);
+
+    const zip = await make('all', null, 'responses.zip', 'application/zip');
+    expect(await runAll(zip, 2)).toBe('ready');
+    const zips = await downloadExport(owner, zip);
+    expect(zips.files.length).toBeGreaterThan(1);
+    const seen: string[] = [];
+    for (const f of zips.files) {
+      const entries = unzip(Buffer.from(f.bytes));
+      expect(entries.length).toBeGreaterThan(0);
+      for (const e of entries) {
+        expect(e.crcOk, e.name).toBe(true);
+        expect(e.text.startsWith('\uFEFF'), e.name).toBe(true);
+        seen.push(...(e.text.match(/[pq]\d@example\.com/g) ?? []));
+      }
+    }
+    expect(seen.sort()).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'q0', 'q1', 'q2'].map(x => `${x}@example.com`));
   });
 });
